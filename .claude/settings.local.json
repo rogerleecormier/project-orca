@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:tanstack.com)",
+      "WebFetch(domain:developers.cloudflare.com)",
+      "WebFetch(domain:orm.drizzle.team)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:fineshopdesign.com)",
+      "WebFetch(domain:ui.shadcn.com)",
+      "Bash(npm create:*)",
+      "Bash(pnpm --version)",
+      "Bash(pnpm create:*)",
+      "Bash(pnpm init:*)",
+      "Bash(pnpm add:*)",
+      "Bash(pnpm approve-builds:*)",
+      "Bash(python3 -c \" import json, sys pkg = json.load\\(sys.stdin\\) pkg.setdefault\\('pnpm', {}\\)['onlyBuiltDependencies'] = ['esbuild', 'workerd', 'sharp'] json.dump\\(pkg, sys.stdout, indent=2\\) \")",
+      "Bash(pnpm install:*)",
+      "Bash(find /run/media/rogerleecormier/Storage/dev/project-orca/node_modules/@tanstack -name \"*.d.ts\" -exec grep -l \"TanStackStartInputConfig\" {} \\\\;)",
+      "Bash(find /run/media/rogerleecormier/Storage/dev/project-orca/node_modules -name \"*.d.ts\" -path \"*start-plugin*\" -exec grep -l \"TanStackStartInputConfig\" {} \\\\;)",
+      "Bash(pnpm exec:*)",
+      "Bash(timeout 30 pnpm dev)",
+      "Bash(pnpm remove:*)",
+      "Bash(pnpm build:*)",
+      "Bash(sqlite3 /run/media/rogerleecormier/Storage/dev/project-orca/.wrangler/state/v3/d1/miniflare-D1DatabaseObject/c204843922c7d8b0460aacd7d5eef263a2ad6de9bd92c76a90ee80ed8b6b331b.sqlite \".tables\")",
+      "Bash(node -e ':*)",
+      "Bash(pkill -f \"vite\")",
+      "Bash(pkill -f \"wrangler\")",
+      "Bash(pkill -f \"workerd\")",
+      "Bash(pnpm dev:*)",
+      "Bash(echo \"PID: $!\")",
+      "Bash(curl -s http://localhost:3000/)",
+      "Bash(echo \"Exit code: $?\")",
+      "Bash(kill %1)",
+      "Bash(kill 63002)",
+      "Bash(npx tsc:*)",
+      "Bash(node_modules/.bin/tsc --noEmit)"
+    ]
+  }
+}

@@ -1,0 +1,2 @@
+ALTER TABLE `classes` ADD `student_profile_id` text REFERENCES `profiles`(`id`) ON DELETE set null;--> statement-breakpoint
+CREATE INDEX `classes_student_profile_idx` ON `classes` (`student_profile_id`);

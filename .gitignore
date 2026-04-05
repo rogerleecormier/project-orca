@@ -1,0 +1,27 @@
+# Environment and secrets
+.dev.vars
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+.tanstack/
+
+# Cloudflare local state
+.wrangler/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editor and OS
+.DS_Store
+Thumbs.db
+.vscode/

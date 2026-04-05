@@ -1,0 +1,25 @@
+name = "proorca"
+compatibility_date = "2026-04-04"
+compatibility_flags = ["nodejs_compat"]
+main = "@tanstack/react-start/server-entry"
+workers_dev = true
+preview_urls = false
+
+[observability]
+enabled = true
+
+# ---------- D1 Database ----------
+[[d1_databases]]
+binding = "DB"
+database_name = "proorca-db"
+database_id = "235d1e83-7902-4816-be30-8b4647e67e6f"
+migrations_dir = "drizzle"
+
+# ---------- R2 Storage ----------
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "proorca-assets"
+
+# ---------- Workers AI ----------
+[ai]
+binding = "AI"
