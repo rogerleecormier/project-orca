@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { DeleteConfirmModal } from "../components/delete-confirm-modal";
+import { LessonPlannerChat } from "../components/LessonPlannerChat";
 import { QuizBuilder, type QuizQuestion } from "../components/quiz-builder";
 import { RichContent } from "../components/rich-content";
 import { RichTextEditor } from "../components/rich-text-editor";
@@ -11,6 +12,8 @@ import {
   generateQuizFromLinkedAssignment,
   getCurriculumBuilderData,
   getViewerContext,
+  gradeSubmissionWithAI,
+  saveAssignmentAsTemplate,
   updateAssignmentRecord,
   uploadAssignmentFile,
 } from "../server/functions";
@@ -236,6 +239,33 @@ function buildDueAt({
 // ── Edit modal ────────────────────────────────────────────────────────────────
 
 type AssignmentRow = Awaited<ReturnType<typeof getCurriculumBuilderData>>["assignments"][number];
+type AssignmentTemplateRow = Awaited<ReturnType<typeof getCurriculumBuilderData>>["templates"][number];
+type SubmissionRow = Awaited<ReturnType<typeof getCurriculumBuilderData>>["submissions"][number];
+type ProfileRow = Awaited<ReturnType<typeof getCurriculumBuilderData>>["profiles"][number];
+
+function humanizeTemplateTagValue(value: string) {
+  return value
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function getTemplateTagValues(template: { tags: string[] }, prefix: string) {
+  return template.tags
+    .filter((tag) => tag.startsWith(`${prefix}:`))
+    .map((tag) => tag.slice(prefix.length + 1));
+}
+
+function getTemplatePrimarySubject(template: { tags: string[] }) {
+  return getTemplateTagValues(template, "subject")[0] ?? "custom";
+}
+
+function getTemplateGradeLabels(template: { tags: string[] }) {
+  return getTemplateTagValues(template, "grade").map((value) =>
+    value === "k" ? "Grade K" : `Grade ${value}`,
+  );
+}
 
 function EditAssignmentModal({
   assignment,
@@ -566,11 +596,14 @@ function EditAssignmentModal({
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
+type VideoStep = "search" | "preview" | "confirm";
+
 function CurriculumBuilderPage() {
   const router = useRouter();
   const data = Route.useLoaderData();
 
   const [classId, setClassId] = useState(data.classes[0]?.id ?? "");
+  const [createMode, setCreateMode] = useState<"template" | "blank">("template");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState(getDefaultAssignmentInstructions("video"));
   const [contentType, setContentType] = useState<AssignmentType>("video");
@@ -583,29 +616,16 @@ function CurriculumBuilderPage() {
   const [resourceUrl, setResourceUrl] = useState("");
   const [reportPrompt, setReportPrompt] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [templateFileAssetKey, setTemplateFileAssetKey] = useState("");
   const [videos, setVideos] = useState<VideoData[]>([]);
+  const [videoStep, setVideoStep] = useState<VideoStep>("search");
   const [createQuizAfterVideoSave, setCreateQuizAfterVideoSave] = useState(false);
-  const [videoAccordionOpen, setVideoAccordionOpen] = useState<{
-    step1: boolean;
-    step2: boolean;
-    step3: boolean;
-  }>({
-    step1: true,
-    step2: true,
-    step3: true,
-  });
   const [quizTitle, setQuizTitle] = useState("");
   const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([]);
   const [quizCreationMode, setQuizCreationMode] = useState<"generate" | "manual" | null>(null);
   const [quizSourceType, setQuizSourceType] = useState<"video" | "text">("video");
   const [quizSourceAssignmentId, setQuizSourceAssignmentId] = useState("");
   const [quizQuestionCount, setQuizQuestionCount] = useState(5);
-  const [quizAccordionOpen, setQuizAccordionOpen] = useState({
-    step1: true,
-    step2: false,
-    step3: false,
-    step4: false,
-  });
   const [essayQuestions, setEssayQuestions] = useState<string[]>([""]);
 
   const [drafting, setDrafting] = useState(false);
@@ -613,6 +633,10 @@ function CurriculumBuilderPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [templatePrefillMessage, setTemplatePrefillMessage] = useState<string | null>(null);
+  const [templateSubjectFilter, setTemplateSubjectFilter] = useState("all");
+  const [templateTypeFilter, setTemplateTypeFilter] = useState<AssignmentType | "all">("all");
+  const [savingTemplateAssignmentId, setSavingTemplateAssignmentId] = useState<string | null>(null);
   const [transcriptModal, setTranscriptModal] = useState<{
     title: string;
     transcript: string;
@@ -624,17 +648,45 @@ function CurriculumBuilderPage() {
   const [highlightedAssignmentId, setHighlightedAssignmentId] = useState<string | null>(null);
 
   const [editingAssignment, setEditingAssignment] = useState<AssignmentRow | null>(null);
+
+  // Quick Create modal state
+  const [showQuickCreate, setShowQuickCreate] = useState(false);
+  const [quickTitle, setQuickTitle] = useState("");
+  const [quickClassId, setQuickClassId] = useState(data.classes[0]?.id ?? "");
+  const [quickType, setQuickType] = useState<AssignmentType>("video");
+  const [quickSaving, setQuickSaving] = useState(false);
+  const [quickError, setQuickError] = useState<string | null>(null);
+
+  // AI grading state: keyed by submissionId
+  type GradingResult = { score: number; strengths: string[]; improvements: string[]; overallFeedback: string };
+  const [gradingInProgress, setGradingInProgress] = useState<Set<string>>(new Set());
+  const [gradingResults, setGradingResults] = useState<Map<string, GradingResult>>(new Map());
+  const [gradingErrors, setGradingErrors] = useState<Map<string, string>>(new Map());
+
+  const handleGradeSubmission = async (
+    submissionId: string,
+    assignmentId: string,
+    gradeLevel: string,
+    rubricText?: string,
+  ) => {
+    setGradingInProgress((prev) => new Set(prev).add(submissionId));
+    setGradingErrors((prev) => { const next = new Map(prev); next.delete(submissionId); return next; });
+    try {
+      const result = await gradeSubmissionWithAI({
+        data: { submissionId, assignmentId, gradeLevel, rubricText },
+      });
+      setGradingResults((prev) => new Map(prev).set(submissionId, result));
+      await router.invalidate();
+    } catch {
+      setGradingErrors((prev) => new Map(prev).set(submissionId, "Grading failed. Please try again."));
+    } finally {
+      setGradingInProgress((prev) => { const next = new Set(prev); next.delete(submissionId); return next; });
+    }
+  };
+
   const newAssignmentSectionRef = useRef<HTMLElement | null>(null);
-  const videoStep1Ref = useRef<HTMLDivElement | null>(null);
-  const videoStep2Ref = useRef<HTMLDivElement | null>(null);
-  const videoStep3Ref = useRef<HTMLDivElement | null>(null);
-  const stepToCenterRef = useRef<"step1" | "step2" | "step3" | null>(null);
-  const quizStep1Ref = useRef<HTMLDivElement | null>(null);
-  const quizStep2Ref = useRef<HTMLDivElement | null>(null);
-  const quizStep3Ref = useRef<HTMLDivElement | null>(null);
-  const quizStep4Ref = useRef<HTMLDivElement | null>(null);
-  const quizStepToCenterRef = useRef<"step1" | "step2" | "step3" | "step4" | null>(null);
   const shouldScrollQuizBuilderToTopRef = useRef(false);
+  const preserveNextDescriptionRef = useRef(false);
   const preserveNextQuizTypeStateRef = useRef(false);
   const previousTypeRef = useRef<AssignmentType>("video");
   const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -694,9 +746,22 @@ function CurriculumBuilderPage() {
     return { key: uploaded.key };
   };
 
-  const resetForm = () => {
+  const resetForm = (options?: {
+    nextContentType?: AssignmentType;
+    nextMode?: "template" | "blank";
+    keepClassId?: boolean;
+  }) => {
+    const nextContentType = options?.nextContentType ?? "video";
+    preserveNextDescriptionRef.current = false;
+    preserveNextQuizTypeStateRef.current = false;
+    previousTypeRef.current = nextContentType;
+    setCreateMode(options?.nextMode ?? "template");
+    if (!options?.keepClassId) {
+      setClassId(data.classes[0]?.id ?? "");
+    }
+    setContentType(nextContentType);
     setTitle("");
-    setDescription(getDefaultAssignmentInstructions(contentType));
+    setDescription(getDefaultAssignmentInstructions(nextContentType));
     setDueDate("");
     setDueTime("23:59");
     setIncludeDueTime(false);
@@ -705,99 +770,131 @@ function CurriculumBuilderPage() {
     setResourceUrl("");
     setReportPrompt("");
     setSelectedFile(null);
+    setTemplateFileAssetKey("");
     setVideos([]);
+    setVideoStep("search");
     setCreateQuizAfterVideoSave(false);
-    setVideoAccordionOpen({
-      step1: true,
-      step2: true,
-      step3: true,
-    });
     setQuizTitle("");
     setQuizQuestions([]);
     setQuizCreationMode(null);
     setQuizSourceType("video");
     setQuizSourceAssignmentId("");
     setQuizQuestionCount(5);
-    setQuizAccordionOpen({
-      step1: true,
-      step2: false,
-      step3: false,
-      step4: false,
-    });
     setEssayQuestions([""]);
+    setTemplateSubjectFilter("all");
+    setTemplateTypeFilter("all");
+    setTemplatePrefillMessage(null);
     setError(null);
     setQuizGenerateError(null);
     setSuccessMessage(null);
   };
 
-  useEffect(() => {
-    if (contentType !== "video") return;
-    const stepToCenter = stepToCenterRef.current;
-    if (!stepToCenter) return;
+  const applyTemplateToForm = (template: AssignmentTemplateRow) => {
+    const nextType = template.contentType as AssignmentType;
+    const quizPayload = parseJson<QuizPayload>(template.contentRef);
+    const essayPayload = parseJson<EssayQuestionsPayload>(template.contentRef);
+    const videoPayload = parseJson<VideoPayload>(template.contentRef);
 
-    const isOpen =
-      stepToCenter === "step1"
-        ? videoAccordionOpen.step1
-        : stepToCenter === "step2"
-          ? videoAccordionOpen.step2
-          : videoAccordionOpen.step3;
-    if (!isOpen) return;
+    preserveNextDescriptionRef.current = true;
+    if (nextType === "quiz") {
+      preserveNextQuizTypeStateRef.current = true;
+    }
 
-    const node =
-      stepToCenter === "step1"
-        ? videoStep1Ref.current
-        : stepToCenter === "step2"
-          ? videoStep2Ref.current
-          : videoStep3Ref.current;
-    if (!node) return;
+    setCreateMode("blank");
+    setContentType(nextType);
+    setTitle(template.title);
+    setDescription(template.description ?? getDefaultAssignmentInstructions(nextType));
+    setDueDate("");
+    setDueTime("23:59");
+    setIncludeDueTime(false);
+    setLinkedAssignmentId("");
+    setTextContent("");
+    setResourceUrl("");
+    setReportPrompt("");
+    setSelectedFile(null);
+    setTemplateFileAssetKey("");
+    setVideos([]);
+    setVideoStep("search");
+    setCreateQuizAfterVideoSave(false);
+    setQuizTitle("");
+    setQuizQuestions([]);
+    setQuizCreationMode(null);
+    setQuizSourceType("video");
+    setQuizSourceAssignmentId("");
+    setQuizQuestionCount(5);
+    setEssayQuestions([""]);
+    setError(null);
+    setQuizGenerateError(null);
+    setSuccessMessage(null);
+    setTemplatePrefillMessage(`Template loaded: ${template.title}`);
 
-    const rect = node.getBoundingClientRect();
-    const targetTop = window.scrollY + rect.top - window.innerHeight / 2;
-    window.scrollTo({
-      top: Math.max(0, targetTop),
-      behavior: "smooth",
-    });
-    stepToCenterRef.current = null;
-  }, [contentType, videoAccordionOpen.step1, videoAccordionOpen.step2, videoAccordionOpen.step3, videos.length]);
+    if (nextType === "text") {
+      setTextContent(template.contentRef ?? "");
+    }
 
-  useEffect(() => {
-    const stepToCenter = quizStepToCenterRef.current;
-    if (contentType !== "quiz" || !stepToCenter) return;
+    if (nextType === "url") {
+      setResourceUrl(template.contentRef ?? "");
+    }
 
-    const isOpen =
-      stepToCenter === "step1"
-        ? quizAccordionOpen.step1
-        : stepToCenter === "step2"
-          ? quizAccordionOpen.step2
-          : stepToCenter === "step3"
-            ? quizAccordionOpen.step3
-            : quizAccordionOpen.step4;
-    if (!isOpen) return;
+    if (nextType === "report") {
+      setReportPrompt(template.contentRef ?? "");
+    }
 
-    const node =
-      stepToCenter === "step1"
-        ? quizStep1Ref.current
-        : stepToCenter === "step2"
-          ? quizStep2Ref.current
-          : stepToCenter === "step3"
-            ? quizStep3Ref.current
-            : quizStep4Ref.current;
-    if (!node) return;
+    if (nextType === "file") {
+      setTemplateFileAssetKey(template.contentRef ?? "");
+    }
 
-    const rect = node.getBoundingClientRect();
-    const targetTop = window.scrollY + rect.top - window.innerHeight / 2;
-    window.scrollTo({
-      top: Math.max(0, targetTop),
-      behavior: "smooth",
-    });
-    quizStepToCenterRef.current = null;
-  }, [contentType, quizAccordionOpen.step1, quizAccordionOpen.step2, quizAccordionOpen.step3, quizAccordionOpen.step4]);
+    if (nextType === "video") {
+      setVideos(videoPayload?.videos?.map((video) => ({ ...video })) ?? []);
+      setVideoStep(videoPayload?.videos?.length ? "preview" : "search");
+    }
+
+    if (nextType === "quiz") {
+      setQuizCreationMode("manual");
+      setQuizTitle(quizPayload?.title ?? `${template.title} Quiz`);
+      setQuizQuestions(
+        (quizPayload?.questions ?? []).map((question) => ({
+          ...question,
+          id: question.id ?? crypto.randomUUID(),
+        })),
+      );
+    }
+
+    if (nextType === "essay_questions") {
+      setEssayQuestions(essayPayload?.questions?.length ? essayPayload.questions : [""]);
+    }
+  };
+
+  const handleSaveAsTemplate = async (assignmentId: string, assignmentTitle: string) => {
+    setSavingTemplateAssignmentId(assignmentId);
+    setError(null);
+    setSuccessMessage(null);
+
+    try {
+      await saveAssignmentAsTemplate({
+        data: {
+          assignmentId,
+          tags: [],
+        },
+      });
+      await router.invalidate();
+      setSuccessMessage(`Saved "${assignmentTitle}" as a template.`);
+    } catch {
+      setError("Could not save that assignment as a template.");
+    } finally {
+      setSavingTemplateAssignmentId(null);
+    }
+  };
 
   useEffect(() => {
     const previousType = previousTypeRef.current;
     if (previousType === contentType) return;
 
-    setDescription(getDefaultAssignmentInstructions(contentType));
+    if (preserveNextDescriptionRef.current) {
+      preserveNextDescriptionRef.current = false;
+    } else {
+      setDescription(getDefaultAssignmentInstructions(contentType));
+    }
 
     if (contentType === "quiz") {
       if (preserveNextQuizTypeStateRef.current) {
@@ -810,12 +907,6 @@ function CurriculumBuilderPage() {
         setQuizSourceAssignmentId("");
         setLinkedAssignmentId("");
         setQuizQuestionCount(5);
-        setQuizAccordionOpen({
-          step1: true,
-          step2: false,
-          step3: false,
-          step4: false,
-        });
       }
     }
 
@@ -866,19 +957,25 @@ function CurriculumBuilderPage() {
     }
 
     if (contentType === "file") {
-      if (!selectedFile) { setError("Choose a file to upload."); return; }
-      try {
-        const base64 = await fileToBase64(selectedFile);
-        const uploaded = await uploadAssignmentFile({
-          data: {
-            filename: selectedFile.name,
-            mimeType: selectedFile.type || "application/octet-stream",
-            base64,
-          },
-        });
-        contentRef = uploaded.key;
-      } catch {
-        setError("Could not upload file. Please try again.");
+      if (selectedFile) {
+        try {
+          const base64 = await fileToBase64(selectedFile);
+          const uploaded = await uploadAssignmentFile({
+            data: {
+              filename: selectedFile.name,
+              mimeType: selectedFile.type || "application/octet-stream",
+              base64,
+            },
+          });
+          contentRef = uploaded.key;
+        } catch {
+          setError("Could not upload file. Please try again.");
+          return;
+        }
+      } else if (templateFileAssetKey) {
+        contentRef = templateFileAssetKey;
+      } else {
+        setError("Choose a file to upload.");
         return;
       }
     }
@@ -930,7 +1027,11 @@ function CurriculumBuilderPage() {
           dueAt,
         },
       });
-      resetForm();
+      resetForm({
+        nextContentType: contentType,
+        nextMode: createQuizAfterVideoSave && contentType === "video" ? "blank" : "template",
+        keepClassId: true,
+      });
       await router.invalidate();
       if (contentType === "video") {
         setSuccessMessage(
@@ -940,19 +1041,15 @@ function CurriculumBuilderPage() {
         );
         if (createQuizAfterVideoSave) {
           shouldScrollQuizBuilderToTopRef.current = true;
+          preserveNextDescriptionRef.current = true;
           preserveNextQuizTypeStateRef.current = true;
+          setTemplatePrefillMessage(null);
           setContentType("quiz");
           setDescription(getDefaultAssignmentInstructions("quiz"));
           setQuizCreationMode("generate");
           setQuizSourceType("video");
           setQuizSourceAssignmentId(created.assignmentId);
           setLinkedAssignmentId(created.assignmentId);
-          setQuizAccordionOpen({
-            step1: false,
-            step2: false,
-            step3: false,
-            step4: true,
-          });
         }
       } else {
         setSuccessMessage("Assignment created.");
@@ -970,6 +1067,18 @@ function CurriculumBuilderPage() {
       ? assignment.contentType === "video" && hasSavedVideoTranscript(assignment)
       : isReadingSourceAssignment(assignment),
   );
+  const templateSubjectOptions = Array.from(
+    new Set(data.templates.map((template) => getTemplatePrimarySubject(template))),
+  ).sort((left, right) => left.localeCompare(right));
+  const filteredTemplates = data.templates.filter((template) => {
+    if (templateSubjectFilter !== "all" && getTemplatePrimarySubject(template) !== templateSubjectFilter) {
+      return false;
+    }
+    if (templateTypeFilter !== "all" && template.contentType !== templateTypeFilter) {
+      return false;
+    }
+    return true;
+  });
 
   const generateDraftFromLinkedContent = async () => {
     if (!quizSourceAssignmentId) {
@@ -1002,12 +1111,6 @@ function CurriculumBuilderPage() {
       setContentType("quiz");
       setQuizCreationMode("generate");
       setQuizSourceAssignmentId(quizSourceAssignmentId);
-      setQuizAccordionOpen({
-        step1: false,
-        step2: false,
-        step3: false,
-        step4: true,
-      });
       setLinkedAssignmentId(quizSourceAssignmentId);
       setQuizTitle(`${result.sourceTitle} Quiz`);
       setQuizQuestions(questions);
@@ -1021,6 +1124,35 @@ function CurriculumBuilderPage() {
     }
   };
 
+  const handleQuickCreate = async () => {
+    if (!quickClassId || !quickTitle.trim()) {
+      setQuickError("Class and title are required.");
+      return;
+    }
+    setQuickSaving(true);
+    setQuickError(null);
+    try {
+      await createAssignmentRecord({
+        data: {
+          classId: quickClassId,
+          title: quickTitle.trim(),
+          contentType: quickType,
+          description: getDefaultAssignmentInstructions(quickType),
+        },
+      });
+      setShowQuickCreate(false);
+      setQuickTitle("");
+      setQuickClassId(data.classes[0]?.id ?? "");
+      setQuickType("video");
+      await router.invalidate();
+      setSuccessMessage("Assignment created. Edit it to add content.");
+    } catch {
+      setQuickError("Could not create assignment. Please try again.");
+    } finally {
+      setQuickSaving(false);
+    }
+  };
+
   // Build grouped view: video assignments with their linked children
   const videoAssignments = data.assignments.filter((a) => a.contentType === "video");
   const linkedIds = new Set(
@@ -1029,6 +1161,15 @@ function CurriculumBuilderPage() {
   const standaloneAssignments = data.assignments.filter(
     (a) => a.contentType !== "video" && !linkedIds.has(a.id),
   );
+
+  // submissions grouped by assignmentId, profiles indexed by id
+  const submissionsByAssignment = data.submissions.reduce<Map<string, SubmissionRow[]>>((acc, s) => {
+    const list = acc.get(s.assignmentId) ?? [];
+    list.push(s);
+    acc.set(s.assignmentId, list);
+    return acc;
+  }, new Map());
+  const profileById = new Map<string, ProfileRow>(data.profiles.map((p) => [p.id, p]));
 
   const getLinkedTo = (assignmentId: string) =>
     data.assignments.filter((a) => a.linkedAssignmentId === assignmentId);
@@ -1162,11 +1303,20 @@ function CurriculumBuilderPage() {
           <span className="text-sm font-medium text-slate-700">Attach File</span>
           <input
             type="file"
-            onChange={(e) => setSelectedFile(e.target.files?.[0] ?? null)}
+            onChange={(e) => {
+              setSelectedFile(e.target.files?.[0] ?? null);
+              if (e.target.files?.[0]) {
+                setTemplateFileAssetKey("");
+              }
+            }}
             className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
           />
           {selectedFile ? (
             <p className="text-xs text-slate-500">Selected: {selectedFile.name}</p>
+          ) : templateFileAssetKey ? (
+            <p className="text-xs text-slate-500">
+              Using the file already stored in this template. Upload a new file to replace it.
+            </p>
           ) : (
             <p className="text-xs text-slate-500">Upload a PDF, image, worksheet, or reference file.</p>
           )}
@@ -1179,137 +1329,113 @@ function CurriculumBuilderPage() {
       return (
         <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
           <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-slate-700">Video Builder</h3>
-          <p className="mt-1 text-sm text-slate-600">
-            Complete the video steps below, then continue to Quiz Builder.
-          </p>
 
-          <div className="mt-4 space-y-3">
-            <div ref={videoStep1Ref} className="rounded-xl border border-slate-200 bg-white">
-              <button
-                type="button"
-                onClick={() => {
-                  const willOpen = !videoAccordionOpen.step1;
-                  if (willOpen) {
-                    stepToCenterRef.current = "step1";
+          {/* Step indicator */}
+          <div className="mt-3 flex items-center gap-2 text-sm">
+            <span className={videoStep === "search" ? "font-semibold text-cyan-600" : "text-slate-400"}>
+              1 Search
+            </span>
+            <span className="text-slate-300">→</span>
+            <span className={videoStep === "preview" ? "font-semibold text-cyan-600" : "text-slate-400"}>
+              2 Preview
+            </span>
+            <span className="text-slate-300">→</span>
+            <span className={videoStep === "confirm" ? "font-semibold text-cyan-600" : "text-slate-400"}>
+              3 Save
+            </span>
+          </div>
+
+          <div className="mt-4">
+            {videoStep === "search" ? (
+              <VideoSearch
+                videos={videos}
+                onVideosChange={(nextVideos) => {
+                  setVideos(nextVideos);
+                  if (nextVideos.length > 0) {
+                    setVideoStep("preview");
                   }
-                  setVideoAccordionOpen((prev) => ({ ...prev, step1: !prev.step1 }));
                 }}
-                className="flex w-full items-center justify-between px-4 py-3 text-left"
-              >
-                <span className="text-sm font-semibold text-slate-900">Step 1: Search Video or Paste Link</span>
-                <span className="text-xs text-slate-500">{videoAccordionOpen.step1 ? "Hide" : "Show"}</span>
-              </button>
-              {videoAccordionOpen.step1 ? (
-                <div className="border-t border-slate-100 px-4 py-4">
-                  <VideoSearch
-                    videos={videos}
-                    onVideosChange={(nextVideos) => {
-                      setVideos(nextVideos);
-                      if (nextVideos.length > 0) {
-                        stepToCenterRef.current = "step2";
-                      }
-                      setVideoAccordionOpen((prev) => ({
-                        ...prev,
-                        step1: nextVideos.length === 0,
-                        step2: true,
-                      }));
-                    }}
-                    disabled={saving}
-                    gradeLevel={data.classes.find((c) => c.id === classId)?.title}
-                    enableQuizGeneration={false}
+                disabled={saving}
+                gradeLevel={data.classes.find((c) => c.id === classId)?.title}
+                enableQuizGeneration={false}
+              />
+            ) : null}
+
+            {videoStep === "preview" && selectedVideo ? (
+              <div className="space-y-3">
+                <div
+                  className="relative w-full overflow-hidden rounded-xl bg-black"
+                  style={{ paddingTop: "56.25%" }}
+                >
+                  <iframe
+                    className="absolute inset-0 h-full w-full"
+                    src={`https://www.youtube.com/embed/${selectedVideo.videoId}`}
+                    title={selectedVideo.title}
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                    allowFullScreen
                   />
                 </div>
-              ) : null}
-            </div>
-
-            <div ref={videoStep2Ref} className="rounded-xl border border-slate-200 bg-white">
-              <button
-                type="button"
-                onClick={() => {
-                  const willOpen = !videoAccordionOpen.step2;
-                  if (willOpen) {
-                    stepToCenterRef.current = "step2";
-                  }
-                  setVideoAccordionOpen((prev) => ({ ...prev, step2: !prev.step2 }));
-                }}
-                className="flex w-full items-center justify-between px-4 py-3 text-left"
-              >
-                <span className="text-sm font-semibold text-slate-900">Step 2: Select Video</span>
-                <span className="text-xs text-slate-500">{videoAccordionOpen.step2 ? "Hide" : "Show"}</span>
-              </button>
-              {videoAccordionOpen.step2 ? (
-                <div className="border-t border-slate-100 px-4 py-4">
-                  {selectedVideo ? (
-                    <div className="space-y-3">
-                      <div
-                        className="relative w-full overflow-hidden rounded-xl bg-black"
-                        style={{ paddingTop: "56.25%" }}
-                      >
-                        <iframe
-                          className="absolute inset-0 h-full w-full"
-                          src={`https://www.youtube.com/embed/${selectedVideo.videoId}`}
-                          title={selectedVideo.title}
-                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                          allowFullScreen
-                        />
-                      </div>
-                      <p className="text-sm font-medium text-slate-900">{selectedVideo.title}</p>
-                      {selectedVideo.channel ? (
-                        <p className="text-xs text-slate-600">Channel: {selectedVideo.channel}</p>
-                      ) : null}
-                      <p className="text-xs text-slate-500">Video ID: {selectedVideo.videoId}</p>
-                    </div>
-                  ) : (
-                    <p className="text-xs text-slate-500">
-                      No video selected yet. Complete Step 1 first.
-                    </p>
-                  )}
+                <p className="text-sm font-medium text-slate-900">{selectedVideo.title}</p>
+                {selectedVideo.channel ? (
+                  <p className="text-xs text-slate-600">Channel: {selectedVideo.channel}</p>
+                ) : null}
+                <p className="text-xs text-slate-500">Video ID: {selectedVideo.videoId}</p>
+                <div className="flex items-center gap-3 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setVideos([]);
+                      setVideoStep("search");
+                    }}
+                    className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    ← Change Video
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setVideoStep("confirm")}
+                    className="rounded-xl bg-cyan-600 px-3 py-2 text-sm font-medium text-white hover:bg-cyan-700"
+                  >
+                    Looks good →
+                  </button>
                 </div>
-              ) : null}
-            </div>
+              </div>
+            ) : null}
 
-            <div ref={videoStep3Ref} className="rounded-xl border border-slate-200 bg-white">
-              <button
-                type="button"
-                onClick={() => {
-                  const willOpen = !videoAccordionOpen.step3;
-                  if (willOpen) {
-                    stepToCenterRef.current = "step3";
-                  }
-                  setVideoAccordionOpen((prev) => ({ ...prev, step3: !prev.step3 }));
-                }}
-                className="flex w-full items-center justify-between px-4 py-3 text-left"
-              >
-                <span className="text-sm font-semibold text-slate-900">Step 3: Save Video</span>
-                <span className="text-xs text-slate-500">{videoAccordionOpen.step3 ? "Hide" : "Show"}</span>
-              </button>
-              {videoAccordionOpen.step3 ? (
-                <div className="border-t border-slate-100 px-4 py-4 space-y-2">
-                  <label className="inline-flex items-center gap-2 text-sm text-slate-700">
-                    <input
-                      type="checkbox"
-                      checked={createQuizAfterVideoSave}
-                      onChange={(e) => setCreateQuizAfterVideoSave(e.target.checked)}
-                      className="h-4 w-4 rounded border-slate-300"
-                    />
-                    Create quiz after saving this video
-                  </label>
-                  <p className="text-xs text-slate-600">
-                    Saving the video also attempts to save the transcript for quiz generation.
-                  </p>
-                  <p className="text-xs text-slate-500">
-                    If transcript saving fails, we will note it after save so you can retry with another video.
-                  </p>
-                </div>
-              ) : null}
-            </div>
-
-            {createQuizAfterVideoSave ? (
-              <div className="rounded-xl border border-dashed border-cyan-300 bg-cyan-50/60 px-4 py-3">
-                <p className="text-sm font-medium text-cyan-900">Next Step: Quiz Builder</p>
-                <p className="text-xs text-cyan-800">
-                  After save, we will automatically open Quiz Builder and link this saved video.
+            {videoStep === "confirm" ? (
+              <div className="space-y-3">
+                <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={createQuizAfterVideoSave}
+                    onChange={(e) => setCreateQuizAfterVideoSave(e.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300"
+                  />
+                  Create quiz after saving this video
+                </label>
+                <p className="text-xs text-slate-600">
+                  Saving the video also attempts to save the transcript for quiz generation.
                 </p>
+                <p className="text-xs text-slate-500">
+                  If transcript saving fails, we will note it after save so you can retry with another video.
+                </p>
+                {createQuizAfterVideoSave ? (
+                  <div className="rounded-xl border border-dashed border-cyan-300 bg-cyan-50/60 px-4 py-3">
+                    <p className="text-sm font-medium text-cyan-900">Next Step: Quiz Builder</p>
+                    <p className="text-xs text-cyan-800">
+                      After save, we will automatically open Quiz Builder and link this saved video.
+                    </p>
+                  </div>
+                ) : null}
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setVideoStep("preview")}
+                    className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    ← Back
+                  </button>
+                </div>
               </div>
             ) : null}
           </div>
@@ -1321,281 +1447,190 @@ function CurriculumBuilderPage() {
       const selectedQuizSource = classAssignments.find((assignment) => assignment.id === quizSourceAssignmentId);
       return (
         <>
-          <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
-            <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-slate-700">
-              Quiz Builder Steps
-            </h3>
+          <div className="md:col-span-2 rounded-2xl border bg-slate-50/80 p-4">
+            {/* Mode selector — always visible */}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setQuizCreationMode("generate");
+                  setQuizSourceAssignmentId("");
+                  setLinkedAssignmentId("");
+                  setQuizQuestions([]);
+                }}
+                className={`rounded-2xl border p-4 text-left transition ${
+                  quizCreationMode === "generate"
+                    ? "border-cyan-500 bg-cyan-50"
+                    : "border-slate-200 bg-white hover:border-cyan-300"
+                }`}
+              >
+                <p className="text-sm font-semibold text-slate-900">Generate Questions</p>
+                <p className="mt-1 text-xs text-slate-600">
+                  Build a quiz from a saved video transcript or reading assignment.
+                </p>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setQuizCreationMode("manual");
+                  setLinkedAssignmentId("");
+                  setQuizSourceAssignmentId("");
+                }}
+                className={`rounded-2xl border p-4 text-left transition ${
+                  quizCreationMode === "manual"
+                    ? "border-cyan-500 bg-cyan-50"
+                    : "border-slate-200 bg-white hover:border-cyan-300"
+                }`}
+              >
+                <p className="text-sm font-semibold text-slate-900">Create Manual Questions</p>
+                <p className="mt-1 text-xs text-slate-600">
+                  Start with a blank quiz and write each question yourself.
+                </p>
+              </button>
+            </div>
 
-            <div className="mt-4 space-y-4">
-              <div ref={quizStep1Ref} className="rounded-xl border border-slate-200 bg-white">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const willOpen = !quizAccordionOpen.step1;
-                    if (willOpen) {
-                      quizStepToCenterRef.current = "step1";
-                    }
-                    setQuizAccordionOpen((prev) => ({ ...prev, step1: !prev.step1 }));
-                  }}
-                  className="flex w-full items-center justify-between px-4 py-3 text-left"
-                >
-                  <span className="text-sm font-semibold text-slate-900">Step 1: Choose Quiz Setup</span>
-                  <span className="text-xs text-slate-500">{quizAccordionOpen.step1 ? "Hide" : "Show"}</span>
-                </button>
-                {quizAccordionOpen.step1 ? (
-                  <div className="border-t border-slate-100 px-4 py-4 space-y-3">
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setQuizCreationMode("generate");
-                          setQuizSourceAssignmentId("");
-                          setLinkedAssignmentId("");
-                          setQuizQuestions([]);
-                          setQuizAccordionOpen({
-                            step1: true,
-                            step2: true,
-                            step3: false,
-                            step4: false,
-                          });
-                          quizStepToCenterRef.current = "step2";
-                        }}
-                        className={`rounded-2xl border p-4 text-left transition ${
-                          quizCreationMode === "generate"
-                            ? "border-cyan-500 bg-cyan-50"
-                            : "border-slate-200 bg-white hover:border-cyan-300"
-                        }`}
-                      >
-                        <p className="text-sm font-semibold text-slate-900">Generate Questions</p>
-                        <p className="mt-1 text-xs text-slate-600">
-                          Build a quiz from a saved video transcript or reading assignment.
-                        </p>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setQuizCreationMode("manual");
-                          setLinkedAssignmentId("");
-                          setQuizSourceAssignmentId("");
-                          setQuizAccordionOpen({
-                            step1: true,
-                            step2: false,
-                            step3: false,
-                            step4: false,
-                          });
-                        }}
-                        className={`rounded-2xl border p-4 text-left transition ${
-                          quizCreationMode === "manual"
-                            ? "border-cyan-500 bg-cyan-50"
-                            : "border-slate-200 bg-white hover:border-cyan-300"
-                        }`}
-                      >
-                        <p className="text-sm font-semibold text-slate-900">Create Manual Questions</p>
-                        <p className="mt-1 text-xs text-slate-600">
-                          Start with a blank quiz and write each question yourself.
-                        </p>
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-
-              {quizCreationMode === "generate" ? (
-                <>
-                  <div ref={quizStep2Ref} className="rounded-xl border border-slate-200 bg-white">
+            {quizCreationMode === "generate" ? (
+              <div className="mt-4 space-y-4">
+                {/* Source type toggle */}
+                <div>
+                  <p className="mb-2 text-sm font-medium text-slate-700">Source Type</p>
+                  <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
                       onClick={() => {
-                        const willOpen = !quizAccordionOpen.step2;
-                        if (willOpen) {
-                          quizStepToCenterRef.current = "step2";
-                        }
-                        setQuizAccordionOpen((prev) => ({ ...prev, step2: !prev.step2 }));
+                        setQuizSourceType("video");
+                        setQuizSourceAssignmentId("");
+                        setLinkedAssignmentId("");
+                        setQuizGenerateError(null);
                       }}
-                      className="flex w-full items-center justify-between px-4 py-3 text-left"
+                      className={`rounded-xl border px-3 py-2 text-sm font-medium ${
+                        quizSourceType === "video"
+                          ? "border-cyan-500 bg-cyan-50 text-cyan-800"
+                          : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                      }`}
                     >
-                      <span className="text-sm font-semibold text-slate-900">Step 2: Choose Content Type</span>
-                      <span className="text-xs text-slate-500">{quizAccordionOpen.step2 ? "Hide" : "Show"}</span>
+                      Video
                     </button>
-                    {quizAccordionOpen.step2 ? (
-                      <div className="border-t border-slate-100 px-4 py-4">
-                        <div className="flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setQuizSourceType("video");
-                              setQuizSourceAssignmentId("");
-                              setLinkedAssignmentId("");
-                              setQuizGenerateError(null);
-                              setQuizAccordionOpen((prev) => ({
-                                ...prev,
-                                step3: true,
-                                step4: false,
-                              }));
-                              quizStepToCenterRef.current = "step3";
-                            }}
-                            className={`rounded-xl border px-3 py-2 text-sm font-medium ${
-                              quizSourceType === "video"
-                                ? "border-cyan-500 bg-cyan-50 text-cyan-800"
-                                : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                            }`}
-                          >
-                            Video
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setQuizSourceType("text");
-                              setQuizSourceAssignmentId("");
-                              setLinkedAssignmentId("");
-                              setQuizGenerateError(null);
-                              setQuizAccordionOpen((prev) => ({
-                                ...prev,
-                                step3: true,
-                                step4: false,
-                              }));
-                              quizStepToCenterRef.current = "step3";
-                            }}
-                            className={`rounded-xl border px-3 py-2 text-sm font-medium ${
-                              quizSourceType === "text"
-                                ? "border-cyan-500 bg-cyan-50 text-cyan-800"
-                                : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                            }`}
-                          >
-                            Reading
-                          </button>
-                        </div>
-                        <p className="mt-2 text-xs text-slate-500">
-                          Video quizzes use the saved transcript. Reading quizzes use the saved reading text.
-                        </p>
-                      </div>
-                    ) : null}
-                  </div>
-
-                  <div ref={quizStep3Ref} className="rounded-xl border border-slate-200 bg-white">
                     <button
                       type="button"
                       onClick={() => {
-                        const willOpen = !quizAccordionOpen.step3;
-                        if (willOpen) {
-                          quizStepToCenterRef.current = "step3";
-                        }
-                        setQuizAccordionOpen((prev) => ({ ...prev, step3: !prev.step3 }));
+                        setQuizSourceType("text");
+                        setQuizSourceAssignmentId("");
+                        setLinkedAssignmentId("");
+                        setQuizGenerateError(null);
                       }}
-                      className="flex w-full items-center justify-between px-4 py-3 text-left"
+                      className={`rounded-xl border px-3 py-2 text-sm font-medium ${
+                        quizSourceType === "text"
+                          ? "border-cyan-500 bg-cyan-50 text-cyan-800"
+                          : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                      }`}
                     >
-                      <span className="text-sm font-semibold text-slate-900">Step 3: Select Content</span>
-                      <span className="text-xs text-slate-500">{quizAccordionOpen.step3 ? "Hide" : "Show"}</span>
+                      Reading
                     </button>
-                    {quizAccordionOpen.step3 ? (
-                      <div className="border-t border-slate-100 px-4 py-4 space-y-3">
-                        <label className="block space-y-2">
-                          <span className="text-sm font-medium text-slate-700">
-                            {quizSourceType === "video" ? "Saved Video Assignment" : "Reading Assignment"}
-                          </span>
-                          <select
-                            value={quizSourceAssignmentId}
-                            onChange={(e) => {
-                              setQuizSourceAssignmentId(e.target.value);
-                              setLinkedAssignmentId(e.target.value);
-                              setQuizGenerateError(null);
-                              setQuizAccordionOpen((prev) => ({
-                                ...prev,
-                                step4: true,
-                              }));
-                              quizStepToCenterRef.current = "step4";
-                            }}
-                            className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                          >
-                            <option value="">Select source...</option>
-                            {quizSourceCandidates.map((assignment) => (
-                              <option key={assignment.id} value={assignment.id}>
-                                {assignment.title}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        {quizSourceCandidates.length === 0 ? (
-                          <p className="text-xs text-slate-500">
-                            {quizSourceType === "video"
-                              ? "No saved video assignments with transcript in this class yet."
-                              : "No reading assignments with saved reading text in this class yet."}
-                          </p>
-                        ) : null}
-                      </div>
-                    ) : null}
                   </div>
-
-                  <div ref={quizStep4Ref} className="rounded-xl border border-slate-200 bg-white">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const willOpen = !quizAccordionOpen.step4;
-                        if (willOpen) {
-                          quizStepToCenterRef.current = "step4";
-                        }
-                        setQuizAccordionOpen((prev) => ({ ...prev, step4: !prev.step4 }));
-                      }}
-                      className="flex w-full items-center justify-between px-4 py-3 text-left"
-                    >
-                      <span className="text-sm font-semibold text-slate-900">Step 4: Generate Questions</span>
-                      <span className="text-xs text-slate-500">{quizAccordionOpen.step4 ? "Hide" : "Show"}</span>
-                    </button>
-                    {quizAccordionOpen.step4 ? (
-                      <div className="border-t border-slate-100 px-4 py-4 space-y-3">
-                        <label className="block space-y-2">
-                          <span className="text-sm font-medium text-slate-700">Number of Questions</span>
-                          <select
-                            value={String(quizQuestionCount)}
-                            onChange={(e) => {
-                              setQuizQuestionCount(Number(e.target.value));
-                              setQuizGenerateError(null);
-                            }}
-                            className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                          >
-                            {Array.from({ length: 8 }, (_, index) => index + 3).map((count) => (
-                              <option key={count} value={count}>
-                                {count} questions
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <div className="flex flex-wrap items-center gap-3">
-                          <button
-                            type="button"
-                            disabled={drafting || !quizSourceAssignmentId}
-                            onClick={() => void generateDraftFromLinkedContent()}
-                            className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60"
-                          >
-                            {drafting ? "Generating..." : "Generate Questions"}
-                          </button>
-                          <p className="text-xs text-slate-500">
-                            Questions will be built from the stored source content.
-                          </p>
-                        </div>
-                        {selectedQuizSource ? (
-                          <p className="text-xs text-cyan-700">
-                            Selected source: {selectedQuizSource.title}
-                          </p>
-                        ) : null}
-                        {quizGenerateError ? (
-                          <p className="text-xs font-medium text-rose-700">{quizGenerateError}</p>
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </div>
-                </>
-              ) : null}
-
-              {quizCreationMode === "manual" ? (
-                <div className="rounded-xl border border-dashed border-slate-300 bg-white px-4 py-3">
-                  <p className="text-sm font-medium text-slate-900">Manual mode selected</p>
-                  <p className="mt-1 text-xs text-slate-600">
-                    Add your own questions below. No linked source is required for this quiz.
+                  <p className="mt-2 text-xs text-slate-500">
+                    Video quizzes use the saved transcript. Reading quizzes use the saved reading text.
                   </p>
                 </div>
-              ) : null}
-            </div>
+
+                {/* Source assignment select — collapses to chip once selected */}
+                <div>
+                  {quizSourceAssignmentId && selectedQuizSource ? (
+                    <div className="flex items-center gap-2">
+                      <span className="rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-xs font-medium text-cyan-800">
+                        Source: {selectedQuizSource.title}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setQuizSourceAssignmentId("");
+                          setLinkedAssignmentId("");
+                          setQuizGenerateError(null);
+                        }}
+                        className="text-xs text-slate-500 hover:text-slate-700 underline"
+                      >
+                        Change
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="block space-y-2">
+                      <span className="text-sm font-medium text-slate-700">
+                        {quizSourceType === "video" ? "Saved Video Assignment" : "Reading Assignment"}
+                      </span>
+                      <select
+                        value={quizSourceAssignmentId}
+                        onChange={(e) => {
+                          setQuizSourceAssignmentId(e.target.value);
+                          setLinkedAssignmentId(e.target.value);
+                          setQuizGenerateError(null);
+                        }}
+                        className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                      >
+                        <option value="">Select source...</option>
+                        {quizSourceCandidates.map((assignment) => (
+                          <option key={assignment.id} value={assignment.id}>
+                            {assignment.title}
+                          </option>
+                        ))}
+                      </select>
+                      {quizSourceCandidates.length === 0 ? (
+                        <p className="text-xs text-slate-500">
+                          {quizSourceType === "video"
+                            ? "No saved video assignments with transcript in this class yet."
+                            : "No reading assignments with saved reading text in this class yet."}
+                        </p>
+                      ) : null}
+                    </label>
+                  )}
+                </div>
+
+                {/* Question count + Generate button */}
+                <div className="space-y-3">
+                  <label className="block space-y-2">
+                    <span className="text-sm font-medium text-slate-700">Number of Questions</span>
+                    <select
+                      value={String(quizQuestionCount)}
+                      onChange={(e) => {
+                        setQuizQuestionCount(Number(e.target.value));
+                        setQuizGenerateError(null);
+                      }}
+                      className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                    >
+                      {Array.from({ length: 8 }, (_, index) => index + 3).map((count) => (
+                        <option key={count} value={count}>
+                          {count} questions
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      type="button"
+                      disabled={drafting || !quizSourceAssignmentId}
+                      onClick={() => void generateDraftFromLinkedContent()}
+                      className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60"
+                    >
+                      {drafting ? "Generating..." : "Generate Questions"}
+                    </button>
+                    <p className="text-xs text-slate-500">
+                      Questions will be built from the stored source content.
+                    </p>
+                  </div>
+                  {quizGenerateError ? (
+                    <p className="text-xs font-medium text-rose-700">{quizGenerateError}</p>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
+            {quizCreationMode === "manual" ? (
+              <div className="mt-4 rounded-xl border border-dashed border-slate-300 bg-white px-4 py-3">
+                <p className="text-sm font-medium text-slate-900">Manual mode selected</p>
+                <p className="mt-1 text-xs text-slate-600">
+                  Add your own questions below. No linked source is required for this quiz.
+                </p>
+              </div>
+            ) : null}
           </div>
 
           <label className="block space-y-2 md:col-span-2">
@@ -1671,8 +1706,7 @@ function CurriculumBuilderPage() {
           <button
             type="button"
             onClick={() => {
-              setError(null);
-              setSuccessMessage(null);
+              resetForm();
               setShowCreateModal(true);
             }}
             className="rounded-xl bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700"
@@ -1684,6 +1718,13 @@ function CurriculumBuilderPage() {
           Create video lessons, quizzes, essay questions, reports, and more. Link assignments together so students see them grouped.
         </p>
       </section>
+
+      {!showCreateModal && error ? (
+        <p className="text-sm text-rose-700">{error}</p>
+      ) : null}
+      {!showCreateModal && successMessage ? (
+        <p className="text-sm text-emerald-700">{successMessage}</p>
+      ) : null}
 
       {showCreateModal ? (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/50 p-4 backdrop-blur-sm">
@@ -1705,86 +1746,268 @@ function CurriculumBuilderPage() {
                 </button>
               </div>
 
-              <div className="mt-4 grid gap-4 md:grid-cols-2">
-                <label className="space-y-2">
-                  <span className="text-sm font-medium text-slate-700">Class</span>
-                  <select
-                    value={classId}
-                    onChange={(e) => setClassId(e.target.value)}
-                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                  >
-                    {data.classes.map((row) => (
-                      <option key={row.id} value={row.id}>{row.title}</option>
-                    ))}
-                  </select>
-                </label>
-
-                <label className="space-y-2">
-                  <span className="text-sm font-medium text-slate-700">Assignment Type</span>
-                  <select
-                    value={contentType}
-                    onChange={(e) => {
-                      setContentType(e.target.value as AssignmentType);
-                      setError(null);
-                      setSuccessMessage(null);
-                    }}
-                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                  >
-                    {(Object.keys(TYPE_LABELS) as AssignmentType[]).map((t) => (
-                      <option key={t} value={t}>{TYPE_LABELS[t]}</option>
-                    ))}
-                  </select>
-                  <p className="text-xs text-slate-500">{TYPE_DESCRIPTIONS[contentType]}</p>
-                </label>
-
-                <label className="space-y-2 md:col-span-2">
-                  <span className="text-sm font-medium text-slate-700">Title</span>
-                  <input
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                    placeholder="e.g. The Water Cycle — Video Lesson"
-                  />
-                </label>
-
-                <label className="space-y-2 md:col-span-2">
-                  <span className="text-sm font-medium text-slate-700">Assignment Instructions</span>
-                  <textarea
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    className="min-h-20 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                  />
-                </label>
-
-                {contentType === "video" || contentType === "quiz" ? renderDueFields() : null}
-
-                {renderTypeSpecificFields()}
-
-                {data.assignments.length > 0 && contentType !== "video" && contentType !== "quiz" ? (
-                  <label className="space-y-2 md:col-span-2">
-                    <span className="text-sm font-medium text-slate-700">
-                      Link to Assignment (optional)
-                    </span>
-                    <p className="text-xs text-slate-500">
-                      Attach this to a video lesson or another assignment so students can navigate between them.
-                    </p>
-                    <select
-                      value={linkedAssignmentId}
-                      onChange={(e) => setLinkedAssignmentId(e.target.value)}
-                      className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                    >
-                      <option value="">— None —</option>
-                      {data.assignments.map((a) => (
-                        <option key={a.id} value={a.id}>
-                          {TYPE_LABELS[a.contentType as AssignmentType] ?? a.contentType}: {a.title}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
-
-                {contentType !== "video" && contentType !== "quiz" ? renderDueFields() : null}
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCreateMode("template")}
+                  className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
+                    createMode === "template"
+                      ? "bg-cyan-600 text-white shadow-sm"
+                      : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                  }`}
+                >
+                  Start from Template
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCreateMode("blank")}
+                  className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
+                    createMode === "blank"
+                      ? "bg-slate-900 text-white shadow-sm"
+                      : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                  }`}
+                >
+                  Start Blank
+                </button>
               </div>
+
+              {createMode === "template" ? (
+                <div className="mt-4 space-y-4">
+                  <div className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50/80 p-4 lg:grid-cols-[1.5fr_220px_220px]">
+                    <div>
+                      <h3 className="text-base font-semibold text-slate-900">Choose a template</h3>
+                      <p className="mt-1 text-sm text-slate-600">
+                        Start with your own saved templates or one of the curated public assignments below. Picking a card fills the blank form so you can adjust the class, due date, or content before saving.
+                      </p>
+                    </div>
+
+                    <label className="space-y-2">
+                      <span className="text-sm font-medium text-slate-700">Subject</span>
+                      <select
+                        value={templateSubjectFilter}
+                        onChange={(e) => setTemplateSubjectFilter(e.target.value)}
+                        className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                      >
+                        <option value="all">All subjects</option>
+                        {templateSubjectOptions.map((subject) => (
+                          <option key={subject} value={subject}>
+                            {humanizeTemplateTagValue(subject)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="space-y-2">
+                      <span className="text-sm font-medium text-slate-700">Type</span>
+                      <select
+                        value={templateTypeFilter}
+                        onChange={(e) => setTemplateTypeFilter(e.target.value as AssignmentType | "all")}
+                        className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                      >
+                        <option value="all">All types</option>
+                        {(Object.keys(TYPE_LABELS) as AssignmentType[]).map((type) => (
+                          <option key={type} value={type}>
+                            {TYPE_LABELS[type]}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+
+                  {filteredTemplates.length > 0 ? (
+                    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                      {filteredTemplates.map((template) => {
+                        const primarySubject = getTemplatePrimarySubject(template);
+                        const gradeLabels = getTemplateGradeLabels(template).slice(0, 3);
+                        const topicLabels = getTemplateTagValues(template, "topic").slice(0, 2);
+
+                        return (
+                          <button
+                            key={template.id}
+                            type="button"
+                            onClick={() => applyTemplateToForm(template)}
+                            className="rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-cyan-300 hover:shadow-md"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <span
+                                className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${
+                                  template.scope === "mine"
+                                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                    : "border-cyan-200 bg-cyan-50 text-cyan-700"
+                                }`}
+                              >
+                                {template.scope === "mine" ? "My Template" : "Public"}
+                              </span>
+                              <span
+                                className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${getTypeBadgeClass(template.contentType)}`}
+                              >
+                                {TYPE_LABELS[template.contentType as AssignmentType] ?? template.contentType}
+                              </span>
+                            </div>
+
+                            <h3 className="mt-4 text-lg font-semibold text-slate-900">{template.title}</h3>
+                            <p className="mt-2 text-sm text-slate-600">
+                              {template.description ?? TYPE_DESCRIPTIONS[template.contentType as AssignmentType]}
+                            </p>
+
+                            <div className="mt-4 flex flex-wrap gap-2">
+                              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
+                                {humanizeTemplateTagValue(primarySubject)}
+                              </span>
+                              {topicLabels.map((topic) => (
+                                <span
+                                  key={`${template.id}-${topic}`}
+                                  className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600"
+                                >
+                                  {humanizeTemplateTagValue(topic)}
+                                </span>
+                              ))}
+                              {gradeLabels.map((grade) => (
+                                <span
+                                  key={`${template.id}-${grade}`}
+                                  className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600"
+                                >
+                                  {grade}
+                                </span>
+                              ))}
+                            </div>
+
+                            <p className="mt-5 text-sm font-medium text-cyan-700">Use template →</p>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50/70 px-4 py-10 text-center">
+                      <p className="text-sm font-medium text-slate-900">No templates match those filters.</p>
+                      <p className="mt-1 text-sm text-slate-500">
+                        Try another subject or type, or jump straight into a blank assignment.
+                      </p>
+                      <div className="mt-4 flex justify-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTemplateSubjectFilter("all");
+                            setTemplateTypeFilter("all");
+                          }}
+                          className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+                        >
+                          Clear Filters
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCreateMode("blank")}
+                          className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
+                        >
+                          Start Blank
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <>
+                  {templatePrefillMessage ? (
+                    <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50/80 p-4">
+                      <div>
+                        <p className="text-sm font-semibold text-emerald-900">{templatePrefillMessage}</p>
+                        <p className="mt-1 text-xs text-emerald-800">
+                          Review the fields below and adjust anything before saving.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setCreateMode("template")}
+                        className="rounded-xl border border-emerald-300 bg-white px-3 py-2 text-sm font-medium text-emerald-800 hover:bg-emerald-100"
+                      >
+                        Choose Another Template
+                      </button>
+                    </div>
+                  ) : null}
+
+                  <div className="mt-4 grid gap-4 md:grid-cols-2">
+                    <label className="space-y-2">
+                      <span className="text-sm font-medium text-slate-700">Class</span>
+                      <select
+                        value={classId}
+                        onChange={(e) => setClassId(e.target.value)}
+                        className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                      >
+                        {data.classes.map((row) => (
+                          <option key={row.id} value={row.id}>{row.title}</option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="space-y-2">
+                      <span className="text-sm font-medium text-slate-700">Assignment Type</span>
+                      <select
+                        value={contentType}
+                        onChange={(e) => {
+                          setContentType(e.target.value as AssignmentType);
+                          setError(null);
+                          setSuccessMessage(null);
+                          setTemplatePrefillMessage(null);
+                        }}
+                        className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                      >
+                        {(Object.keys(TYPE_LABELS) as AssignmentType[]).map((t) => (
+                          <option key={t} value={t}>{TYPE_LABELS[t]}</option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-slate-500">{TYPE_DESCRIPTIONS[contentType]}</p>
+                    </label>
+
+                    <label className="space-y-2 md:col-span-2">
+                      <span className="text-sm font-medium text-slate-700">Title</span>
+                      <input
+                        value={title}
+                        onChange={(e) => setTitle(e.target.value)}
+                        className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                        placeholder="e.g. The Water Cycle — Video Lesson"
+                      />
+                    </label>
+
+                    {contentType === "video" || contentType === "quiz" ? renderDueFields() : null}
+
+                    {renderTypeSpecificFields()}
+
+                    <label className="space-y-2 md:col-span-2">
+                      <span className="text-sm font-medium text-slate-700">Assignment Instructions</span>
+                      <textarea
+                        value={description}
+                        onChange={(e) => setDescription(e.target.value)}
+                        className="min-h-20 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                      />
+                    </label>
+
+                    {data.assignments.length > 0 && contentType !== "video" && contentType !== "quiz" ? (
+                      <label className="space-y-2 md:col-span-2">
+                        <span className="text-sm font-medium text-slate-700">
+                          Link to Assignment (optional)
+                        </span>
+                        <p className="text-xs text-slate-500">
+                          Attach this to a video lesson or another assignment so students can navigate between them.
+                        </p>
+                        <select
+                          value={linkedAssignmentId}
+                          onChange={(e) => setLinkedAssignmentId(e.target.value)}
+                          className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                        >
+                          <option value="">— None —</option>
+                          {data.assignments.map((a) => (
+                            <option key={a.id} value={a.id}>
+                              {TYPE_LABELS[a.contentType as AssignmentType] ?? a.contentType}: {a.title}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
+
+                    {contentType !== "video" && contentType !== "quiz" ? renderDueFields() : null}
+                  </div>
+                </>
+              )}
 
               {error ? <p className="mt-3 text-sm text-rose-700">{error}</p> : null}
               {successMessage ? <p className="mt-3 text-sm text-emerald-700">{successMessage}</p> : null}
@@ -1803,15 +2026,23 @@ function CurriculumBuilderPage() {
                   Cancel
                 </button>
                 <button
-                  disabled={saving || data.classes.length === 0}
-                  onClick={() => void submitAssignment()}
+                  disabled={saving || (createMode === "blank" && data.classes.length === 0)}
+                  onClick={() => {
+                    if (createMode === "template") {
+                      setCreateMode("blank");
+                      return;
+                    }
+                    void submitAssignment();
+                  }}
                   className="rounded-xl bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {saving
-                    ? "Saving…"
-                    : contentType === "video"
-                      ? "Save Video"
-                      : "Create Assignment"}
+                  {createMode === "template"
+                    ? "Start Blank"
+                    : saving
+                      ? "Saving…"
+                      : contentType === "video"
+                        ? "Save Video"
+                        : "Create Assignment"}
                 </button>
               </div>
             </section>
@@ -1887,6 +2118,14 @@ function CurriculumBuilderPage() {
                     </button>
                     <button
                       type="button"
+                      disabled={savingTemplateAssignmentId === video.id}
+                      onClick={() => void handleSaveAsTemplate(video.id, video.title)}
+                      className="rounded-lg border border-emerald-200 bg-white px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {savingTemplateAssignmentId === video.id ? "Saving…" : "Save as Template"}
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => setEditingAssignment(video)}
                       className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
                     >
@@ -1941,84 +2180,180 @@ function CurriculumBuilderPage() {
           {standaloneAssignments.map((row) => {
             const quizPayload = parseJson<QuizPayload>(row.contentRef);
             const essayPayload = parseJson<EssayQuestionsPayload>(row.contentRef);
+            const isGradable = row.contentType === "essay_questions" || row.contentType === "report";
+            const rowSubmissions = isGradable ? (submissionsByAssignment.get(row.id) ?? []) : [];
 
             return (
-              <article
+              <div
                 key={row.id}
                 id={`assignment-${row.id}`}
-                className={`flex items-start justify-between gap-4 rounded-2xl border border-slate-200 p-5 transition-all duration-300 ${
+                className={`rounded-2xl border border-slate-200 transition-all duration-300 ${
                   highlightedAssignmentId === row.id
-                    ? "bg-cyan-50 ring-2 ring-cyan-300 shadow-md"
-                    : "bg-slate-50/80"
+                    ? "ring-2 ring-cyan-300 shadow-md"
+                    : ""
                 }`}
               >
-                <div className="min-w-0">
-                  <p
-                    className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${getTypeBadgeClass(row.contentType)}`}
-                  >
-                    {TYPE_LABELS[row.contentType as AssignmentType] ?? row.contentType}
-                  </p>
-                  <h3 className="mt-0.5 text-lg font-semibold text-slate-900 truncate">{row.title}</h3>
-                  {row.description ? (
-                    <p className="mt-1 text-sm text-slate-600 line-clamp-2">{row.description}</p>
-                  ) : null}
-
-                  {row.contentType === "url" && row.contentRef ? (
-                    <a
-                      href={row.contentRef}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="mt-2 inline-block text-sm font-medium text-cyan-700 hover:underline"
+                <article
+                  className={`flex items-start justify-between gap-4 p-5 ${
+                    highlightedAssignmentId === row.id ? "bg-cyan-50" : "bg-slate-50/80"
+                  } ${isGradable && rowSubmissions.length > 0 ? "rounded-t-2xl" : "rounded-2xl"}`}
+                >
+                  <div className="min-w-0">
+                    <p
+                      className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${getTypeBadgeClass(row.contentType)}`}
                     >
-                      Open Link
-                    </a>
-                  ) : null}
-
-                  {row.contentType === "quiz" && quizPayload?.questions?.length ? (
-                    <p className="mt-1 text-xs text-slate-500">
-                      {quizPayload.questions.length} question{quizPayload.questions.length === 1 ? "" : "s"}
+                      {TYPE_LABELS[row.contentType as AssignmentType] ?? row.contentType}
                     </p>
-                  ) : null}
+                    <h3 className="mt-0.5 text-lg font-semibold text-slate-900 truncate">{row.title}</h3>
+                    {row.description ? (
+                      <p className="mt-1 text-sm text-slate-600 line-clamp-2">{row.description}</p>
+                    ) : null}
 
-                  {row.contentType === "essay_questions" && essayPayload?.questions?.length ? (
-                    <p className="mt-1 text-xs text-slate-500">
-                      {essayPayload.questions.length} question{essayPayload.questions.length === 1 ? "" : "s"}
-                    </p>
-                  ) : null}
+                    {row.contentType === "url" && row.contentRef ? (
+                      <a
+                        href={row.contentRef}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-2 inline-block text-sm font-medium text-cyan-700 hover:underline"
+                      >
+                        Open Link
+                      </a>
+                    ) : null}
 
-                  {row.contentType === "text" && row.contentRef ? (
-                    <p className="mt-2 text-sm text-slate-600 line-clamp-2">
-                      {summarizeRichText(row.contentRef)}
-                    </p>
-                  ) : null}
+                    {row.contentType === "quiz" && quizPayload?.questions?.length ? (
+                      <p className="mt-1 text-xs text-slate-500">
+                        {quizPayload.questions.length} question{quizPayload.questions.length === 1 ? "" : "s"}
+                      </p>
+                    ) : null}
 
-                  {row.contentType === "report" && row.contentRef ? (
-                    <p className="mt-2 text-sm text-slate-600 line-clamp-2">
-                      {summarizeRichText(row.contentRef)}
-                    </p>
-                  ) : null}
-                </div>
+                    {row.contentType === "essay_questions" && essayPayload?.questions?.length ? (
+                      <p className="mt-1 text-xs text-slate-500">
+                        {essayPayload.questions.length} question{essayPayload.questions.length === 1 ? "" : "s"}
+                      </p>
+                    ) : null}
 
-                <div className="flex shrink-0 items-start gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setEditingAssignment(row)}
-                    className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDeleteError(null);
-                      setDeleteTarget(row);
-                    }}
-                    className="rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50"
-                  >
-                    Delete
-                  </button>
-                </div>
-              </article>
+                    {row.contentType === "text" && row.contentRef ? (
+                      <p className="mt-2 text-sm text-slate-600 line-clamp-2">
+                        {summarizeRichText(row.contentRef)}
+                      </p>
+                    ) : null}
+
+                    {row.contentType === "report" && row.contentRef ? (
+                      <p className="mt-2 text-sm text-slate-600 line-clamp-2">
+                        {summarizeRichText(row.contentRef)}
+                      </p>
+                    ) : null}
+                  </div>
+
+                  <div className="flex shrink-0 items-start gap-2">
+                    <button
+                      type="button"
+                      disabled={savingTemplateAssignmentId === row.id}
+                      onClick={() => void handleSaveAsTemplate(row.id, row.title)}
+                      className="rounded-lg border border-emerald-200 bg-white px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {savingTemplateAssignmentId === row.id ? "Saving…" : "Save as Template"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingAssignment(row)}
+                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDeleteError(null);
+                        setDeleteTarget(row);
+                      }}
+                      className="rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </article>
+
+                {/* Submission rows for essay/report assignments */}
+                {isGradable && rowSubmissions.length > 0 ? (
+                  <div className="border-t border-slate-200 divide-y divide-slate-100 bg-white rounded-b-2xl">
+                    {rowSubmissions.map((sub) => {
+                      const profile = profileById.get(sub.profileId);
+                      const isGrading = gradingInProgress.has(sub.id);
+                      const localResult = gradingResults.get(sub.id);
+                      const gradingError = gradingErrors.get(sub.id);
+                      const storedFeedback = sub.feedbackJson
+                        ? (() => { try { return JSON.parse(sub.feedbackJson) as GradingResult; } catch { return null; } })()
+                        : null;
+                      const feedback = localResult ?? storedFeedback;
+
+                      return (
+                        <div key={sub.id} className="px-5 py-3 space-y-2">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="text-sm font-medium text-slate-800 truncate">
+                                {profile?.displayName ?? "Student"}
+                              </span>
+                              <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${
+                                sub.status === "graded"
+                                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                  : "border-amber-200 bg-amber-50 text-amber-700"
+                              }`}>
+                                {sub.status === "graded" ? `Graded · ${sub.score ?? "—"}/100` : "Submitted"}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              disabled={isGrading}
+                              onClick={() =>
+                                void handleGradeSubmission(
+                                  sub.id,
+                                  row.id,
+                                  profile?.gradeLevel ?? "mixed",
+                                )
+                              }
+                              className="shrink-0 rounded-lg border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100 disabled:opacity-60"
+                            >
+                              {isGrading ? "Grading…" : sub.status === "graded" ? "Re-grade with AI" : "AI Grade"}
+                            </button>
+                          </div>
+
+                          {gradingError ? (
+                            <p className="text-xs text-rose-600">{gradingError}</p>
+                          ) : null}
+
+                          {feedback ? (
+                            <div className="space-y-2 pt-1">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-semibold text-slate-900">Score: {feedback.score}/100</span>
+                              </div>
+                              <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 space-y-1">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Strengths</p>
+                                <ul className="space-y-0.5">
+                                  {feedback.strengths.map((s, i) => (
+                                    <li key={i} className="text-sm text-emerald-800">• {s}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                              {feedback.improvements.length > 0 ? (
+                                <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 space-y-1">
+                                  <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Areas to Improve</p>
+                                  <ul className="space-y-0.5">
+                                    {feedback.improvements.map((s, i) => (
+                                      <li key={i} className="text-sm text-amber-800">• {s}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              ) : null}
+                              <p className="text-sm text-slate-600 italic">{feedback.overallFeedback}</p>
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
             );
           })}
 
@@ -2086,6 +2421,133 @@ function CurriculumBuilderPage() {
           </div>
         </div>
       ) : null}
+
+      {/* Quick Create modal */}
+      {showQuickCreate ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-center justify-between gap-4 border-b border-slate-200 px-6 py-4">
+              <h2 className="text-lg font-semibold text-slate-900">Quick Add</h2>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowQuickCreate(false);
+                  setQuickError(null);
+                }}
+                className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
+              >
+                Close
+              </button>
+            </div>
+            <div className="space-y-4 px-6 py-5">
+              <label className="block space-y-1">
+                <span className="text-sm font-medium text-slate-700">Class</span>
+                <select
+                  value={quickClassId}
+                  onChange={(e) => setQuickClassId(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                >
+                  {data.classes.map((row) => (
+                    <option key={row.id} value={row.id}>{row.title}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="block space-y-1">
+                <span className="text-sm font-medium text-slate-700">Assignment Type</span>
+                <select
+                  value={quickType}
+                  onChange={(e) => setQuickType(e.target.value as AssignmentType)}
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                >
+                  {(Object.keys(TYPE_LABELS) as AssignmentType[]).map((t) => (
+                    <option key={t} value={t}>{TYPE_LABELS[t]}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="block space-y-1">
+                <span className="text-sm font-medium text-slate-700">Title</span>
+                <input
+                  value={quickTitle}
+                  onChange={(e) => setQuickTitle(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                  placeholder="e.g. The Water Cycle — Video Lesson"
+                />
+              </label>
+              <p className="text-xs text-slate-500">
+                For full options (content, due date, linking),{" "}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowQuickCreate(false);
+                    resetForm({
+                      nextContentType: quickType,
+                      nextMode: "blank",
+                      keepClassId: true,
+                    });
+                    setClassId(quickClassId);
+                    setShowCreateModal(true);
+                  }}
+                  className="font-medium text-cyan-700 hover:text-cyan-800 underline"
+                >
+                  open Advanced →
+                </button>
+              </p>
+              {quickError ? <p className="text-sm text-rose-700">{quickError}</p> : null}
+            </div>
+            <div className="flex justify-end gap-3 border-t border-slate-200 px-6 py-4">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowQuickCreate(false);
+                  setQuickError(null);
+                }}
+                className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={quickSaving || !quickTitle.trim() || !quickClassId}
+                onClick={() => void handleQuickCreate()}
+                className="rounded-xl bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700 disabled:opacity-60"
+              >
+                {quickSaving ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Quick Add floating button — sits above the LessonPlannerChat button */}
+      <button
+        type="button"
+        onClick={() => {
+          setQuickError(null);
+          setShowQuickCreate(true);
+        }}
+        className="fixed bottom-24 right-6 z-40 rounded-full border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-md hover:bg-slate-50"
+      >
+        + Quick Add
+      </button>
+
+      <LessonPlannerChat
+        studentName={data.profiles[0]?.displayName ?? "your student"}
+        grade={data.profiles[0]?.gradeLevel ?? null}
+        classList={data.classes.map((c) => c.title)}
+        onCreateAssignment={(suggestion) => {
+          const validTypes: AssignmentType[] = ["text", "file", "url", "video", "quiz", "essay_questions", "report"];
+          const nextType = validTypes.includes(suggestion.type as AssignmentType)
+            ? suggestion.type as AssignmentType
+            : "video";
+          resetForm({
+            nextContentType: nextType,
+            nextMode: "blank",
+          });
+          setTitle(suggestion.title);
+          setDescription(suggestion.description);
+          setShowCreateModal(true);
+        }}
+      />
     </div>
   );
 }

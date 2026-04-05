@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, createFileRoute, redirect } from "@tanstack/react-router";
 import { getParentDashboardData, getViewerContext } from "../server/functions";
+import { LessonPlannerChat } from "../components/LessonPlannerChat";
 
 export const Route = createFileRoute("/")({
   component: Home,
@@ -285,6 +286,12 @@ function Home() {
           </div>
         )}
       </section>
+
+      <LessonPlannerChat
+        studentName={selectedStudent?.displayName ?? parentStudents[0]?.displayName ?? "your student"}
+        grade={selectedStudent?.gradeLevel ?? parentStudents[0]?.gradeLevel ?? null}
+        classList={selectedMetrics.map((m) => m.classTitle)}
+      />
     </div>
   );
 }

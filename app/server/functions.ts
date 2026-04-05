@@ -1,11 +1,12 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getRequest, setResponseHeader } from "@tanstack/react-start/server";
-import { and, desc, eq, inArray, or } from "drizzle-orm";
+import { and, between, desc, eq, gte, inArray, lte, or, sql } from "drizzle-orm";
 import { env } from "cloudflare:workers";
 import { z } from "zod";
 import { getDb } from "../db/client";
 import {
   assignments,
+  assignmentTemplates,
   classEnrollments,
   classes,
   healthCheck,
@@ -14,12 +15,15 @@ import {
   profiles,
   submissions,
   users,
+  weekPlan,
 } from "../db/schema";
 import { auth, getRoleContext, requireActiveRole } from "../lib/auth";
 import {
   fetchYoutubeTranscript,
   fetchYoutubeTranscriptWithMeta,
   generateQuizDraft,
+  generateWeekPlanWithAI as aiGenerateWeekPlan,
+  gradeSubmission,
   searchYoutubeForVideos,
 } from "../lib/ai";
 
@@ -1701,6 +1705,259 @@ type VideoAssignmentPayload = {
   }>;
 };
 
+type AssignmentContentType = (typeof ASSIGNMENT_CONTENT_TYPES)[number];
+
+type AccessibleAssignmentTemplate = {
+  id: string;
+  organizationId: string | null;
+  title: string;
+  description: string | null;
+  contentType: AssignmentContentType;
+  contentRef: string | null;
+  tags: string[];
+  isPublic: boolean;
+  createdByUserId: string | null;
+  scope: "mine" | "public";
+};
+
+function slugifyTemplateTagFragment(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function normalizeTemplateTag(tag: string) {
+  const trimmed = tag.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const prefixedMatch = trimmed.match(/^([a-z]+):(.*)$/i);
+  if (prefixedMatch) {
+    const prefix = prefixedMatch[1].toLowerCase();
+    const value = slugifyTemplateTagFragment(prefixedMatch[2] ?? "");
+    return value ? `${prefix}:${value}` : null;
+  }
+
+  return slugifyTemplateTagFragment(trimmed);
+}
+
+function normalizeTemplateTags(
+  tags: string[],
+  options?: {
+    fallbackSubjectTag?: string;
+  },
+) {
+  const unique = new Set<string>();
+
+  for (const tag of tags) {
+    const normalized = normalizeTemplateTag(tag);
+    if (normalized) {
+      unique.add(normalized);
+    }
+  }
+
+  const hasSubjectTag = Array.from(unique).some((tag) => tag.startsWith("subject:"));
+  if (!hasSubjectTag && options?.fallbackSubjectTag) {
+    const fallback = normalizeTemplateTag(options.fallbackSubjectTag);
+    if (fallback) {
+      unique.add(fallback);
+    }
+  }
+
+  return Array.from(unique);
+}
+
+function parseStoredTemplateTags(value: string | null | undefined) {
+  if (!value) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return normalizeTemplateTags(parsed.filter((item): item is string => typeof item === "string"));
+  } catch {
+    return [];
+  }
+}
+
+function normalizeTemplateGradeTag(gradeLevel: string | undefined) {
+  const trimmed = gradeLevel?.trim().toLowerCase();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (trimmed === "k" || trimmed.includes("kindergarten")) {
+    return "grade:k";
+  }
+
+  const numericMatch = trimmed.match(/\d{1,2}/);
+  if (numericMatch) {
+    return `grade:${Number(numericMatch[0])}`;
+  }
+
+  const normalized = slugifyTemplateTagFragment(trimmed.replace(/^grade\s+/i, ""));
+  return normalized ? `grade:${normalized}` : null;
+}
+
+function parseVideoAssignmentPayload(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(value) as VideoAssignmentPayload;
+  } catch {
+    return null;
+  }
+}
+
+async function prepareAssignmentContentRef(
+  contentType: AssignmentContentType,
+  contentRef: string | undefined,
+) {
+  let finalContentRef = contentRef;
+  let transcriptCached = false;
+  let transcriptStatus: string | null = null;
+
+  if (contentType === "video" && contentRef) {
+    try {
+      const parsed = JSON.parse(contentRef) as VideoAssignmentPayload;
+      const firstVideo = parsed.videos?.[0];
+      if (firstVideo?.videoId) {
+        const transcriptResult = await fetchYoutubeTranscriptWithMeta(firstVideo.videoId);
+        const fetchedAt = new Date().toISOString();
+        firstVideo.transcript = transcriptResult.transcript;
+        firstVideo.transcriptFetchedAt = fetchedAt;
+        firstVideo.transcriptMeta = transcriptResult.meta;
+        finalContentRef = JSON.stringify({
+          ...parsed,
+          videos: [firstVideo],
+        });
+        transcriptCached = Boolean(transcriptResult.transcript);
+        transcriptStatus = transcriptResult.transcript
+          ? "Transcript cached."
+          : `Transcript unavailable (${transcriptResult.meta.error ?? "UNKNOWN"}).`;
+      }
+    } catch {
+      // Keep original payload if parsing fails.
+    }
+  }
+
+  return {
+    finalContentRef,
+    transcriptCached,
+    transcriptStatus,
+  };
+}
+
+async function persistAssignmentRecord(input: {
+  db: ReturnType<typeof getDb>;
+  organizationId: string;
+  classId: string;
+  title: string;
+  description?: string;
+  contentType: AssignmentContentType;
+  contentRef?: string;
+  linkedAssignmentId?: string | null;
+  dueAt?: string;
+  createdByUserId: string;
+}) {
+  const assignmentId = crypto.randomUUID();
+  const { finalContentRef, transcriptCached, transcriptStatus } = await prepareAssignmentContentRef(
+    input.contentType,
+    input.contentRef,
+  );
+
+  await input.db.insert(assignments).values({
+    id: assignmentId,
+    organizationId: input.organizationId,
+    classId: input.classId,
+    title: input.title.trim(),
+    description: input.description?.trim() || null,
+    contentType: input.contentType,
+    contentRef: finalContentRef,
+    linkedAssignmentId: input.linkedAssignmentId ?? null,
+    dueAt: input.dueAt,
+    createdByUserId: input.createdByUserId,
+  });
+
+  const savedVideoPayload =
+    input.contentType === "video" ? parseVideoAssignmentPayload(finalContentRef) : null;
+
+  return {
+    success: true,
+    assignmentId,
+    transcriptCached,
+    transcriptStatus,
+    savedVideoTranscript: savedVideoPayload?.videos?.[0]?.transcript ?? null,
+    savedVideoTitle: savedVideoPayload?.videos?.[0]?.title ?? input.title.trim(),
+  };
+}
+
+async function getAccessibleAssignmentTemplates(
+  db: ReturnType<typeof getDb>,
+  options: {
+    organizationId: string;
+    userId: string;
+    contentType?: AssignmentContentType;
+    gradeLevel?: string;
+  },
+) {
+  const rows = await db.query.assignmentTemplates.findMany({
+    where: or(
+      and(
+        eq(assignmentTemplates.organizationId, options.organizationId),
+        eq(assignmentTemplates.createdByUserId, options.userId),
+      ),
+      and(
+        eq(assignmentTemplates.isPublic, true),
+        sql`${assignmentTemplates.organizationId} is null`,
+        sql`${assignmentTemplates.createdByUserId} is null`,
+      ),
+    ),
+  });
+
+  const gradeTag = normalizeTemplateGradeTag(options.gradeLevel);
+
+  return rows
+    .map((row): AccessibleAssignmentTemplate => ({
+      id: row.id,
+      organizationId: row.organizationId ?? null,
+      title: row.title,
+      description: row.description ?? null,
+      contentType: row.contentType as AssignmentContentType,
+      contentRef: row.contentRef ?? null,
+      tags: parseStoredTemplateTags(row.tags),
+      isPublic: Boolean(row.isPublic),
+      createdByUserId: row.createdByUserId ?? null,
+      scope:
+        row.organizationId === options.organizationId && row.createdByUserId === options.userId
+          ? "mine"
+          : "public",
+    }))
+    .filter((row) => {
+      if (options.contentType && row.contentType !== options.contentType) {
+        return false;
+      }
+      if (gradeTag && !row.tags.includes(gradeTag)) {
+        return false;
+      }
+      return true;
+    })
+    .sort((left, right) => {
+      if (left.scope !== right.scope) {
+        return left.scope === "mine" ? -1 : 1;
+      }
+      return left.title.localeCompare(right.title);
+    });
+}
+
 export const createAssignmentRecord = createServerFn({ method: "POST" })
   .inputValidator((data) => createAssignmentInput.parse(data))
   .handler(async ({ data }) => {
@@ -1734,78 +1991,149 @@ export const createAssignmentRecord = createServerFn({ method: "POST" })
       if (!linked) throw new Error("LINKED_ASSIGNMENT_NOT_FOUND");
     }
 
-    const assignmentId = crypto.randomUUID();
-    let finalContentRef = data.contentRef;
-    let transcriptCached = false;
-    let transcriptStatus: string | null = null;
-
-    // For video assignments, cache transcript at save time so downstream quiz
-    // generation can use persisted content without live transcript fetches.
-    if (data.contentType === "video" && data.contentRef) {
-      try {
-        const parsed = JSON.parse(data.contentRef) as VideoAssignmentPayload;
-        const firstVideo = parsed.videos?.[0];
-        if (firstVideo?.videoId) {
-          const transcriptResult = await fetchYoutubeTranscriptWithMeta(firstVideo.videoId);
-          const fetchedAt = new Date().toISOString();
-          firstVideo.transcript = transcriptResult.transcript;
-          firstVideo.transcriptFetchedAt = fetchedAt;
-          firstVideo.transcriptMeta = transcriptResult.meta;
-          finalContentRef = JSON.stringify({
-            ...parsed,
-            videos: [firstVideo],
-          });
-          transcriptCached = Boolean(transcriptResult.transcript);
-          transcriptStatus = transcriptResult.transcript
-            ? "Transcript cached."
-            : `Transcript unavailable (${transcriptResult.meta.error ?? "UNKNOWN"}).`;
-        }
-      } catch {
-        // Keep original payload if parsing fails.
-      }
-    }
-
-    await db.insert(assignments).values({
-      id: assignmentId,
+    return await persistAssignmentRecord({
+      db,
       organizationId,
       classId: data.classId,
       title: data.title,
       description: data.description,
       contentType: data.contentType,
-      contentRef: finalContentRef,
-      linkedAssignmentId: data.linkedAssignmentId ?? null,
+      contentRef: data.contentRef,
+      linkedAssignmentId: data.linkedAssignmentId,
       dueAt: data.dueAt,
+      createdByUserId: session.user.id,
+    });
+  });
+
+const saveAssignmentAsTemplateInput = z.object({
+  assignmentId: z.string().min(1),
+  tags: z.array(z.string().trim().min(1).max(60)).max(20),
+});
+
+export const saveAssignmentAsTemplate = createServerFn({ method: "POST" })
+  .inputValidator((data) => saveAssignmentAsTemplateInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const assignmentRecord = await db.query.assignments.findFirst({
+      where: and(
+        eq(assignments.id, data.assignmentId),
+        eq(assignments.organizationId, organizationId),
+      ),
+    });
+
+    if (!assignmentRecord) {
+      throw new Error("NOT_FOUND");
+    }
+
+    const templateId = crypto.randomUUID();
+    const tags = normalizeTemplateTags(data.tags, {
+      fallbackSubjectTag: "subject:custom",
+    });
+
+    await db.insert(assignmentTemplates).values({
+      id: templateId,
+      organizationId,
+      title: assignmentRecord.title,
+      description: assignmentRecord.description,
+      contentType: assignmentRecord.contentType,
+      contentRef: assignmentRecord.contentRef,
+      tags: JSON.stringify(tags),
+      isPublic: false,
       createdByUserId: session.user.id,
     });
 
     return {
       success: true,
-      assignmentId,
-      transcriptCached,
-      transcriptStatus,
-      savedVideoTranscript:
-        data.contentType === "video"
-          ? (() => {
-              try {
-                const payload = finalContentRef ? JSON.parse(finalContentRef) as VideoAssignmentPayload : null;
-                return payload?.videos?.[0]?.transcript ?? null;
-              } catch {
-                return null;
-              }
-            })()
-          : null,
-      savedVideoTitle:
-        data.contentType === "video"
-          ? (() => {
-              try {
-                const payload = finalContentRef ? JSON.parse(finalContentRef) as VideoAssignmentPayload : null;
-                return payload?.videos?.[0]?.title ?? data.title;
-              } catch {
-                return data.title;
-              }
-            })()
-          : null,
+      templateId,
+      tags,
     };
+  });
+
+const listTemplatesInput = z
+  .object({
+    contentType: z.enum(ASSIGNMENT_CONTENT_TYPES).optional(),
+    gradeLevel: z.string().optional(),
+  })
+  .optional()
+  .transform((value) => value ?? {});
+
+export const listTemplates = createServerFn({ method: "GET" })
+  .inputValidator((data) => listTemplatesInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const templates = await getAccessibleAssignmentTemplates(db, {
+      organizationId,
+      userId: session.user.id,
+      contentType: data.contentType,
+      gradeLevel: data.gradeLevel,
+    });
+
+    return { templates };
+  });
+
+const createAssignmentFromTemplateInput = z.object({
+  templateId: z.string().min(1),
+  classId: z.string().min(1),
+  dueAt: z.string().optional(),
+});
+
+export const createAssignmentFromTemplate = createServerFn({ method: "POST" })
+  .inputValidator((data) => createAssignmentFromTemplateInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const targetClass = await db.query.classes.findFirst({
+      where: and(
+        eq(classes.id, data.classId),
+        eq(classes.organizationId, organizationId),
+      ),
+    });
+
+    if (!targetClass) {
+      throw new Error("FORBIDDEN");
+    }
+
+    const templates = await getAccessibleAssignmentTemplates(db, {
+      organizationId,
+      userId: session.user.id,
+    });
+    const template = templates.find((row) => row.id === data.templateId);
+
+    if (!template) {
+      throw new Error("NOT_FOUND");
+    }
+
+    return await persistAssignmentRecord({
+      db,
+      organizationId,
+      classId: data.classId,
+      title: template.title,
+      description: template.description ?? undefined,
+      contentType: template.contentType,
+      contentRef: template.contentRef ?? undefined,
+      dueAt: data.dueAt,
+      createdByUserId: session.user.id,
+    });
   });
 
 const updateAssignmentInput = z.object({
@@ -2031,7 +2359,7 @@ export const getCurriculumBuilderData = createServerFn({ method: "GET" }).handle
       session.session.activeOrganizationId,
     );
 
-    const [classRows, assignmentRows, userRecord] = await Promise.all([
+    const [classRows, assignmentRows, userRecord, submissionRows, profileRows, templates] = await Promise.all([
       db.query.classes.findMany({
         where: eq(classes.organizationId, organizationId),
         orderBy: [desc(classes.createdAt)],
@@ -2043,12 +2371,29 @@ export const getCurriculumBuilderData = createServerFn({ method: "GET" }).handle
       db.query.users.findFirst({
         where: eq(users.id, session.user.id),
       }),
+      db.query.submissions.findMany({
+        where: eq(submissions.organizationId, organizationId),
+        orderBy: [desc(submissions.submittedAt)],
+      }),
+      db.query.profiles.findMany({
+        where: and(
+          eq(profiles.organizationId, organizationId),
+          eq(profiles.status, "active"),
+        ),
+      }),
+      getAccessibleAssignmentTemplates(db, {
+        organizationId,
+        userId: session.user.id,
+      }),
     ]);
 
     return {
       parentPinLength: resolveParentPinLength(userRecord?.parentPinLength),
       classes: classRows,
       assignments: assignmentRows,
+      templates,
+      submissions: submissionRows,
+      profiles: profileRows,
     };
   },
 );
@@ -2209,6 +2554,78 @@ export const generateQuizDraftForCurriculum = createServerFn({ method: "POST" })
     return {
       quiz,
     };
+  });
+
+// ── AI submission grading ─────────────────────────────────────────────────────
+
+const gradeSubmissionWithAIInput = z.object({
+  submissionId: z.string().min(1),
+  assignmentId: z.string().min(1),
+  rubricText: z.string().optional(),
+  gradeLevel: z.string().min(1),
+});
+
+export const gradeSubmissionWithAI = createServerFn({ method: "POST" })
+  .inputValidator((data) => gradeSubmissionWithAIInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const [submissionRecord, assignmentRecord] = await Promise.all([
+      db.query.submissions.findFirst({
+        where: and(
+          eq(submissions.id, data.submissionId),
+          eq(submissions.organizationId, organizationId),
+        ),
+      }),
+      db.query.assignments.findFirst({
+        where: and(
+          eq(assignments.id, data.assignmentId),
+          eq(assignments.organizationId, organizationId),
+        ),
+      }),
+    ]);
+
+    if (!submissionRecord || !assignmentRecord) {
+      throw new Error("NOT_FOUND");
+    }
+
+    if (!submissionRecord.textResponse) {
+      throw new Error("NO_TEXT_RESPONSE");
+    }
+
+    const rubricOrInstructions =
+      data.rubricText?.trim() ||
+      (assignmentRecord.contentRef
+        ? assignmentRecord.contentRef.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()
+        : undefined);
+
+    const result = await gradeSubmission({
+      submissionText: submissionRecord.textResponse,
+      assignmentTitle: assignmentRecord.title,
+      rubricOrInstructions,
+      gradeLevel: data.gradeLevel,
+    });
+
+    const feedbackJson = JSON.stringify(result);
+
+    await db
+      .update(submissions)
+      .set({
+        score: result.score,
+        feedbackJson,
+        status: "graded",
+        reviewedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(submissions.id, data.submissionId));
+
+    return result;
   });
 
 const getStudentWorkspaceInput = z
@@ -2546,4 +2963,440 @@ export const getProgressSnapshot = createServerFn({ method: "GET" })
       },
       mastery,
     };
+  });
+
+// ── Gradebook data ────────────────────────────────────────────────────────────
+
+export const getGradeBookData = createServerFn({ method: "GET" }).handler(async () => {
+  const session = await requireActiveRole(["admin", "parent"]);
+  const db = getDb();
+
+  const organizationId = await resolveActiveOrganizationId(
+    session.user.id,
+    session.session.activeOrganizationId,
+  );
+
+  const [profileRows, classRows, assignmentRows, submissionRows] = await Promise.all([
+    db.query.profiles.findMany({
+      where: and(
+        eq(profiles.organizationId, organizationId),
+        eq(profiles.status, "active"),
+      ),
+      orderBy: [desc(profiles.createdAt)],
+    }),
+    db.query.classes.findMany({
+      where: eq(classes.organizationId, organizationId),
+      orderBy: [desc(classes.createdAt)],
+    }),
+    db.query.assignments.findMany({
+      where: eq(assignments.organizationId, organizationId),
+      orderBy: [desc(assignments.createdAt)],
+    }),
+    db.query.submissions.findMany({
+      where: eq(submissions.organizationId, organizationId),
+      orderBy: [desc(submissions.submittedAt)],
+    }),
+  ]);
+
+  const profileById = new Map(profileRows.map((p) => [p.id, p]));
+  const classById = new Map(classRows.map((c) => [c.id, c]));
+
+  const rows = submissionRows.flatMap((sub) => {
+    const assignment = assignmentRows.find((a) => a.id === sub.assignmentId);
+    if (!assignment) return [];
+    const profile = profileById.get(sub.profileId);
+    const cls = classById.get(assignment.classId);
+    return [{
+      submissionId: sub.id,
+      assignmentId: assignment.id,
+      profileId: sub.profileId,
+      studentName: profile?.displayName ?? "Unknown",
+      classId: assignment.classId,
+      className: cls?.title ?? "Unknown",
+      assignmentTitle: assignment.title,
+      contentType: assignment.contentType,
+      submittedAt: sub.submittedAt,
+      score: sub.score ?? null,
+      status: sub.status,
+      feedbackJson: sub.feedbackJson ?? null,
+    }];
+  });
+
+  return {
+    rows,
+    profiles: profileRows.map((p) => ({ id: p.id, displayName: p.displayName })),
+    classes: classRows.map((c) => ({ id: c.id, title: c.title })),
+  };
+});
+
+// ── Week planner ──────────────────────────────────────────────────────────────
+
+const getTodaysPlanInput = z.object({
+  profileId: z.string().min(1),
+});
+
+export const getTodaysPlan = createServerFn({ method: "GET" })
+  .inputValidator((data) => getTodaysPlanInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent", "student"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const today = new Date().toISOString().slice(0, 10);
+
+    const slots = await db
+      .select({
+        assignmentId: weekPlan.assignmentId,
+        orderIndex: weekPlan.orderIndex,
+        assignmentTitle: assignments.title,
+        assignmentContentType: assignments.contentType,
+        classTitle: classes.title,
+      })
+      .from(weekPlan)
+      .innerJoin(assignments, eq(weekPlan.assignmentId, assignments.id))
+      .innerJoin(classes, eq(assignments.classId, classes.id))
+      .where(
+        and(
+          eq(weekPlan.organizationId, organizationId),
+          eq(weekPlan.profileId, data.profileId),
+          eq(weekPlan.scheduledDate, today),
+        ),
+      )
+      .orderBy(weekPlan.orderIndex);
+
+    return { slots, today };
+  });
+
+const getWeekPlanInput = z.object({
+  profileId: z.string().min(1),
+  weekStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+});
+
+export const getWeekPlan = createServerFn({ method: "GET" })
+  .inputValidator((data) => getWeekPlanInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent", "student"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    // Build week end date (Friday = start + 4 days)
+    const weekStart = new Date(data.weekStartDate);
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekStart.getDate() + 4);
+    const weekEndDate = weekEnd.toISOString().slice(0, 10);
+
+    const slots = await db
+      .select({
+        id: weekPlan.id,
+        assignmentId: weekPlan.assignmentId,
+        scheduledDate: weekPlan.scheduledDate,
+        orderIndex: weekPlan.orderIndex,
+        assignmentTitle: assignments.title,
+        assignmentContentType: assignments.contentType,
+        classId: assignments.classId,
+        classTitle: classes.title,
+      })
+      .from(weekPlan)
+      .innerJoin(assignments, eq(weekPlan.assignmentId, assignments.id))
+      .innerJoin(classes, eq(assignments.classId, classes.id))
+      .where(
+        and(
+          eq(weekPlan.organizationId, organizationId),
+          eq(weekPlan.profileId, data.profileId),
+          gte(weekPlan.scheduledDate, data.weekStartDate),
+          lte(weekPlan.scheduledDate, weekEndDate),
+        ),
+      )
+      .orderBy(weekPlan.scheduledDate, weekPlan.orderIndex);
+
+    // Also return unscheduled pending assignments for this profile
+    const enrolledClassRows = await db
+      .select({ classId: classEnrollments.classId })
+      .from(classEnrollments)
+      .where(eq(classEnrollments.profileId, data.profileId));
+
+    const enrolledClassIds = enrolledClassRows.map((r) => r.classId);
+
+    const scheduledAssignmentIds = new Set(slots.map((s) => s.assignmentId));
+
+    const submittedRows = await db
+      .select({ assignmentId: submissions.assignmentId })
+      .from(submissions)
+      .where(
+        and(
+          eq(submissions.profileId, data.profileId),
+          eq(submissions.organizationId, organizationId),
+        ),
+      );
+
+    const submittedIds = new Set(submittedRows.map((r) => r.assignmentId));
+
+    const pendingAssignments = enrolledClassIds.length
+      ? await db
+          .select({
+            id: assignments.id,
+            title: assignments.title,
+            contentType: assignments.contentType,
+            classId: assignments.classId,
+            classTitle: classes.title,
+          })
+          .from(assignments)
+          .innerJoin(classes, eq(assignments.classId, classes.id))
+          .where(
+            and(
+              eq(assignments.organizationId, organizationId),
+              inArray(assignments.classId, enrolledClassIds),
+            ),
+          )
+          .orderBy(assignments.createdAt)
+      : [];
+
+    const unscheduled = pendingAssignments.filter(
+      (a) => !scheduledAssignmentIds.has(a.id) && !submittedIds.has(a.id),
+    );
+
+    return { slots, unscheduled };
+  });
+
+const saveWeekPlanInput = z.object({
+  profileId: z.string().min(1),
+  slots: z.array(
+    z.object({
+      assignmentId: z.string().min(1),
+      scheduledDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      orderIndex: z.number().int().min(0),
+    }),
+  ),
+  weekStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+});
+
+export const saveWeekPlan = createServerFn({ method: "POST" })
+  .inputValidator((data) => saveWeekPlanInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    // Build week end date
+    const weekStart = new Date(data.weekStartDate);
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekStart.getDate() + 4);
+    const weekEndDate = weekEnd.toISOString().slice(0, 10);
+
+    // Delete existing slots for this week/profile then re-insert
+    await db
+      .delete(weekPlan)
+      .where(
+        and(
+          eq(weekPlan.organizationId, organizationId),
+          eq(weekPlan.profileId, data.profileId),
+          gte(weekPlan.scheduledDate, data.weekStartDate),
+          lte(weekPlan.scheduledDate, weekEndDate),
+        ),
+      );
+
+    if (data.slots.length > 0) {
+      await db.insert(weekPlan).values(
+        data.slots.map((slot) => ({
+          id: crypto.randomUUID(),
+          organizationId,
+          profileId: data.profileId,
+          assignmentId: slot.assignmentId,
+          scheduledDate: slot.scheduledDate,
+          orderIndex: slot.orderIndex,
+          createdAt: new Date().toISOString(),
+        })),
+      );
+    }
+
+    return { saved: data.slots.length };
+  });
+
+const generateWeekPlanInput = z.object({
+  profileId: z.string().min(1),
+  weekStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+});
+
+export const generateWeekPlan = createServerFn({ method: "POST" })
+  .inputValidator((data) => generateWeekPlanInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const profile = await db.query.profiles.findFirst({
+      where: and(
+        eq(profiles.id, data.profileId),
+        eq(profiles.organizationId, organizationId),
+      ),
+    });
+
+    if (!profile) {
+      throw new Error("PROFILE_NOT_FOUND");
+    }
+
+    const enrolledClassRows = await db
+      .select({ classId: classEnrollments.classId })
+      .from(classEnrollments)
+      .where(eq(classEnrollments.profileId, data.profileId));
+
+    const enrolledClassIds = enrolledClassRows.map((r) => r.classId);
+
+    if (enrolledClassIds.length === 0) {
+      return { slots: [] };
+    }
+
+    const submittedRows = await db
+      .select({ assignmentId: submissions.assignmentId })
+      .from(submissions)
+      .where(
+        and(
+          eq(submissions.profileId, data.profileId),
+          eq(submissions.organizationId, organizationId),
+        ),
+      );
+
+    const submittedIds = new Set(submittedRows.map((r) => r.assignmentId));
+
+    const pendingAssignments = await db
+      .select({
+        id: assignments.id,
+        title: assignments.title,
+        contentType: assignments.contentType,
+        classId: assignments.classId,
+        classTitle: classes.title,
+      })
+      .from(assignments)
+      .innerJoin(classes, eq(assignments.classId, classes.id))
+      .where(
+        and(
+          eq(assignments.organizationId, organizationId),
+          inArray(assignments.classId, enrolledClassIds),
+        ),
+      )
+      .orderBy(assignments.createdAt);
+
+    const unsubmitted = pendingAssignments.filter((a) => !submittedIds.has(a.id));
+
+    const slots = await aiGenerateWeekPlan({
+      assignments: unsubmitted,
+      gradeLevel: profile.gradeLevel,
+      weekStartDate: data.weekStartDate,
+    });
+
+    return { slots };
+  });
+
+// ── Lesson Planner Chat ───────────────────────────────────────────────────────
+
+const lessonPlannerChatInput = z.object({
+  messages: z.array(
+    z.object({
+      role: z.enum(["user", "assistant"]),
+      content: z.string(),
+    }),
+  ).min(1).max(40),
+  studentName: z.string(),
+  grade: z.string().nullable(),
+  classList: z.array(z.string()),
+});
+
+function buildFallbackSuggestionBlock(topic: string, grade: string | null) {
+  const gradeSuffix = grade ? ` (Grade ${grade})` : "";
+  const cleanedTopic = topic.trim() || "the selected topic";
+
+  return [
+    "",
+    "ASSIGNMENT_SUGGESTION: title=\"Background Reading: " + cleanedTopic + "\" type=text description=\"Read a short passage about " + cleanedTopic + gradeSuffix + " and list 5 key facts in your own words.\"",
+    "ASSIGNMENT_SUGGESTION: title=\"Video Lesson: " + cleanedTopic + "\" type=video description=\"Watch one age-appropriate lesson video on " + cleanedTopic + " and write 3 things you learned.\"",
+    "ASSIGNMENT_SUGGESTION: title=\"Check for Understanding: " + cleanedTopic + "\" type=quiz description=\"Complete a short 5-question quiz covering the main vocabulary and ideas from the lesson.\"",
+  ].join("\n");
+}
+
+function extractTopicFromUserMessage(userMessage: string) {
+  const cleaned = userMessage
+    .replace(/\b(i need|i want|please|can you|could you|help me|create|make|give me)\b/gi, "")
+    .replace(/\b(assignments?|lessons?|ideas?|for|about|on)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return cleaned || "this topic";
+}
+
+function ensureSuggestionTags(content: string, userMessage: string, grade: string | null) {
+  if (/ASSIGNMENT_SUGGESTION:/i.test(content)) {
+    return content;
+  }
+
+  const assignmentIntent = /\b(assignments?|lesson ideas?|topic ideas?|curriculum|activities?)\b/i.test(
+    userMessage,
+  );
+
+  if (!assignmentIntent) {
+    return content;
+  }
+
+  const topic = extractTopicFromUserMessage(userMessage);
+  return `${content.trim()}\n${buildFallbackSuggestionBlock(topic, grade)}`.trim();
+}
+
+export const lessonPlannerChat = createServerFn({ method: "POST" })
+  .inputValidator((data) => lessonPlannerChatInput.parse(data))
+  .handler(async ({ data }) => {
+    await requireActiveRole(["admin", "parent"]);
+
+    const classListText = data.classList.length > 0
+      ? data.classList.join(", ")
+      : "no classes set up yet";
+
+    const systemPrompt = [
+      "You are a homeschool curriculum assistant.",
+      `The parent teaches ${data.studentName}${data.grade ? `, grade ${data.grade}` : ""}.`,
+      `Current classes: ${classListText}.`,
+      "Help them create lesson plans, suggest topics, generate assignment sequences.",
+      "If user asks for assignments or topic ideas, include 3 to 5 actionable assignment suggestions.",
+      "Every suggestion MUST be on its own line using exactly this format:",
+      "ASSIGNMENT_SUGGESTION: title=\"[title]\" type=[text|video|quiz|essay_questions|report] description=\"[description]\"",
+      "Do not skip the ASSIGNMENT_SUGGESTION lines when assignment ideas are requested.",
+      "Keep responses concise and practical.",
+    ].join(" ");
+
+    const result = await env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
+      messages: [
+        { role: "system", content: systemPrompt },
+        ...data.messages,
+      ],
+      max_tokens: 800,
+    });
+
+    const rawResponseText =
+      typeof result === "string"
+        ? result
+        : typeof (result as Record<string, unknown>).response === "string"
+          ? (result as Record<string, unknown>).response as string
+          : JSON.stringify(result);
+
+    const lastUserMessage = [...data.messages]
+      .reverse()
+      .find((message) => message.role === "user")?.content ?? "";
+
+    const responseText = ensureSuggestionTags(rawResponseText, lastUserMessage, data.grade);
+
+    return { content: responseText };
   });

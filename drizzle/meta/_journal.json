@@ -64,6 +64,27 @@
       "when": 1775365200000,
       "tag": "0008_parent_pin_length",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1743984000000,
+      "tag": "0009_feedback_json",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1744070400000,
+      "tag": "0010_week_plan",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1775349600000,
+      "tag": "0011_assignment_templates",
+      "breakpoints": true
     }
   ]
 }

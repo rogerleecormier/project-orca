@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s \"https://www.khanacademy.org/api/v1/search?q=fractions&lang=en\")",
+      "WebFetch(domain:www.khanacademy.org)",
+      "Bash(curl -s -H \"User-Agent: Mozilla/5.0\" \"https://www.khanacademy.org/api/v1/search?q=fractions&lang=en\")",
+      "Bash(curl -s -H \"User-Agent: Mozilla/5.0\" \"https://www.khanacademy.org/api/v1/search?q=algebra&lang=en\")",
+      "Bash(curl -s -H \"User-Agent: Mozilla/5.0 \\(X11; Linux x86_64\\) AppleWebKit/537.36\" -H \"Accept: application/json\" \"https://www.khanacademy.org/api/v1/search?q=fractions&lang=en\")",
+      "Bash(curl -s -H \"User-Agent: Mozilla/5.0 \\(X11; Linux x86_64\\) AppleWebKit/537.36\" -H \"Accept: application/json\" \"https://www.khanacademy.org/api/v1/search?q=algebra&lang=en\")",
+      "Bash(curl -s --max-time 10 \"https://www.khanacademy.org/api/v1/search?q=fractions&lang=en\")",
+      "Bash(python3 -c ':*)",
+      "Skill(claude-api)",
+      "Skill(claude-api:*)"
+    ]
+  }
+}

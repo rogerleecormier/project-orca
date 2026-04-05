@@ -193,6 +193,77 @@ export async function fetchYoutubeTranscript(videoId: string): Promise<string | 
   return result.transcript;
 }
 
+// ── Submission grading ────────────────────────────────────────────────────────
+
+export type GradingResult = {
+  score: number;
+  strengths: string[];
+  improvements: string[];
+  overallFeedback: string;
+};
+
+export async function gradeSubmission(input: {
+  submissionText: string;
+  assignmentTitle: string;
+  rubricOrInstructions?: string;
+  gradeLevel: string;
+}): Promise<GradingResult> {
+  const rubricSection = input.rubricOrInstructions
+    ? `Assignment instructions / rubric:\n"""\n${input.rubricOrInstructions.slice(0, 3000)}\n"""`
+    : `Assignment: ${input.assignmentTitle}`;
+
+  const prompt = [
+    "You are a supportive homeschool grading assistant. Evaluate the student submission below and return ONLY valid JSON.",
+    "Required JSON shape:",
+    '{"score":85,"strengths":["string","string"],"improvements":["string","string"],"overallFeedback":"string"}',
+    "Rules:",
+    "- score: integer 0–100 based on quality, completeness, and rubric adherence",
+    "- strengths: 2–4 specific things the student did well",
+    "- improvements: 2–4 specific, constructive suggestions",
+    "- overallFeedback: 2–3 sentence encouraging summary",
+    `- Grade level context: ${input.gradeLevel}`,
+    "",
+    rubricSection,
+    "",
+    "Student submission:",
+    `"""\n${input.submissionText.slice(0, 5000)}\n"""`,
+    "",
+    "Return ONLY the JSON object. No markdown, no prose.",
+  ].join("\n");
+
+  const result = await env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
+    messages: [
+      {
+        role: "system",
+        content: "You are a precise grading assistant that outputs strict JSON only.",
+      },
+      { role: "user", content: prompt },
+    ],
+    max_tokens: 800,
+  });
+
+  const responseText = toModelText(result);
+  const parsed = extractJsonPayload(responseText);
+
+  if (
+    parsed &&
+    typeof parsed === "object" &&
+    !Array.isArray(parsed)
+  ) {
+    const record = parsed as Record<string, unknown>;
+    const score = typeof record.score === "number" ? Math.round(Math.min(100, Math.max(0, record.score))) : null;
+    const strengths = Array.isArray(record.strengths) ? record.strengths.filter((s): s is string => typeof s === "string") : [];
+    const improvements = Array.isArray(record.improvements) ? record.improvements.filter((s): s is string => typeof s === "string") : [];
+    const overallFeedback = typeof record.overallFeedback === "string" ? record.overallFeedback : "";
+
+    if (score !== null && strengths.length > 0 && overallFeedback) {
+      return { score, strengths, improvements, overallFeedback };
+    }
+  }
+
+  throw new Error("AI_GRADING_PARSE_FAILED");
+}
+
 // ── Quiz generation ───────────────────────────────────────────────────────────
 
 const quizItemSchema = z.object({
@@ -682,4 +753,104 @@ export async function generateQuizDraft(input: GenerateQuizInput) {
       ? `AI_QUIZ_FORMAT_INVALID:${diagnosticSummary}`
       : "AI_QUIZ_PARSE_FAILED",
   );
+}
+
+// ── Week planner AI ───────────────────────────────────────────────────────────
+
+export type PlannerAssignment = {
+  id: string;
+  title: string;
+  contentType: string;
+  classTitle: string;
+};
+
+export type WeekPlanSlot = {
+  assignmentId: string;
+  scheduledDate: string; // "YYYY-MM-DD"
+  orderIndex: number;
+};
+
+export async function generateWeekPlanWithAI(input: {
+  assignments: PlannerAssignment[];
+  gradeLevel: string | null;
+  weekStartDate: string; // "YYYY-MM-DD" — Monday
+}): Promise<WeekPlanSlot[]> {
+  const { assignments, gradeLevel, weekStartDate } = input;
+
+  if (assignments.length === 0) {
+    return [];
+  }
+
+  // Build weekday ISO dates Mon–Fri
+  const monday = new Date(weekStartDate);
+  const weekDays = Array.from({ length: 5 }, (_, i) => {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    return d.toISOString().slice(0, 10);
+  });
+
+  const assignmentList = assignments
+    .map((a) => `- id=${a.id} | class=${a.classTitle} | type=${a.contentType} | title=${a.title}`)
+    .join("\n");
+
+  const prompt = [
+    "You are a homeschool week planner. Distribute the following pending assignments across a 5-day school week.",
+    "Rules:",
+    "- Spread work evenly (2–4 items per day ideally).",
+    "- Never put 3+ quizzes or essay_questions on the same day.",
+    "- Alternate subjects across consecutive days where possible.",
+    "- Return ONLY a JSON array — no prose, no markdown.",
+    `- Grade level: ${gradeLevel ?? "unspecified"}`,
+    `- Week: ${weekDays[0]} (Mon) through ${weekDays[4]} (Fri)`,
+    "",
+    "Each element must have: { \"assignmentId\": \"<id>\", \"scheduledDate\": \"YYYY-MM-DD\", \"orderIndex\": <int> }",
+    "scheduledDate must be one of: " + weekDays.join(", "),
+    "",
+    "Assignments to schedule:",
+    assignmentList,
+    "",
+    "Return ONLY the JSON array.",
+  ].join("\n");
+
+  const result = await env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
+    messages: [
+      {
+        role: "system",
+        content: "You are a precise scheduling assistant that outputs strict JSON only.",
+      },
+      { role: "user", content: prompt },
+    ],
+    max_tokens: 2000,
+  });
+
+  const responseText = toModelText(result);
+  const parsed = extractJsonPayload(responseText);
+
+  if (!Array.isArray(parsed)) {
+    throw new Error("AI_PLANNER_PARSE_FAILED");
+  }
+
+  const validDates = new Set(weekDays);
+  const validIds = new Set(assignments.map((a) => a.id));
+  const slots: WeekPlanSlot[] = [];
+
+  for (const item of parsed) {
+    if (
+      item &&
+      typeof item === "object" &&
+      typeof item.assignmentId === "string" &&
+      typeof item.scheduledDate === "string" &&
+      typeof item.orderIndex === "number" &&
+      validIds.has(item.assignmentId) &&
+      validDates.has(item.scheduledDate)
+    ) {
+      slots.push({
+        assignmentId: item.assignmentId,
+        scheduledDate: item.scheduledDate,
+        orderIndex: item.orderIndex,
+      });
+    }
+  }
+
+  return slots;
 }

@@ -344,6 +344,58 @@ export const assignments = sqliteTable(
   ],
 );
 
+export const assignmentTemplates = sqliteTable(
+  "assignment_templates",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id").references(() => organizations.id, {
+      onDelete: "cascade",
+    }),
+    title: text("title").notNull(),
+    description: text("description"),
+    contentType: text("content_type", {
+      enum: ["text", "file", "url", "video", "quiz", "essay_questions", "report"],
+    }).notNull(),
+    contentRef: text("content_ref"),
+    tags: text("tags").notNull().default("[]"),
+    isPublic: integer("is_public", { mode: "boolean" }).notNull().default(false),
+    createdByUserId: text("created_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+  },
+  (table) => [
+    index("assignment_templates_org_idx").on(table.organizationId),
+    index("assignment_templates_user_idx").on(table.createdByUserId),
+    index("assignment_templates_public_idx").on(table.isPublic),
+    index("assignment_templates_content_type_idx").on(table.contentType),
+  ],
+);
+
+export const weekPlan = sqliteTable(
+  "week_plan",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    profileId: text("profile_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    assignmentId: text("assignment_id")
+      .notNull()
+      .references(() => assignments.id, { onDelete: "cascade" }),
+    scheduledDate: text("scheduled_date").notNull(), // ISO date string: "2026-04-07"
+    orderIndex: integer("order_index").notNull().default(0),
+    createdAt: text("created_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+  },
+  (table) => [
+    index("week_plan_profile_date_idx").on(table.profileId, table.scheduledDate),
+    index("week_plan_org_idx").on(table.organizationId),
+  ],
+);
+
 export const submissions = sqliteTable(
   "submissions",
   {
@@ -371,6 +423,7 @@ export const submissions = sqliteTable(
     submittedAt: text("submitted_at")
       .notNull()
       .$defaultFn(() => new Date().toISOString()),
+    feedbackJson: text("feedback_json"),
     reviewedAt: text("reviewed_at"),
     createdAt: text("created_at")
       .notNull()

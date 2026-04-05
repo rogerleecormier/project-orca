@@ -14,7 +14,9 @@ import { Route as StudentRouteImport } from './routes/student'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SelectStudentRouteImport } from './routes/select-student'
 import { Route as RegisterRouteImport } from './routes/register'
+import { Route as PlannerRouteImport } from './routes/planner'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as GradebookRouteImport } from './routes/gradebook'
 import { Route as ClassesRouteImport } from './routes/classes'
 import { Route as AssignmentsRouteImport } from './routes/assignments'
 import { Route as AdminRouteImport } from './routes/admin'
@@ -45,9 +47,19 @@ const RegisterRoute = RegisterRouteImport.update({
   path: '/register',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PlannerRoute = PlannerRouteImport.update({
+  id: '/planner',
+  path: '/planner',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const GradebookRoute = GradebookRouteImport.update({
+  id: '/gradebook',
+  path: '/gradebook',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ClassesRoute = ClassesRouteImport.update({
@@ -76,7 +88,9 @@ export interface FileRoutesByFullPath {
   '/admin': typeof AdminRoute
   '/assignments': typeof AssignmentsRoute
   '/classes': typeof ClassesRoute
+  '/gradebook': typeof GradebookRoute
   '/login': typeof LoginRoute
+  '/planner': typeof PlannerRoute
   '/register': typeof RegisterRoute
   '/select-student': typeof SelectStudentRoute
   '/settings': typeof SettingsRoute
@@ -88,7 +102,9 @@ export interface FileRoutesByTo {
   '/admin': typeof AdminRoute
   '/assignments': typeof AssignmentsRoute
   '/classes': typeof ClassesRoute
+  '/gradebook': typeof GradebookRoute
   '/login': typeof LoginRoute
+  '/planner': typeof PlannerRoute
   '/register': typeof RegisterRoute
   '/select-student': typeof SelectStudentRoute
   '/settings': typeof SettingsRoute
@@ -101,7 +117,9 @@ export interface FileRoutesById {
   '/admin': typeof AdminRoute
   '/assignments': typeof AssignmentsRoute
   '/classes': typeof ClassesRoute
+  '/gradebook': typeof GradebookRoute
   '/login': typeof LoginRoute
+  '/planner': typeof PlannerRoute
   '/register': typeof RegisterRoute
   '/select-student': typeof SelectStudentRoute
   '/settings': typeof SettingsRoute
@@ -115,7 +133,9 @@ export interface FileRouteTypes {
     | '/admin'
     | '/assignments'
     | '/classes'
+    | '/gradebook'
     | '/login'
+    | '/planner'
     | '/register'
     | '/select-student'
     | '/settings'
@@ -127,7 +147,9 @@ export interface FileRouteTypes {
     | '/admin'
     | '/assignments'
     | '/classes'
+    | '/gradebook'
     | '/login'
+    | '/planner'
     | '/register'
     | '/select-student'
     | '/settings'
@@ -139,7 +161,9 @@ export interface FileRouteTypes {
     | '/admin'
     | '/assignments'
     | '/classes'
+    | '/gradebook'
     | '/login'
+    | '/planner'
     | '/register'
     | '/select-student'
     | '/settings'
@@ -152,7 +176,9 @@ export interface RootRouteChildren {
   AdminRoute: typeof AdminRoute
   AssignmentsRoute: typeof AssignmentsRoute
   ClassesRoute: typeof ClassesRoute
+  GradebookRoute: typeof GradebookRoute
   LoginRoute: typeof LoginRoute
+  PlannerRoute: typeof PlannerRoute
   RegisterRoute: typeof RegisterRoute
   SelectStudentRoute: typeof SelectStudentRoute
   SettingsRoute: typeof SettingsRoute
@@ -197,11 +223,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof RegisterRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/planner': {
+      id: '/planner'
+      path: '/planner'
+      fullPath: '/planner'
+      preLoaderRoute: typeof PlannerRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/login': {
       id: '/login'
       path: '/login'
       fullPath: '/login'
       preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/gradebook': {
+      id: '/gradebook'
+      path: '/gradebook'
+      fullPath: '/gradebook'
+      preLoaderRoute: typeof GradebookRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/classes': {
@@ -240,7 +280,9 @@ const rootRouteChildren: RootRouteChildren = {
   AdminRoute: AdminRoute,
   AssignmentsRoute: AssignmentsRoute,
   ClassesRoute: ClassesRoute,
+  GradebookRoute: GradebookRoute,
   LoginRoute: LoginRoute,
+  PlannerRoute: PlannerRoute,
   RegisterRoute: RegisterRoute,
   SelectStudentRoute: SelectStudentRoute,
   SettingsRoute: SettingsRoute,
