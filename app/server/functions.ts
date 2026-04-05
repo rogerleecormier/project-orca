@@ -1,9 +1,10 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getRequest, setResponseHeader } from "@tanstack/react-start/server";
-import { and, between, desc, eq, gte, inArray, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lte, or } from "drizzle-orm";
 import { env } from "cloudflare:workers";
 import { z } from "zod";
 import { getDb } from "../db/client";
+import { seedAssignmentTemplates } from "../db/seed-templates";
 import {
   assignments,
   assignmentTemplates,
@@ -1917,30 +1918,48 @@ async function getAccessibleAssignmentTemplates(
       ),
       and(
         eq(assignmentTemplates.isPublic, true),
-        sql`${assignmentTemplates.organizationId} is null`,
-        sql`${assignmentTemplates.createdByUserId} is null`,
+        isNull(assignmentTemplates.organizationId),
+        isNull(assignmentTemplates.createdByUserId),
       ),
     ),
   });
 
+  const dbTemplates = rows.map((row): AccessibleAssignmentTemplate => ({
+    id: row.id,
+    organizationId: row.organizationId ?? null,
+    title: row.title,
+    description: row.description ?? null,
+    contentType: row.contentType as AssignmentContentType,
+    contentRef: row.contentRef ?? null,
+    tags: parseStoredTemplateTags(row.tags),
+    isPublic: Boolean(row.isPublic),
+    createdByUserId: row.createdByUserId ?? null,
+    scope:
+      row.organizationId === options.organizationId && row.createdByUserId === options.userId
+        ? "mine"
+        : "public",
+  }));
+  const seededPublicTemplates = seedAssignmentTemplates
+    .filter((template) => template.isPublic)
+    .map((template): AccessibleAssignmentTemplate => ({
+      id: template.id,
+      organizationId: template.organizationId,
+      title: template.title,
+      description: template.description,
+      contentType: template.contentType,
+      contentRef: template.contentRef,
+      tags: parseStoredTemplateTags(template.tags),
+      isPublic: template.isPublic,
+      createdByUserId: template.createdByUserId,
+      scope: "public",
+    }));
+  const mergedTemplates = [...dbTemplates, ...seededPublicTemplates];
+  const dedupedTemplates = mergedTemplates.filter((template, index, list) => (
+    list.findIndex((candidate) => candidate.id === template.id) === index
+  ));
   const gradeTag = normalizeTemplateGradeTag(options.gradeLevel);
 
-  return rows
-    .map((row): AccessibleAssignmentTemplate => ({
-      id: row.id,
-      organizationId: row.organizationId ?? null,
-      title: row.title,
-      description: row.description ?? null,
-      contentType: row.contentType as AssignmentContentType,
-      contentRef: row.contentRef ?? null,
-      tags: parseStoredTemplateTags(row.tags),
-      isPublic: Boolean(row.isPublic),
-      createdByUserId: row.createdByUserId ?? null,
-      scope:
-        row.organizationId === options.organizationId && row.createdByUserId === options.userId
-          ? "mine"
-          : "public",
-    }))
+  return dedupedTemplates
     .filter((row) => {
       if (options.contentType && row.contentType !== options.contentType) {
         return false;
@@ -2359,7 +2378,7 @@ export const getCurriculumBuilderData = createServerFn({ method: "GET" }).handle
       session.session.activeOrganizationId,
     );
 
-    const [classRows, assignmentRows, userRecord, submissionRows, profileRows, templates] = await Promise.all([
+    const [classRows, assignmentRows, userRecord, submissionRows, profileRows, templatesResult] = await Promise.all([
       db.query.classes.findMany({
         where: eq(classes.organizationId, organizationId),
         orderBy: [desc(classes.createdAt)],
@@ -2386,6 +2405,7 @@ export const getCurriculumBuilderData = createServerFn({ method: "GET" }).handle
         userId: session.user.id,
       }),
     ]);
+    const templates: AccessibleAssignmentTemplate[] = templatesResult;
 
     return {
       parentPinLength: resolveParentPinLength(userRecord?.parentPinLength),
@@ -2393,7 +2413,11 @@ export const getCurriculumBuilderData = createServerFn({ method: "GET" }).handle
       assignments: assignmentRows,
       templates,
       submissions: submissionRows,
-      profiles: profileRows,
+      profiles: profileRows.map((p) => ({
+        id: p.id,
+        displayName: p.displayName,
+        gradeLevel: p.gradeLevel ?? "",
+      })),
     };
   },
 );
@@ -3035,7 +3059,7 @@ const getTodaysPlanInput = z.object({
   profileId: z.string().min(1),
 });
 
-export const getTodaysPlan = createServerFn({ method: "GET" })
+export const getTodaysPlan = createServerFn({ method: "POST" })
   .inputValidator((data) => getTodaysPlanInput.parse(data))
   .handler(async ({ data }) => {
     const session = await requireActiveRole(["admin", "parent", "student"]);

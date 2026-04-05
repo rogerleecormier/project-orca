@@ -407,9 +407,17 @@ function GradebookPage() {
                         </td>
                         <td className="whitespace-nowrap px-4 py-3 text-sm">
                           {needsGrading ? (
-                            <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700">
-                              Needs grading
-                            </span>
+                            <>
+                              <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700">
+                                Needs grading
+                              </span>
+                              <a
+                                href={`/assignments#assignment-${row.assignmentId}`}
+                                className="ml-2 text-xs font-medium text-violet-700 hover:underline"
+                              >
+                                Grade →
+                              </a>
+                            </>
                           ) : (
                             <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${
                               row.status === "graded"

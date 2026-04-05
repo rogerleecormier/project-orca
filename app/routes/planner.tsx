@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import {
   generateWeekPlan,
+  getStudentSelectionOptions,
   getViewerContext,
   getWeekPlan,
   saveWeekPlan,
@@ -80,7 +81,19 @@ type UnscheduledItem = {
 
 export const Route = createFileRoute("/planner")({
   loader: async () => {
-    const viewer = await getViewerContext();
+    const [viewerResult, studentOptionsResult] = await Promise.allSettled([
+      getViewerContext(),
+      getStudentSelectionOptions(),
+    ]);
+    const viewer =
+      viewerResult.status === "fulfilled"
+        ? viewerResult.value
+        : {
+            isAuthenticated: false,
+            activeRole: null,
+            isAdminParent: false,
+            profileId: null,
+          };
 
     if (!viewer.isAuthenticated) {
       throw redirect({ to: "/login" });
@@ -90,7 +103,14 @@ export const Route = createFileRoute("/planner")({
       throw redirect({ to: "/student" });
     }
 
-    return viewer;
+    if (studentOptionsResult.status !== "fulfilled") {
+      throw studentOptionsResult.reason;
+    }
+
+    return {
+      viewer,
+      profiles: studentOptionsResult.value.profiles,
+    };
   },
   component: PlannerPage,
 });
@@ -215,13 +235,13 @@ function DayColumn({
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 function PlannerPage() {
-  const viewer = Route.useLoaderData();
+  const { viewer, profiles } = Route.useLoaderData();
 
   const [monday, setMonday] = useState<Date>(() => getMondayOf(new Date()));
   const weekStartDate = toIsoDate(monday);
 
   // profile selection (parent may have multiple students)
-  const [profileId, setProfileId] = useState<string>("");
+  const [profileId, setProfileId] = useState<string>(viewer.profileId ?? "");
 
   // week data
   const [slots, setSlots] = useState<SlotItem[]>([]);
@@ -287,13 +307,6 @@ function PlannerPage() {
   useEffect(() => {
     void loadWeekData();
   }, [loadWeekData]);
-
-  // Use viewer's activeProfileId when available
-  useEffect(() => {
-    if (viewer.profileId && !profileId) {
-      setProfileId(viewer.profileId);
-    }
-  }, [viewer.profileId, profileId]);
 
   // ── Drag handlers ──────────────────────────────────────────────────────────
 
@@ -434,6 +447,12 @@ function PlannerPage() {
   const goToPrevWeek = () => setMonday((d) => addDays(d, -7));
   const goToNextWeek = () => setMonday((d) => addDays(d, 7));
   const goToCurrentWeek = () => setMonday(getMondayOf(new Date()));
+  const handleProfileChange = (nextProfileId: string) => {
+    setProfileId(nextProfileId);
+    setSlots([]);
+    setUnscheduled([]);
+    setSaveStatus("idle");
+  };
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -451,6 +470,27 @@ function PlannerPage() {
       {/* Controls */}
       <section className="rounded-2xl border border-slate-200 bg-white/90 px-6 py-4 shadow-sm">
         <div className="flex flex-wrap items-center gap-3">
+          {profiles.length > 1 ? (
+            <label className="space-y-1">
+              <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Student
+              </span>
+              <select
+                value={profileId}
+                onChange={(e) => handleProfileChange(e.target.value)}
+                className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700"
+              >
+                <option value="">Select student…</option>
+                {profiles.map((profile) => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.displayName}
+                    {profile.gradeLevel ? ` · Grade ${profile.gradeLevel}` : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+
           {/* Week nav */}
           <div className="flex items-center gap-1">
             <button
@@ -513,54 +553,63 @@ function PlannerPage() {
         </div>
       </section>
 
-      <div className="flex gap-4 items-start">
-        {/* 5-day grid */}
-        <div className="flex-1 grid grid-cols-5 gap-3 min-w-0">
-          {DAYS.map((label, i) => {
-            const date = weekDates[i];
-            return (
-              <DayColumn
-                key={date}
-                label={label}
-                date={date}
-                items={slotsByDate.get(date) ?? []}
-                isOver={overDate === date}
-                onDrop={handleDrop}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDragStart={handleDragStart}
-                onRemove={handleRemoveFromDay}
-                draggingId={draggingId}
-              />
-            );
-          })}
-        </div>
+      {!profileId ? (
+        <section className="rounded-2xl border border-dashed border-slate-300 bg-white/80 p-10 text-center shadow-sm">
+          <h2 className="text-lg font-semibold text-slate-900">Select a student to view their plan</h2>
+          <p className="mt-2 text-sm text-slate-600">
+            Choose a student above to load assignments and build out the week.
+          </p>
+        </section>
+      ) : (
+        <div className="flex gap-4 items-start">
+          {/* 5-day grid */}
+          <div className="flex-1 grid grid-cols-5 gap-3 min-w-0">
+            {DAYS.map((label, i) => {
+              const date = weekDates[i];
+              return (
+                <DayColumn
+                  key={date}
+                  label={label}
+                  date={date}
+                  items={slotsByDate.get(date) ?? []}
+                  isOver={overDate === date}
+                  onDrop={handleDrop}
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDragStart={handleDragStart}
+                  onRemove={handleRemoveFromDay}
+                  draggingId={draggingId}
+                />
+              );
+            })}
+          </div>
 
-        {/* Unscheduled sidebar */}
-        <div className="w-52 shrink-0">
-          <div className="rounded-2xl border border-slate-200 bg-white/90 p-3 shadow-sm">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
-              Unscheduled ({unscheduled.length})
-            </p>
-            {loading ? (
-              <p className="text-xs text-slate-400 italic">Loading…</p>
-            ) : unscheduled.length === 0 ? (
-              <p className="text-xs text-slate-400 italic">All scheduled.</p>
-            ) : (
-              <div className="space-y-2">
-                {unscheduled.map((item) => (
-                  <AssignmentCard
-                    key={item.id}
-                    item={item}
-                    dragging={draggingId === item.id}
-                    onDragStart={handleDragStart}
-                  />
-                ))}
-              </div>
-            )}
+          {/* Unscheduled sidebar */}
+          <div className="w-52 shrink-0">
+            <div className="rounded-2xl border border-slate-200 bg-white/90 p-3 shadow-sm">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
+                Unscheduled ({unscheduled.length})
+              </p>
+              {loading ? (
+                <p className="text-xs text-slate-400 italic">Loading…</p>
+              ) : unscheduled.length === 0 ? (
+                <p className="text-xs text-slate-400 italic">All scheduled.</p>
+              ) : (
+                <div className="space-y-2">
+                  {unscheduled.map((item) => (
+                    <AssignmentCard
+                      key={item.id}
+                      item={item}
+                      dragging={draggingId === item.id}
+                      onDragStart={handleDragStart}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

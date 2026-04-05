@@ -2525,7 +2525,7 @@ function CurriculumBuilderPage() {
           setQuickError(null);
           setShowQuickCreate(true);
         }}
-        className="fixed bottom-24 right-6 z-40 rounded-full border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-md hover:bg-slate-50"
+        className="fixed bottom-[4.5rem] right-6 z-[39] rounded-full border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-md hover:bg-slate-50"
       >
         + Quick Add
       </button>

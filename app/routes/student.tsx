@@ -195,6 +195,23 @@ function AssignmentListView({
                           {TYPE_LABELS[child.contentType] ?? child.contentType}
                         </p>
                         <p className="text-sm font-medium text-slate-900 truncate">{child.title}</p>
+                        {child.dueAt ? (
+                          <p
+                            className={`mt-0.5 text-xs font-medium ${
+                              new Date(child.dueAt) < new Date()
+                                ? "text-rose-600"
+                                : new Date(child.dueAt) < new Date(Date.now() + 3 * 86400000)
+                                  ? "text-amber-600"
+                                  : "text-slate-400"
+                            }`}
+                          >
+                            Due{" "}
+                            {new Date(child.dueAt).toLocaleDateString(undefined, {
+                              month: "short",
+                              day: "numeric",
+                            })}
+                          </p>
+                        ) : null}
                       </div>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
@@ -224,6 +241,23 @@ function AssignmentListView({
             <p className="mt-0.5 text-base font-semibold text-slate-900 truncate">{row.title}</p>
             {row.description ? (
               <p className="mt-0.5 text-xs text-slate-500 line-clamp-1">{row.description}</p>
+            ) : null}
+            {row.dueAt ? (
+              <p
+                className={`mt-0.5 text-xs font-medium ${
+                  new Date(row.dueAt) < new Date()
+                    ? "text-rose-600"
+                    : new Date(row.dueAt) < new Date(Date.now() + 3 * 86400000)
+                      ? "text-amber-600"
+                      : "text-slate-400"
+                }`}
+              >
+                Due{" "}
+                {new Date(row.dueAt).toLocaleDateString(undefined, {
+                  month: "short",
+                  day: "numeric",
+                })}
+              </p>
             ) : null}
           </div>
           <div className="flex items-center gap-2 shrink-0">
@@ -988,7 +1022,7 @@ function StudentWorkspacePage() {
 
   const todaysPlanQuery = useQuery({
     queryKey: ["todays-plan", data.profile.id],
-    queryFn: async () =>
+    queryFn: async (): Promise<Awaited<ReturnType<typeof getTodaysPlan>>> =>
       await getTodaysPlan({ data: { profileId: data.profile.id } }),
     staleTime: 60_000,
   });
