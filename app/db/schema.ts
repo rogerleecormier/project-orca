@@ -27,6 +27,7 @@ export const users = sqliteTable(
     name: text("name").notNull(),
     image: text("image"),
     parentPin: text("parent_pin"),
+    parentPinLength: integer("parent_pin_length"),
     role: text("role").notNull().default("user"),
     banned: integer("banned", { mode: "boolean" }).notNull().default(false),
     banReason: text("ban_reason"),

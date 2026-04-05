@@ -4,9 +4,10 @@ type InputOtpProps = {
   length?: number;
   value: string;
   onChange: (value: string) => void;
+  masked?: boolean;
 };
 
-export function InputOtp({ length = 6, value, onChange }: InputOtpProps) {
+export function InputOtp({ length = 6, value, onChange, masked = true }: InputOtpProps) {
   const refs = useRef<Array<HTMLInputElement | null>>([]);
 
   useEffect(() => {
@@ -26,6 +27,8 @@ export function InputOtp({ length = 6, value, onChange }: InputOtpProps) {
             ref={(node) => {
               refs.current[index] = node;
             }}
+            type={masked ? "password" : "text"}
+            autoComplete="off"
             value={char}
             inputMode="numeric"
             pattern="[0-9]*"

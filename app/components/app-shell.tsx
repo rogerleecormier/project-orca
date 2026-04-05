@@ -244,6 +244,18 @@ export function AppShell({
               </Link>
             ) : null}
 
+            {canAccessParentModules ? (
+              <Link
+                to="/settings"
+                className={`block w-full rounded-xl px-3 py-2 text-left text-sm font-medium transition ${
+                  pathname.startsWith("/settings") ? "bg-cyan-50 text-cyan-900" : "text-slate-700 hover:bg-slate-100"
+                }`}
+                onClick={() => setSidebarOpen(false)}
+              >
+                Settings
+              </Link>
+            ) : null}
+
             {isStudentSession ? (
               <Link
                 to="/student"

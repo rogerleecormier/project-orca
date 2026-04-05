@@ -57,6 +57,13 @@
       "when": 1743897600000,
       "tag": "0007_school_year",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1775365200000,
+      "tag": "0008_parent_pin_length",
+      "breakpoints": true
     }
   ]
 }

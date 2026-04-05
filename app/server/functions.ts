@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getRequest, setResponseHeader } from "@tanstack/react-start/server";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, or } from "drizzle-orm";
 import { env } from "cloudflare:workers";
 import { z } from "zod";
 import { getDb } from "../db/client";
@@ -16,7 +16,12 @@ import {
   users,
 } from "../db/schema";
 import { auth, getRoleContext, requireActiveRole } from "../lib/auth";
-import { fetchYoutubeTranscript, generateQuizDraft, searchYoutubeForVideos } from "../lib/ai";
+import {
+  fetchYoutubeTranscript,
+  fetchYoutubeTranscriptWithMeta,
+  generateQuizDraft,
+  searchYoutubeForVideos,
+} from "../lib/ai";
 
 const COOKIE_MAX_AGE_SECONDS = 60 * 60 * 8;
 const DEFAULT_PBKDF2_ITERATIONS = 100000;
@@ -29,6 +34,16 @@ const subtleCrypto = crypto.subtle as SubtleCrypto & {
 
 function buildCookie(name: string, value: string, maxAgeSeconds = COOKIE_MAX_AGE_SECONDS) {
   return `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${maxAgeSeconds}`;
+}
+
+function resolveParentPinLength(
+  value: number | null | undefined,
+) {
+  if (value === 4 || value === 5 || value === 6) {
+    return value;
+  }
+
+  return null;
 }
 
 function getPasswordHashIterations() {
@@ -176,6 +191,162 @@ export const getViewerContext = createServerFn({ method: "POST" }).handler(async
   };
 });
 
+export const getParentSettingsData = createServerFn({ method: "GET" }).handler(async () => {
+  const session = await requireActiveRole(["parent", "admin"]);
+  const db = getDb();
+
+  const userRecord = await db.query.users.findFirst({
+    where: eq(users.id, session.user.id),
+  });
+
+  if (!userRecord) {
+    throw new Error("FORBIDDEN");
+  }
+
+  return {
+    name: userRecord.name ?? "",
+    email: userRecord.email ?? "",
+    username: userRecord.username ?? "",
+    parentPinLength: resolveParentPinLength(userRecord.parentPinLength),
+  };
+});
+
+const updateParentSettingsInput = z.object({
+  name: z.string().trim().min(1).max(120),
+  email: z.string().trim().email(),
+  username: z
+    .string()
+    .trim()
+    .min(3)
+    .max(20)
+    .regex(/^[a-zA-Z0-9_]+$/),
+});
+
+export const updateParentSettings = createServerFn({ method: "POST" })
+  .inputValidator((data) => updateParentSettingsInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["parent", "admin"]);
+    const db = getDb();
+
+    const normalizedEmail = data.email.trim().toLowerCase();
+    const normalizedUsername = data.username.trim().toLowerCase();
+    const displayName = data.name.trim();
+
+    const [emailOwner, usernameOwner] = await Promise.all([
+      db.query.users.findFirst({
+        where: eq(users.email, normalizedEmail),
+      }),
+      db.query.users.findFirst({
+        where: eq(users.username, normalizedUsername),
+      }),
+    ]);
+
+    if (emailOwner && emailOwner.id !== session.user.id) {
+      throw new Error("EMAIL_ALREADY_EXISTS");
+    }
+
+    if (usernameOwner && usernameOwner.id !== session.user.id) {
+      throw new Error("USERNAME_ALREADY_EXISTS");
+    }
+
+    await db
+      .update(users)
+      .set({
+        name: displayName,
+        email: normalizedEmail,
+        username: normalizedUsername,
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(users.id, session.user.id));
+
+    return { success: true };
+  });
+
+const changeParentPinInput = z.object({
+  currentPin: z.string().regex(/^\d{4,6}$/),
+  newPin: z.string().regex(/^\d{4,6}$/),
+});
+
+export const changeParentPin = createServerFn({ method: "POST" })
+  .inputValidator((data) => changeParentPinInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["parent", "admin"]);
+    const db = getDb();
+
+    await verifyParentPinForSession(session.user.id, data.currentPin);
+
+    const nextPinHash = await hashParentPin(data.newPin);
+    try {
+      await db
+        .update(users)
+        .set({
+          parentPin: nextPinHash,
+          parentPinLength: data.newPin.length,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(eq(users.id, session.user.id));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (message.includes("no such column") && message.includes("parent_pin_length")) {
+        throw new Error("PIN_LENGTH_MIGRATION_REQUIRED");
+      }
+      throw error;
+    }
+
+    return {
+      success: true,
+      parentPinLength: data.newPin.length,
+    };
+  });
+
+const resetParentPinWithPasswordInput = z.object({
+  accountPassword: z.string().min(8).max(128),
+  newPin: z.string().regex(/^\d{4,6}$/),
+});
+
+export const resetParentPinWithPassword = createServerFn({ method: "POST" })
+  .inputValidator((data) => resetParentPinWithPasswordInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["parent", "admin"]);
+    const db = getDb();
+
+    const userRecord = await db.query.users.findFirst({
+      where: eq(users.id, session.user.id),
+    });
+
+    if (!userRecord?.passwordHash) {
+      throw new Error("PASSWORD_NOT_AVAILABLE");
+    }
+
+    const isPasswordValid = await verifyPassword(data.accountPassword, userRecord.passwordHash);
+    if (!isPasswordValid) {
+      throw new Error("INVALID_PASSWORD");
+    }
+
+    const nextPinHash = await hashParentPin(data.newPin);
+    try {
+      await db
+        .update(users)
+        .set({
+          parentPin: nextPinHash,
+          parentPinLength: data.newPin.length,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(eq(users.id, session.user.id));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (message.includes("no such column") && message.includes("parent_pin_length")) {
+        throw new Error("PIN_LENGTH_MIGRATION_REQUIRED");
+      }
+      throw error;
+    }
+
+    return {
+      success: true,
+      parentPinLength: data.newPin.length,
+    };
+  });
+
 const studentDisplayNameSchema = z.string().trim().min(1).max(100);
 const studentGradeLevelSchema = z.string().trim().min(1).max(20);
 
@@ -298,6 +469,7 @@ export const createParentAccount = createServerFn({ method: "POST" })
       username: data.username.toLowerCase(),
       passwordHash,
       parentPin: parentPinHash,
+      parentPinLength: data.parentPin.length,
       name: fullName,
       role: "user",
       createdAt: now,
@@ -436,9 +608,7 @@ export const switchWorkspaceView = createServerFn({ method: "POST" })
 
       if (isCurrentlyStudent) {
         if (!data.parentPin) throw new Error("PIN_REQUIRED");
-        if (!userRecord?.parentPin) throw new Error("FORBIDDEN");
-        const hash = await hashParentPin(data.parentPin);
-        if (hash !== userRecord.parentPin) throw new Error("INVALID_PIN");
+        await verifyParentPinForSession(session.user.id, data.parentPin);
       }
 
       // Preserve the current profileId in the parent cookie so the shell can
@@ -594,7 +764,12 @@ export const getManagedStudents = createServerFn({ method: "GET" }).handler(asyn
     orderBy: [desc(profiles.createdAt)],
   });
 
+  const userRecord = await db.query.users.findFirst({
+    where: eq(users.id, session.user.id),
+  });
+
   return {
+    parentPinLength: resolveParentPinLength(userRecord?.parentPinLength),
     students: studentRows.map((profile) => ({
       id: profile.id,
       displayName: profile.displayName,
@@ -834,18 +1009,11 @@ export const switchStudentImpersonation = createServerFn({ method: "POST" })
       session.session.activeOrganizationId,
     );
 
+    await verifyParentPinForSession(session.user.id, data.parentPin);
     const userRecord = await db.query.users.findFirst({
       where: eq(users.id, session.user.id),
     });
-
-    if (!userRecord?.parentPin) {
-      throw new Error("FORBIDDEN");
-    }
-
-    const parentPinHash = await hashParentPin(data.parentPin);
-    if (parentPinHash !== userRecord.parentPin) {
-      throw new Error("FORBIDDEN");
-    }
+    if (!userRecord) throw new Error("FORBIDDEN");
 
     const profile = await db.query.profiles.findFirst({
       where: and(
@@ -906,14 +1074,8 @@ export const switchViewMode = createServerFn({ method: "POST" })
       where: eq(users.id, session.user.id),
     });
 
-    if (!userRecord?.parentPin) {
-      throw new Error("FORBIDDEN");
-    }
-
-    const parentPinHash = await hashParentPin(data.parentPin);
-    if (parentPinHash !== userRecord.parentPin) {
-      throw new Error("FORBIDDEN");
-    }
+    await verifyParentPinForSession(session.user.id, data.parentPin);
+    if (!userRecord) throw new Error("FORBIDDEN");
 
     const adminMembership = await db.query.memberships.findFirst({
       where: and(
@@ -1519,6 +1681,26 @@ const createAssignmentInput = z.object({
   dueAt: z.string().optional(),
 });
 
+type VideoAssignmentPayload = {
+  videos?: Array<{
+    videoId?: string;
+    title?: string;
+    channel?: string;
+    description?: string;
+    thumbnail?: string;
+    transcript?: string | null;
+    transcriptFetchedAt?: string | null;
+    transcriptMeta?: {
+      keyPresent: boolean;
+      attempted: boolean;
+      endpoint: "youtube" | "transcript";
+      status: number | null;
+      ok: boolean;
+      error: string | null;
+    };
+  }>;
+};
+
 export const createAssignmentRecord = createServerFn({ method: "POST" })
   .inputValidator((data) => createAssignmentInput.parse(data))
   .handler(async ({ data }) => {
@@ -1553,6 +1735,35 @@ export const createAssignmentRecord = createServerFn({ method: "POST" })
     }
 
     const assignmentId = crypto.randomUUID();
+    let finalContentRef = data.contentRef;
+    let transcriptCached = false;
+    let transcriptStatus: string | null = null;
+
+    // For video assignments, cache transcript at save time so downstream quiz
+    // generation can use persisted content without live transcript fetches.
+    if (data.contentType === "video" && data.contentRef) {
+      try {
+        const parsed = JSON.parse(data.contentRef) as VideoAssignmentPayload;
+        const firstVideo = parsed.videos?.[0];
+        if (firstVideo?.videoId) {
+          const transcriptResult = await fetchYoutubeTranscriptWithMeta(firstVideo.videoId);
+          const fetchedAt = new Date().toISOString();
+          firstVideo.transcript = transcriptResult.transcript;
+          firstVideo.transcriptFetchedAt = fetchedAt;
+          firstVideo.transcriptMeta = transcriptResult.meta;
+          finalContentRef = JSON.stringify({
+            ...parsed,
+            videos: [firstVideo],
+          });
+          transcriptCached = Boolean(transcriptResult.transcript);
+          transcriptStatus = transcriptResult.transcript
+            ? "Transcript cached."
+            : `Transcript unavailable (${transcriptResult.meta.error ?? "UNKNOWN"}).`;
+        }
+      } catch {
+        // Keep original payload if parsing fails.
+      }
+    }
 
     await db.insert(assignments).values({
       id: assignmentId,
@@ -1561,7 +1772,7 @@ export const createAssignmentRecord = createServerFn({ method: "POST" })
       title: data.title,
       description: data.description,
       contentType: data.contentType,
-      contentRef: data.contentRef,
+      contentRef: finalContentRef,
       linkedAssignmentId: data.linkedAssignmentId ?? null,
       dueAt: data.dueAt,
       createdByUserId: session.user.id,
@@ -1570,6 +1781,30 @@ export const createAssignmentRecord = createServerFn({ method: "POST" })
     return {
       success: true,
       assignmentId,
+      transcriptCached,
+      transcriptStatus,
+      savedVideoTranscript:
+        data.contentType === "video"
+          ? (() => {
+              try {
+                const payload = finalContentRef ? JSON.parse(finalContentRef) as VideoAssignmentPayload : null;
+                return payload?.videos?.[0]?.transcript ?? null;
+              } catch {
+                return null;
+              }
+            })()
+          : null,
+      savedVideoTitle:
+        data.contentType === "video"
+          ? (() => {
+              try {
+                const payload = finalContentRef ? JSON.parse(finalContentRef) as VideoAssignmentPayload : null;
+                return payload?.videos?.[0]?.title ?? data.title;
+              } catch {
+                return data.title;
+              }
+            })()
+          : null,
     };
   });
 
@@ -1647,8 +1882,25 @@ async function verifyParentPinForSession(userId: string, pin: string) {
   const db = getDb();
   const userRecord = await db.query.users.findFirst({ where: eq(users.id, userId) });
   if (!userRecord?.parentPin) throw new Error("FORBIDDEN");
-  const hash = await hashParentPin(pin);
-  if (hash !== userRecord.parentPin) throw new Error("INVALID_PIN");
+  const incomingHash = await hashParentPin(pin);
+  if (incomingHash !== userRecord.parentPin) throw new Error("INVALID_PIN");
+  if (userRecord.parentPinLength !== pin.length) {
+    try {
+      await db
+        .update(users)
+        .set({
+          parentPinLength: pin.length,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(eq(users.id, userId));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (message.includes("no such column") && message.includes("parent_pin_length")) {
+        throw new Error("PIN_LENGTH_MIGRATION_REQUIRED");
+      }
+      throw error;
+    }
+  }
 }
 
 export const deleteAssignmentRecord = createServerFn({ method: "POST" })
@@ -1665,7 +1917,14 @@ export const deleteAssignmentRecord = createServerFn({ method: "POST" })
       where: and(eq(assignments.id, data.id), eq(assignments.organizationId, organizationId)),
     });
     if (!existing) throw new Error("NOT_FOUND");
-    await db.delete(assignments).where(eq(assignments.id, data.id));
+    await db
+      .delete(assignments)
+      .where(
+        and(
+          eq(assignments.organizationId, organizationId),
+          or(eq(assignments.id, data.id), eq(assignments.linkedAssignmentId, data.id)),
+        ),
+      );
     return { success: true };
   });
 
@@ -1772,7 +2031,7 @@ export const getCurriculumBuilderData = createServerFn({ method: "GET" }).handle
       session.session.activeOrganizationId,
     );
 
-    const [classRows, assignmentRows] = await Promise.all([
+    const [classRows, assignmentRows, userRecord] = await Promise.all([
       db.query.classes.findMany({
         where: eq(classes.organizationId, organizationId),
         orderBy: [desc(classes.createdAt)],
@@ -1781,9 +2040,13 @@ export const getCurriculumBuilderData = createServerFn({ method: "GET" }).handle
         where: eq(assignments.organizationId, organizationId),
         orderBy: [desc(assignments.createdAt)],
       }),
+      db.query.users.findFirst({
+        where: eq(users.id, session.user.id),
+      }),
     ]);
 
     return {
+      parentPinLength: resolveParentPinLength(userRecord?.parentPinLength),
       classes: classRows,
       assignments: assignmentRows,
     };
@@ -1806,20 +2069,129 @@ export const generateQuizFromVideo = createServerFn({ method: "POST" })
     await requireActiveRole(["admin", "parent"]);
 
     // Try to fetch transcript — falls back gracefully if unavailable
-    const transcript = await fetchYoutubeTranscript(data.videoId);
+    const transcriptResult = await fetchYoutubeTranscriptWithMeta(data.videoId);
+    const transcript = transcriptResult.transcript;
+    const usedTranscript = transcript !== null;
 
-    const quiz = await generateQuizDraft({
-      topic: data.videoTitle,
-      gradeLevel: data.gradeLevel,
-      questionCount: data.questionCount,
-      transcript: transcript ?? undefined,
-      videoDescription: data.videoDescription,
+    try {
+      const quiz = await generateQuizDraft({
+        topic: data.videoTitle,
+        gradeLevel: data.gradeLevel,
+        questionCount: data.questionCount,
+        transcript: transcript ?? undefined,
+        videoDescription: data.videoDescription,
+      });
+
+      return {
+        quiz,
+        usedTranscript,
+        transcriptMeta: transcriptResult.meta,
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "QUIZ_GENERATION_FAILED";
+      if (errorMessage.includes("AI_QUIZ_PARSE_FAILED") || errorMessage.includes("AI_RESPONSE_PARSE_FAILED")) {
+        if (usedTranscript) {
+          throw new Error("QUIZ_GENERATION_FAILED_WITH_TRANSCRIPT");
+        }
+
+        const meta = transcriptResult.meta;
+        const detail = [
+          `reason=${meta.error ?? "UNKNOWN"}`,
+          `endpoint=${meta.endpoint}`,
+          `status=${meta.status ?? "NA"}`,
+          `keyPresent=${meta.keyPresent ? "1" : "0"}`,
+          `attempted=${meta.attempted ? "1" : "0"}`,
+        ].join(";");
+        throw new Error(`QUIZ_GENERATION_FAILED_NO_TRANSCRIPT:${detail}`);
+      }
+      throw error;
+    }
+  });
+
+const generateQuizFromLinkedAssignmentInput = z.object({
+  assignmentId: z.string().min(1),
+  questionCount: z.number().int().min(3).max(10).default(5),
+});
+
+export const generateQuizFromLinkedAssignment = createServerFn({ method: "POST" })
+  .inputValidator((data) => generateQuizFromLinkedAssignmentInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const assignmentRecord = await db.query.assignments.findFirst({
+      where: and(
+        eq(assignments.id, data.assignmentId),
+        eq(assignments.organizationId, organizationId),
+      ),
     });
 
-    return {
-      quiz,
-      usedTranscript: transcript !== null,
-    };
+    if (!assignmentRecord) {
+      throw new Error("NOT_FOUND");
+    }
+
+    if (assignmentRecord.contentType === "video") {
+      let payload: VideoAssignmentPayload | null = null;
+      try {
+        payload = assignmentRecord.contentRef ? JSON.parse(assignmentRecord.contentRef) as VideoAssignmentPayload : null;
+      } catch {
+        payload = null;
+      }
+
+      const primaryVideo = payload?.videos?.[0];
+      if (!primaryVideo?.videoId) {
+        throw new Error("VIDEO_DATA_REQUIRED");
+      }
+
+      const transcript = primaryVideo.transcript?.trim() || null;
+      if (!transcript) {
+        throw new Error("VIDEO_TRANSCRIPT_REQUIRED");
+      }
+
+      const quiz = await generateQuizDraft({
+        topic: primaryVideo.title?.trim() || assignmentRecord.title,
+        questionCount: data.questionCount,
+        transcript,
+        videoDescription: primaryVideo.description ?? assignmentRecord.description ?? undefined,
+      });
+
+      return {
+        quiz,
+        sourceType: "video" as const,
+        sourceTitle: primaryVideo.title?.trim() || assignmentRecord.title,
+      };
+    }
+
+    if (assignmentRecord.contentType === "text") {
+      const sourceText = (assignmentRecord.contentRef ?? "")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/&nbsp;/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+      if (!sourceText) {
+        throw new Error("READING_CONTENT_REQUIRED");
+      }
+
+      const quiz = await generateQuizDraft({
+        topic: assignmentRecord.title,
+        questionCount: data.questionCount,
+        sourceText,
+      });
+
+      return {
+        quiz,
+        sourceType: "text" as const,
+        sourceTitle: assignmentRecord.title,
+      };
+    }
+
+    throw new Error("UNSUPPORTED_SOURCE_TYPE");
   });
 
 const generateQuizInput = z.object({

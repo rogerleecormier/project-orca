@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as StudentsRouteImport } from './routes/students'
 import { Route as StudentRouteImport } from './routes/student'
+import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SelectStudentRouteImport } from './routes/select-student'
 import { Route as RegisterRouteImport } from './routes/register'
 import { Route as LoginRouteImport } from './routes/login'
@@ -27,6 +28,11 @@ const StudentsRoute = StudentsRouteImport.update({
 const StudentRoute = StudentRouteImport.update({
   id: '/student',
   path: '/student',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SelectStudentRoute = SelectStudentRouteImport.update({
@@ -73,6 +79,7 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/register': typeof RegisterRoute
   '/select-student': typeof SelectStudentRoute
+  '/settings': typeof SettingsRoute
   '/student': typeof StudentRoute
   '/students': typeof StudentsRoute
 }
@@ -84,6 +91,7 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/register': typeof RegisterRoute
   '/select-student': typeof SelectStudentRoute
+  '/settings': typeof SettingsRoute
   '/student': typeof StudentRoute
   '/students': typeof StudentsRoute
 }
@@ -96,6 +104,7 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/register': typeof RegisterRoute
   '/select-student': typeof SelectStudentRoute
+  '/settings': typeof SettingsRoute
   '/student': typeof StudentRoute
   '/students': typeof StudentsRoute
 }
@@ -109,6 +118,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/register'
     | '/select-student'
+    | '/settings'
     | '/student'
     | '/students'
   fileRoutesByTo: FileRoutesByTo
@@ -120,6 +130,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/register'
     | '/select-student'
+    | '/settings'
     | '/student'
     | '/students'
   id:
@@ -131,6 +142,7 @@ export interface FileRouteTypes {
     | '/login'
     | '/register'
     | '/select-student'
+    | '/settings'
     | '/student'
     | '/students'
   fileRoutesById: FileRoutesById
@@ -143,6 +155,7 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   RegisterRoute: typeof RegisterRoute
   SelectStudentRoute: typeof SelectStudentRoute
+  SettingsRoute: typeof SettingsRoute
   StudentRoute: typeof StudentRoute
   StudentsRoute: typeof StudentsRoute
 }
@@ -161,6 +174,13 @@ declare module '@tanstack/react-router' {
       path: '/student'
       fullPath: '/student'
       preLoaderRoute: typeof StudentRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/select-student': {
@@ -223,6 +243,7 @@ const rootRouteChildren: RootRouteChildren = {
   LoginRoute: LoginRoute,
   RegisterRoute: RegisterRoute,
   SelectStudentRoute: SelectStudentRoute,
+  SettingsRoute: SettingsRoute,
   StudentRoute: StudentRoute,
   StudentsRoute: StudentsRoute,
 }

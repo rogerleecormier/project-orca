@@ -7,11 +7,21 @@ type ParentPinModalProps = {
   onCancel: () => void;
   error: string | null;
   loading: boolean;
+  pinLength?: number | null;
 };
 
-export function ParentPinModal({ open, onSubmit, onCancel, error, loading }: ParentPinModalProps) {
+export function ParentPinModal({
+  open,
+  onSubmit,
+  onCancel,
+  error,
+  loading,
+  pinLength = null,
+}: ParentPinModalProps) {
   const [pin, setPin] = useState("");
   const backdropRef = useRef<HTMLDivElement>(null);
+  const effectiveLength = pinLength ?? 6;
+  const canSubmit = pin.length === effectiveLength;
 
   useEffect(() => {
     if (open) {
@@ -54,13 +64,13 @@ export function ParentPinModal({ open, onSubmit, onCancel, error, loading }: Par
           className="mt-5"
           onSubmit={(event) => {
             event.preventDefault();
-            if (pin.length >= 4) {
+            if (canSubmit) {
               onSubmit(pin);
             }
           }}
         >
           <div className="flex justify-center">
-            <InputOtp length={6} value={pin} onChange={setPin} />
+            <InputOtp length={effectiveLength} value={pin} onChange={setPin} />
           </div>
 
           {error ? <p className="mt-3 text-center text-sm font-medium text-rose-700">{error}</p> : null}
@@ -76,7 +86,7 @@ export function ParentPinModal({ open, onSubmit, onCancel, error, loading }: Par
             </button>
             <button
               type="submit"
-              disabled={pin.length < 4 || loading}
+              disabled={!canSubmit || loading}
               className="flex-1 rounded-xl bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700 disabled:opacity-60"
             >
               {loading ? "Verifying..." : "Continue"}

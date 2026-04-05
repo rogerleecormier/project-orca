@@ -13,6 +13,7 @@ type DeleteConfirmModalProps = {
   onCancel: () => void;
   error: string | null;
   loading: boolean;
+  pinLength?: number | null;
 };
 
 export function DeleteConfirmModal({
@@ -25,9 +26,12 @@ export function DeleteConfirmModal({
   onCancel,
   error,
   loading,
+  pinLength = null,
 }: DeleteConfirmModalProps) {
   const [pin, setPin] = useState("");
   const backdropRef = useRef<HTMLDivElement>(null);
+  const effectiveLength = pinLength ?? 6;
+  const canSubmit = pin.length === effectiveLength;
 
   useEffect(() => {
     if (open) setPin("");
@@ -66,14 +70,14 @@ export function DeleteConfirmModal({
           className="mt-5"
           onSubmit={(e) => {
             e.preventDefault();
-            if (pin.length >= 4) onConfirm(pin);
+            if (canSubmit) onConfirm(pin);
           }}
         >
           <p className="text-sm font-medium text-slate-700">
             Enter your parent PIN to confirm
           </p>
           <div className="mt-3 flex justify-center">
-            <InputOtp length={6} value={pin} onChange={setPin} />
+            <InputOtp length={effectiveLength} value={pin} onChange={setPin} />
           </div>
 
           {error ? (
@@ -91,7 +95,7 @@ export function DeleteConfirmModal({
             </button>
             <button
               type="submit"
-              disabled={pin.length < 4 || loading}
+              disabled={!canSubmit || loading}
               className={`flex-1 rounded-xl px-4 py-2 text-sm font-medium text-white disabled:opacity-60 ${confirmLabel && confirmLabel !== "Delete" ? "bg-amber-600 hover:bg-amber-700" : "bg-rose-600 hover:bg-rose-700"}`}
             >
               {loading ? "…" : (confirmLabel ?? "Delete")}

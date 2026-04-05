@@ -114,6 +114,7 @@ function ClassEnginePage() {
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showCreateModal, setShowCreateModal] = useState(false);
 
   const [editingClassId, setEditingClassId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
@@ -196,6 +197,7 @@ function ClassEnginePage() {
       setDescription("");
       setSchoolYear(currentSchoolYear());
       setSelectedStudentIds(data.students[0]?.id ? [data.students[0].id] : []);
+      setShowCreateModal(false);
       await router.invalidate();
     } catch (caughtError) {
       setError(classMutationErrorMessage(caughtError));
@@ -237,106 +239,38 @@ function ClassEnginePage() {
     <div className="space-y-6">
       <section className="orca-hero orca-wave rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
         <p className="text-xs uppercase tracking-[0.2em] text-cyan-700">Parent Workspace</p>
-        <div className="mt-2 flex items-center gap-3">
-          <span className="orca-icon-chip" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
-              <path
-                d="M4 14c3.5 0 5.5-2.5 8-2.5 2 0 3.8 1 6 1.8V9.5l2 1.2-2 1.1v4.7c-2.5-.5-4.2-1.5-6-1.5-2.8 0-4.5 2.5-8 2.5v-3.5Z"
-                stroke="currentColor"
-                strokeWidth="1.6"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </span>
-          <h1 className="text-3xl font-semibold text-slate-900">Manage Classes</h1>
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <span className="orca-icon-chip" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+                <path
+                  d="M4 14c3.5 0 5.5-2.5 8-2.5 2 0 3.8 1 6 1.8V9.5l2 1.2-2 1.1v4.7c-2.5-.5-4.2-1.5-6-1.5-2.8 0-4.5 2.5-8 2.5v-3.5Z"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </span>
+            <h1 className="text-3xl font-semibold text-slate-900">Manage Classes</h1>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setError(null);
+              setShowCreateModal(true);
+            }}
+            className="rounded-xl bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700"
+          >
+            New Class
+          </button>
         </div>
         <p className="mt-2 text-slate-600">
           Define class spaces by school year before publishing curriculum assignments.
         </p>
       </section>
 
-      <div className="grid gap-6 xl:grid-cols-2">
-        {/* Create form */}
-        <section className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
-          <h2 className="text-xl font-semibold text-slate-900">New Class</h2>
-          <div className="mt-4 grid gap-4 md:grid-cols-2">
-            <label className="space-y-2 md:col-span-2">
-              <span className="text-sm font-medium text-slate-700">Title</span>
-              <input
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                placeholder="Foundations of Biology"
-              />
-            </label>
-
-            <label className="space-y-2 md:col-span-2">
-              <span className="text-sm font-medium text-slate-700">Description</span>
-              <textarea
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                className="min-h-24 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                placeholder="Topics, pacing notes, and expectations"
-              />
-            </label>
-
-            <label className="space-y-2 md:col-span-2">
-              <span className="text-sm font-medium text-slate-700">School Year</span>
-              <select
-                value={schoolYear}
-                onChange={(e) => setSchoolYear(e.target.value)}
-                className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
-              >
-                <option value="">No year</option>
-                {yearOptions.map((yearOption) => (
-                  <option key={yearOption} value={yearOption}>
-                    {yearOption}
-                  </option>
-                ))}
-              </select>
-              <p className="text-xs text-slate-500">
-                Select the active school year (current, past 10, and next 10 years).
-              </p>
-            </label>
-
-            <label className="space-y-2 md:col-span-2">
-              <span className="text-sm font-medium text-slate-700">Assigned Students</span>
-              <div className="space-y-2 rounded-xl border border-slate-300 p-3">
-                {data.students.length === 0 ? (
-                  <p className="text-sm text-slate-500 italic">No active students — add one first.</p>
-                ) : (
-                  data.students.map((student) => (
-                    <label key={student.id} className="flex items-center gap-2 text-sm text-slate-800">
-                      <input
-                        type="checkbox"
-                        checked={selectedStudentIds.includes(student.id)}
-                        onChange={() => toggleStudentSelection(student.id)}
-                        className="h-4 w-4 rounded border-slate-300"
-                      />
-                      <span>
-                        {student.gradeLevel
-                          ? `${student.displayName} (Grade ${student.gradeLevel})`
-                          : student.displayName}
-                      </span>
-                    </label>
-                  ))
-                )}
-              </div>
-            </label>
-          </div>
-
-          {error ? <p className="mt-3 text-sm text-rose-700">{error}</p> : null}
-
-          <button
-            onClick={() => void submitClass()}
-            disabled={saving}
-            className="mt-4 rounded-xl bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {saving ? "Saving..." : "Create Class"}
-          </button>
-        </section>
-
+      <div className="space-y-6">
         {/* Class list */}
         <section className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -489,6 +423,117 @@ function ClassEnginePage() {
           </div>
         </section>
       </div>
+
+      {showCreateModal ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-3xl rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-center justify-between gap-4 border-b border-slate-200 px-6 py-4">
+              <h2 className="text-xl font-semibold text-slate-900">New Class</h2>
+              <button
+                type="button"
+                onClick={() => {
+                  if (saving) return;
+                  setShowCreateModal(false);
+                  setError(null);
+                }}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
+              >
+                Close
+              </button>
+            </div>
+            <div className="px-6 py-5">
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="space-y-2 md:col-span-2">
+                  <span className="text-sm font-medium text-slate-700">Title</span>
+                  <input
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                    placeholder="Foundations of Biology"
+                  />
+                </label>
+
+                <label className="space-y-2 md:col-span-2">
+                  <span className="text-sm font-medium text-slate-700">Description</span>
+                  <textarea
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    className="min-h-24 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                    placeholder="Topics, pacing notes, and expectations"
+                  />
+                </label>
+
+                <label className="space-y-2 md:col-span-2">
+                  <span className="text-sm font-medium text-slate-700">School Year</span>
+                  <select
+                    value={schoolYear}
+                    onChange={(e) => setSchoolYear(e.target.value)}
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
+                  >
+                    <option value="">No year</option>
+                    {yearOptions.map((yearOption) => (
+                      <option key={yearOption} value={yearOption}>
+                        {yearOption}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-slate-500">
+                    Select the active school year (current, past 10, and next 10 years).
+                  </p>
+                </label>
+
+                <label className="space-y-2 md:col-span-2">
+                  <span className="text-sm font-medium text-slate-700">Assigned Students</span>
+                  <div className="space-y-2 rounded-xl border border-slate-300 p-3">
+                    {data.students.length === 0 ? (
+                      <p className="text-sm text-slate-500 italic">No active students — add one first.</p>
+                    ) : (
+                      data.students.map((student) => (
+                        <label key={student.id} className="flex items-center gap-2 text-sm text-slate-800">
+                          <input
+                            type="checkbox"
+                            checked={selectedStudentIds.includes(student.id)}
+                            onChange={() => toggleStudentSelection(student.id)}
+                            className="h-4 w-4 rounded border-slate-300"
+                          />
+                          <span>
+                            {student.gradeLevel
+                              ? `${student.displayName} (Grade ${student.gradeLevel})`
+                              : student.displayName}
+                          </span>
+                        </label>
+                      ))
+                    )}
+                  </div>
+                </label>
+              </div>
+
+              {error ? <p className="mt-3 text-sm text-rose-700">{error}</p> : null}
+
+              <div className="mt-4 flex flex-wrap justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (saving) return;
+                    setShowCreateModal(false);
+                    setError(null);
+                  }}
+                  className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => void submitClass()}
+                  disabled={saving}
+                  className="rounded-xl bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {saving ? "Saving..." : "Create Class"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
