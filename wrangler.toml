@@ -23,3 +23,10 @@ bucket_name = "proorca-assets"
 # ---------- Workers AI ----------
 [ai]
 binding = "AI"
+
+# ---------- Secrets ----------
+# Set via: wrangler secret put SUPADATA_API_KEY
+# Optional — enables transcript-based quiz generation for video lessons.
+# Without it, quizzes fall back to video title/description context.
+# [vars]
+# SUPADATA_API_KEY = ""  # Do not commit real keys — use wrangler secret put

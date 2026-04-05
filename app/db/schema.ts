@@ -267,9 +267,7 @@ export const classes = sqliteTable(
       .references(() => organizations.id, { onDelete: "cascade" }),
     title: text("title").notNull(),
     description: text("description"),
-    studentProfileId: text("student_profile_id").references(() => profiles.id, {
-      onDelete: "set null",
-    }),
+    schoolYear: text("school_year"),
     createdByUserId: text("created_by_user_id")
       .notNull()
       .references(() => users.id, { onDelete: "restrict" }),
@@ -282,7 +280,31 @@ export const classes = sqliteTable(
   },
   (table) => [
     index("classes_org_idx").on(table.organizationId),
-    index("classes_student_profile_idx").on(table.studentProfileId),
+    index("classes_school_year_idx").on(table.schoolYear),
+  ],
+);
+
+export const classEnrollments = sqliteTable(
+  "class_enrollments",
+  {
+    id: text("id").primaryKey(),
+    classId: text("class_id")
+      .notNull()
+      .references(() => classes.id, { onDelete: "cascade" }),
+    profileId: text("profile_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    createdAt: text("created_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+  },
+  (table) => [
+    uniqueIndex("class_enrollments_class_profile_unique").on(
+      table.classId,
+      table.profileId,
+    ),
+    index("class_enrollments_class_idx").on(table.classId),
+    index("class_enrollments_profile_idx").on(table.profileId),
   ],
 );
 
@@ -299,9 +321,10 @@ export const assignments = sqliteTable(
     title: text("title").notNull(),
     description: text("description"),
     contentType: text("content_type", {
-      enum: ["text", "file", "url", "video", "essay", "quiz"],
+      enum: ["text", "file", "url", "video", "quiz", "essay_questions", "report"],
     }).notNull(),
     contentRef: text("content_ref"),
+    linkedAssignmentId: text("linked_assignment_id"),
     dueAt: text("due_at"),
     createdByUserId: text("created_by_user_id")
       .notNull()
@@ -316,6 +339,7 @@ export const assignments = sqliteTable(
   (table) => [
     index("assignments_org_idx").on(table.organizationId),
     index("assignments_class_idx").on(table.classId),
+    index("assignments_linked_idx").on(table.linkedAssignmentId),
   ],
 );
 

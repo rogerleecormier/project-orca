@@ -143,7 +143,7 @@ function SelectStudentPage() {
                 }}
                 className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
                 placeholder="1234"
-                maxLength="6"
+                maxLength={6}
               />
               <p className="mt-1 text-xs text-slate-500">4-6 digits.</p>
             </label>

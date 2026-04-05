@@ -53,7 +53,7 @@ function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
       <head>
         <HeadContent />
       </head>
-      <body>
+      <body className="orca-theme">
         {children}
         <Scripts />
       </body>

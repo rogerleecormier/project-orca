@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { generateQuizDraftForCurriculum, searchYoutubeWithAI } from "../server/functions";
+import { generateQuizFromVideo, searchYoutubeWithAI } from "../server/functions";
 import { QuizBuilder } from "./quiz-builder";
 import type { QuizQuestion } from "./quiz-builder";
 
@@ -17,6 +17,7 @@ type VideoSearchProps = {
   videos: VideoData[];
   onVideosChange: (videos: VideoData[]) => void;
   disabled?: boolean;
+  gradeLevel?: string;
   onCreateLinkedQuiz: (questions: QuizQuestion[], quizTitle: string) => void;
 };
 
@@ -93,7 +94,6 @@ function AISearchModal({
       onClick={(e) => e.target === backdropRef.current && onClose()}
     >
       <div className="relative my-8 w-full max-w-3xl rounded-2xl border border-slate-200 bg-white shadow-2xl">
-        {/* Header */}
         <div className="flex items-center justify-between gap-4 border-b border-slate-200 px-6 py-4">
           <div>
             <h2 className="text-lg font-semibold text-slate-900">AI Video Search</h2>
@@ -110,7 +110,6 @@ function AISearchModal({
           </button>
         </div>
 
-        {/* Search row */}
         <div className="px-6 py-4 border-b border-slate-100">
           <div className="flex gap-2">
             <input
@@ -134,7 +133,6 @@ function AISearchModal({
           {searchError ? <p className="mt-2 text-xs text-rose-600">{searchError}</p> : null}
         </div>
 
-        {/* Results */}
         <div className="px-6 py-4 min-h-32">
           {results.length === 0 && !searching ? (
             <p className="text-sm text-slate-500 italic">
@@ -160,14 +158,12 @@ function AISearchModal({
                       : "border-slate-200 bg-white hover:border-violet-300",
                   ].join(" ")}
                 >
-                  {/* Thumbnail */}
                   <div className="relative w-full bg-slate-900" style={{ paddingTop: "56.25%" }}>
                     <img
                       src={result.thumbnail ?? `https://img.youtube.com/vi/${result.videoId}/hqdefault.jpg`}
                       alt={result.title}
                       className="absolute inset-0 h-full w-full object-cover"
                     />
-                    {/* Selection badge */}
                     <div
                       className={[
                         "absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full border-2 text-xs font-bold transition",
@@ -179,8 +175,6 @@ function AISearchModal({
                       {result.selected ? "✓" : ""}
                     </div>
                   </div>
-
-                  {/* Info */}
                   <div className="p-3 flex-1">
                     <p className="text-sm font-semibold text-slate-900 line-clamp-2 leading-snug">
                       {result.title}
@@ -196,7 +190,6 @@ function AISearchModal({
           )}
         </div>
 
-        {/* Footer */}
         {results.length > 0 ? (
           <div className="flex items-center justify-between gap-3 border-t border-slate-200 px-6 py-4">
             <p className="text-sm text-slate-600">
@@ -230,14 +223,30 @@ function AISearchModal({
 
 // ── Main VideoSearch component ─────────────────────────────────────────────────
 
-export function VideoSearch({ videos, onVideosChange, disabled, onCreateLinkedQuiz }: VideoSearchProps) {
+export function VideoSearch({
+  videos,
+  onVideosChange,
+  disabled,
+  gradeLevel,
+  onCreateLinkedQuiz,
+}: VideoSearchProps) {
   const [manualEntry, setManualEntry] = useState("");
   const [manualError, setManualError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
 
   // Per-video quiz state (keyed by videoId)
   const [quizPanels, setQuizPanels] = useState<
-    Record<string, { open: boolean; questions: QuizQuestion[]; title: string; generating: boolean; error: string | null }>
+    Record<
+      string,
+      {
+        open: boolean;
+        questions: QuizQuestion[];
+        title: string;
+        generating: boolean;
+        usedTranscript: boolean;
+        error: string | null;
+      }
+    >
   >({});
 
   const addVideos = (incoming: VideoData[]) => {
@@ -272,7 +281,14 @@ export function VideoSearch({ videos, onVideosChange, disabled, onCreateLinkedQu
   };
 
   const getQuizPanel = (videoId: string) =>
-    quizPanels[videoId] ?? { open: false, questions: [], title: "", generating: false, error: null };
+    quizPanels[videoId] ?? {
+      open: false,
+      questions: [],
+      title: "",
+      generating: false,
+      usedTranscript: false,
+      error: null,
+    };
 
   const patchQuizPanel = (
     videoId: string,
@@ -287,13 +303,24 @@ export function VideoSearch({ videos, onVideosChange, disabled, onCreateLinkedQu
   const handleGenerateQuiz = async (video: VideoData) => {
     patchQuizPanel(video.videoId, { generating: true, error: null });
     try {
-      const result = await generateQuizDraftForCurriculum({
-        data: { topic: video.title, questionCount: 5 },
+      const result = await generateQuizFromVideo({
+        data: {
+          videoId: video.videoId,
+          videoTitle: video.title,
+          videoDescription: video.description,
+          gradeLevel,
+          questionCount: 5,
+        },
       });
       const questions: QuizQuestion[] = result.quiz.questions.map((q) => ({
         id: crypto.randomUUID(),
         question: q.question,
-        options: (q.options.slice(0, 4).concat(["", "", "", ""]).slice(0, 4)) as [string, string, string, string],
+        options: (q.options.slice(0, 4).concat(["", "", "", ""]).slice(0, 4)) as [
+          string,
+          string,
+          string,
+          string,
+        ],
         answerIndex: Math.min(q.answerIndex, 3),
         explanation: q.explanation,
       }));
@@ -302,6 +329,7 @@ export function VideoSearch({ videos, onVideosChange, disabled, onCreateLinkedQu
         title: `${video.title} — Quiz`,
         open: true,
         generating: false,
+        usedTranscript: result.usedTranscript,
       });
     } catch {
       patchQuizPanel(video.videoId, { generating: false, error: "Quiz generation failed." });
@@ -365,7 +393,7 @@ export function VideoSearch({ videos, onVideosChange, disabled, onCreateLinkedQu
                   <button
                     type="button"
                     onClick={() => removeVideo(video.videoId)}
-                    className="text-xs text-rose-600 hover:text-rose-800"
+                    className="text-xs text-rose-600 hover:text-rose-800 shrink-0"
                   >
                     Remove
                   </button>
@@ -390,10 +418,10 @@ export function VideoSearch({ videos, onVideosChange, disabled, onCreateLinkedQu
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <p className="text-sm font-semibold text-violet-900">
-                        Generate a Quiz from This Video
+                        Generate Quiz from This Video
                       </p>
-                      <p className="text-xs text-violet-700">
-                        Creates a separate quiz assignment linked to this video's topic.
+                      <p className="text-xs text-violet-600">
+                        AI fetches the video transcript for accurate questions.
                       </p>
                     </div>
                     <button
@@ -402,7 +430,7 @@ export function VideoSearch({ videos, onVideosChange, disabled, onCreateLinkedQu
                       disabled={disabled || panel.generating}
                       className="shrink-0 rounded-xl bg-violet-600 px-3 py-2 text-xs font-medium text-white hover:bg-violet-700 disabled:opacity-60"
                     >
-                      {panel.generating ? "Generating…" : "Generate Quiz"}
+                      {panel.generating ? "Generating…" : panel.open ? "Regenerate" : "Generate Quiz"}
                     </button>
                   </div>
 
@@ -412,6 +440,16 @@ export function VideoSearch({ videos, onVideosChange, disabled, onCreateLinkedQu
 
                   {panel.open ? (
                     <div className="space-y-3 border-t border-violet-200 pt-3">
+                      {panel.usedTranscript ? (
+                        <p className="text-xs text-emerald-700 font-medium">
+                          Questions generated from video transcript.
+                        </p>
+                      ) : (
+                        <p className="text-xs text-amber-700">
+                          Transcript unavailable — questions based on video title/description.
+                        </p>
+                      )}
+
                       <label className="block space-y-1">
                         <span className="text-sm font-medium text-violet-900">
                           Quiz Assignment Title
@@ -436,7 +474,7 @@ export function VideoSearch({ videos, onVideosChange, disabled, onCreateLinkedQu
                         onClick={() => onCreateLinkedQuiz(panel.questions, panel.title)}
                         className="w-full rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-60"
                       >
-                        Save as Quiz Assignment
+                        Save as Linked Quiz Assignment
                       </button>
                     </div>
                   ) : null}

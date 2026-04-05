@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import {
+  archiveStudentProfile,
   createStudentProfileInline,
-  deleteStudentProfileRecord,
   getManagedStudents,
   getViewerContext,
+  restoreStudentProfile,
   updateStudentProfile,
 } from "../server/functions";
 import { DeleteConfirmModal } from "../components/delete-confirm-modal";
@@ -30,14 +31,22 @@ export const Route = createFileRoute("/students")({
 function StudentsPage() {
   const data = Route.useLoaderData();
   const router = useRouter();
+
   const [createError, setCreateError] = useState<string | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
   const [createLoading, setCreateLoading] = useState(false);
   const [editLoading, setEditLoading] = useState(false);
   const [editingStudentId, setEditingStudentId] = useState<string | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<{ id: string; displayName: string } | null>(null);
-  const [deleteLoading, setDeleteLoading] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // Archive modal (reuses DeleteConfirmModal for PIN entry)
+  const [archiveTarget, setArchiveTarget] = useState<{ id: string; displayName: string } | null>(null);
+  const [archiveLoading, setArchiveLoading] = useState(false);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
+
+  // Restore (no PIN required)
+  const [restoringId, setRestoringId] = useState<string | null>(null);
+
+  const [showArchived, setShowArchived] = useState(false);
 
   const [newStudentName, setNewStudentName] = useState("");
   const [newStudentGrade, setNewStudentGrade] = useState("");
@@ -49,7 +58,8 @@ function StudentsPage() {
   const [editStudentBirthDate, setEditStudentBirthDate] = useState("");
   const [editStudentPin, setEditStudentPin] = useState("");
 
-  const students = data.students;
+  const activeStudents = data.students.filter((s) => s.status === "active");
+  const archivedStudents = data.students.filter((s) => s.status === "archived");
 
   const startEditingStudent = (student: {
     id: string;
@@ -110,26 +120,38 @@ function StudentsPage() {
     }
   };
 
-  const handleDeleteStudent = async (pin: string) => {
-    if (!deleteTarget) return;
-    setDeleteLoading(true);
-    setDeleteError(null);
+  const handleArchiveStudent = async (pin: string) => {
+    if (!archiveTarget) return;
+    setArchiveLoading(true);
+    setArchiveError(null);
     try {
-      await deleteStudentProfileRecord({ data: { id: deleteTarget.id, parentPin: pin } });
-      setDeleteTarget(null);
+      await archiveStudentProfile({ data: { id: archiveTarget.id, parentPin: pin } });
+      setArchiveTarget(null);
       await router.invalidate();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "";
-      setDeleteError(msg === "INVALID_PIN" ? "Incorrect PIN. Please try again." : "Could not delete the student profile.");
+      setArchiveError(
+        msg === "INVALID_PIN" ? "Incorrect PIN. Please try again." : "Could not archive the student profile.",
+      );
     } finally {
-      setDeleteLoading(false);
+      setArchiveLoading(false);
+    }
+  };
+
+  const handleRestoreStudent = async (id: string) => {
+    setRestoringId(id);
+    try {
+      await restoreStudentProfile({ data: { id } });
+      await router.invalidate();
+    } catch {
+      // no-op — reload will show current state
+    } finally {
+      setRestoringId(null);
     }
   };
 
   const handleUpdateStudent = async () => {
-    if (!editingStudentId) {
-      return;
-    }
+    if (!editingStudentId) return;
 
     setEditError(null);
 
@@ -167,26 +189,39 @@ function StudentsPage() {
 
   return (
     <div className="space-y-6">
-      <section className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
-        <p className="text-xs uppercase tracking-[0.25em] text-emerald-700">Parent</p>
-        <h1 className="mt-2 text-3xl font-semibold text-slate-900">Manage Students</h1>
+      <section className="orca-hero orca-wave rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+        <p className="text-xs uppercase tracking-[0.2em] text-cyan-700">Parent Workspace</p>
+        <div className="mt-2 flex items-center gap-3">
+          <span className="orca-icon-chip" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+              <path
+                d="M4 14c3.5 0 5.5-2.5 8-2.5 2 0 3.8 1 6 1.8V9.5l2 1.2-2 1.1v4.7c-2.5-.5-4.2-1.5-6-1.5-2.8 0-4.5 2.5-8 2.5v-3.5Z"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </span>
+          <h1 className="text-3xl font-semibold text-slate-900">Manage Students</h1>
+        </div>
         <p className="mt-2 text-slate-600">
           Add new student profiles and update existing student records.
         </p>
       </section>
 
       <section className="grid gap-6 xl:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
+        {/* Create form */}
         <article className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <p className="text-xs uppercase tracking-[0.2em] text-emerald-700">Student Management</p>
-              <h2 className="mt-2 text-xl font-semibold text-slate-900">Add Student</h2>
+              <h2 className="text-xl font-semibold text-slate-900">Add Student</h2>
               <p className="mt-2 text-sm text-slate-600">
                 Create a new student profile for your home pod.
               </p>
             </div>
-            <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
-              {students.length} {students.length === 1 ? "student" : "students"}
+            <span className="rounded-full bg-cyan-50 px-3 py-1 text-xs font-medium text-cyan-700">
+              {activeStudents.length} {activeStudents.length === 1 ? "student" : "students"}
             </span>
           </div>
 
@@ -195,7 +230,7 @@ function StudentsPage() {
               <span className="text-sm font-medium text-slate-700">Student Name</span>
               <input
                 value={newStudentName}
-                onChange={(event) => setNewStudentName(event.target.value)}
+                onChange={(e) => setNewStudentName(e.target.value)}
                 className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
                 placeholder="Sarah"
               />
@@ -205,7 +240,7 @@ function StudentsPage() {
               <span className="text-sm font-medium text-slate-700">Grade Level</span>
               <input
                 value={newStudentGrade}
-                onChange={(event) => setNewStudentGrade(event.target.value)}
+                onChange={(e) => setNewStudentGrade(e.target.value)}
                 className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
                 placeholder="9"
               />
@@ -217,7 +252,7 @@ function StudentsPage() {
               <input
                 type="date"
                 value={newStudentBirthDate}
-                onChange={(event) => setNewStudentBirthDate(event.target.value)}
+                onChange={(e) => setNewStudentBirthDate(e.target.value)}
                 className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
               />
             </label>
@@ -228,9 +263,7 @@ function StudentsPage() {
                 type="password"
                 inputMode="numeric"
                 value={newStudentPin}
-                onChange={(event) =>
-                  setNewStudentPin(event.target.value.replace(/\D/g, "").slice(0, 6))
-                }
+                onChange={(e) => setNewStudentPin(e.target.value.replace(/\D/g, "").slice(0, 6))}
                 className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
                 placeholder="1234"
                 maxLength={6}
@@ -246,34 +279,28 @@ function StudentsPage() {
           ) : null}
 
           <button
-            onClick={() => {
-              void handleCreateStudent();
-            }}
+            onClick={() => void handleCreateStudent()}
             disabled={createLoading || editLoading}
-            className="mt-5 w-full rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
+            className="mt-5 w-full rounded-xl bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700 disabled:opacity-60"
           >
             {createLoading ? "Creating..." : "Create Student"}
           </button>
         </article>
 
+        {/* Active profiles */}
         <article className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-xs uppercase tracking-[0.2em] text-cyan-700">Student Management</p>
-              <h2 className="mt-2 text-xl font-semibold text-slate-900">Student Profiles</h2>
-              <p className="mt-2 text-sm text-slate-600">
-                Review each student profile and update the details parents control.
-              </p>
-            </div>
-          </div>
+          <h2 className="text-xl font-semibold text-slate-900">Student Profiles</h2>
+          <p className="mt-1 text-sm text-slate-600">
+            Review and update active student records.
+          </p>
 
-          {students.length === 0 ? (
+          {activeStudents.length === 0 ? (
             <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-sm text-slate-600">
-              No student profiles yet. Create the first student from the form on the left.
+              No active students. Create the first one from the form on the left.
             </div>
           ) : (
             <div className="mt-5 space-y-4">
-              {students.map((student) => {
+              {activeStudents.map((student) => {
                 const isEditing = editingStudentId === student.id;
 
                 return (
@@ -299,22 +326,22 @@ function StudentsPage() {
                       <div className="flex shrink-0 gap-2">
                         <button
                           onClick={() => {
-                            if (isEditing) {
-                              resetEditState();
-                              return;
-                            }
+                            if (isEditing) { resetEditState(); return; }
                             startEditingStudent(student);
                           }}
                           className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
                         >
-                          {isEditing ? "Cancel" : "Edit Details"}
+                          {isEditing ? "Cancel" : "Edit"}
                         </button>
                         {!isEditing ? (
                           <button
-                            onClick={() => { setDeleteTarget({ id: student.id, displayName: student.displayName }); setDeleteError(null); }}
-                            className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700 hover:bg-rose-100"
+                            onClick={() => {
+                              setArchiveTarget({ id: student.id, displayName: student.displayName });
+                              setArchiveError(null);
+                            }}
+                            className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-700 hover:bg-amber-100"
                           >
-                            Delete
+                            Archive
                           </button>
                         ) : null}
                       </div>
@@ -326,7 +353,7 @@ function StudentsPage() {
                           <span className="text-sm font-medium text-slate-700">Student Name</span>
                           <input
                             value={editStudentName}
-                            onChange={(event) => setEditStudentName(event.target.value)}
+                            onChange={(e) => setEditStudentName(e.target.value)}
                             className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
                           />
                         </label>
@@ -335,12 +362,9 @@ function StudentsPage() {
                           <span className="text-sm font-medium text-slate-700">Grade Level</span>
                           <input
                             value={editStudentGrade}
-                            onChange={(event) => setEditStudentGrade(event.target.value)}
+                            onChange={(e) => setEditStudentGrade(e.target.value)}
                             className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
                           />
-                          <p className="text-xs text-slate-500">
-                            Grade is required when updating a student.
-                          </p>
                         </label>
 
                         <label className="block space-y-2">
@@ -348,23 +372,19 @@ function StudentsPage() {
                           <input
                             type="date"
                             value={editStudentBirthDate}
-                            onChange={(event) => setEditStudentBirthDate(event.target.value)}
+                            onChange={(e) => setEditStudentBirthDate(e.target.value)}
                             className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
                           />
                         </label>
 
                         <label className="block space-y-2">
-                          <span className="text-sm font-medium text-slate-700">
-                            Reset Student PIN
-                          </span>
+                          <span className="text-sm font-medium text-slate-700">Reset Student PIN</span>
                           <input
                             type="password"
                             inputMode="numeric"
                             value={editStudentPin}
-                            onChange={(event) =>
-                              setEditStudentPin(
-                                event.target.value.replace(/\D/g, "").slice(0, 6),
-                              )
+                            onChange={(e) =>
+                              setEditStudentPin(e.target.value.replace(/\D/g, "").slice(0, 6))
                             }
                             className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
                             placeholder="Leave blank to keep current PIN"
@@ -379,9 +399,7 @@ function StudentsPage() {
                         ) : null}
 
                         <button
-                          onClick={() => {
-                            void handleUpdateStudent();
-                          }}
+                          onClick={() => void handleUpdateStudent()}
                           disabled={editLoading || createLoading}
                           className="w-full rounded-xl bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700 disabled:opacity-60"
                         >
@@ -394,17 +412,63 @@ function StudentsPage() {
               })}
             </div>
           )}
+
+          {/* Archived students collapsible section */}
+          {archivedStudents.length > 0 ? (
+            <div className="mt-6 border-t border-slate-200 pt-5">
+              <button
+                type="button"
+                onClick={() => setShowArchived((v) => !v)}
+                className="flex w-full items-center justify-between gap-2 text-left"
+              >
+                <span className="text-sm font-medium text-slate-600">
+                  Archived Students ({archivedStudents.length})
+                </span>
+                <span className="text-xs text-slate-400">{showArchived ? "▲ Hide" : "▼ Show"}</span>
+              </button>
+
+              {showArchived ? (
+                <div className="mt-4 space-y-3">
+                  <p className="text-xs text-slate-500">
+                    Archived profiles are hidden from the active dashboard. All submissions and history are preserved.
+                  </p>
+                  {archivedStudents.map((student) => (
+                    <div
+                      key={student.id}
+                      className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 opacity-70"
+                    >
+                      <div>
+                        <p className="text-sm font-medium text-slate-700">{student.displayName}</p>
+                        <p className="text-xs text-slate-500">Grade {student.gradeLevel || "—"}</p>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={restoringId === student.id}
+                        onClick={() => void handleRestoreStudent(student.id)}
+                        className="shrink-0 rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-60"
+                      >
+                        {restoringId === student.id ? "Restoring…" : "Restore"}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </article>
       </section>
 
+      {/* Archive confirmation modal (reuses the PIN-entry delete modal) */}
       <DeleteConfirmModal
-        open={deleteTarget !== null}
+        open={archiveTarget !== null}
         itemLabel="Student"
-        itemName={deleteTarget?.displayName ?? ""}
-        onConfirm={(pin) => void handleDeleteStudent(pin)}
-        onCancel={() => { setDeleteTarget(null); setDeleteError(null); }}
-        error={deleteError}
-        loading={deleteLoading}
+        itemName={archiveTarget?.displayName ?? ""}
+        confirmLabel="Archive Student"
+        confirmDescription="Archiving preserves all submissions and history. The student will be hidden from the active dashboard and cannot log in until restored."
+        onConfirm={(pin) => void handleArchiveStudent(pin)}
+        onCancel={() => { setArchiveTarget(null); setArchiveError(null); }}
+        error={archiveError}
+        loading={archiveLoading}
       />
     </div>
   );

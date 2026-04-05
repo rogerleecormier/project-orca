@@ -1,1 +1,161 @@
 @import "tailwindcss";
+
+html {
+  scrollbar-gutter: stable;
+  overflow-y: scroll;
+}
+
+:root {
+  --orca-black: #0b1220;
+  --orca-deep: #101a2d;
+  --orca-sea: #1e5f8f;
+  --orca-sea-bright: #2a77af;
+  --orca-foam: #f5f9fd;
+  --orca-paper: #ffffff;
+  --orca-line: #d7e2ee;
+}
+
+body.orca-theme {
+  background:
+    radial-gradient(circle at 15% 0%, rgba(42, 119, 175, 0.12), transparent 34%),
+    radial-gradient(circle at 90% -5%, rgba(11, 18, 32, 0.08), transparent 36%),
+    linear-gradient(180deg, #f8fbff 0%, #f3f7fc 100%);
+  color: var(--orca-black);
+}
+
+.orca-theme .bg-cyan-600 {
+  background-color: var(--orca-sea) !important;
+}
+
+.orca-theme .hover\:bg-cyan-700:hover {
+  background-color: var(--orca-sea-bright) !important;
+}
+
+.orca-theme .bg-cyan-50 {
+  background-color: rgba(42, 119, 175, 0.16) !important;
+}
+
+.orca-theme .text-cyan-700,
+.orca-theme .text-cyan-900 {
+  color: #1f5d8b !important;
+}
+
+.orca-theme .border-cyan-600 {
+  border-color: #2a8fd3 !important;
+}
+
+.orca-theme .bg-emerald-600 {
+  background-color: var(--orca-sea) !important;
+}
+
+.orca-theme .hover\:bg-emerald-700:hover {
+  background-color: var(--orca-sea-bright) !important;
+}
+
+.orca-hero {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 85% 20%, rgba(42, 119, 175, 0.16), transparent 44%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.96), rgba(245, 250, 255, 0.96)) !important;
+  border-color: var(--orca-line) !important;
+}
+
+.orca-hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 15% 0%, rgba(66, 152, 214, 0.16), transparent 38%),
+    linear-gradient(120deg, rgba(255, 255, 255, 0.4), transparent 55%);
+  pointer-events: none;
+}
+
+.orca-wave {
+  position: relative;
+}
+
+.orca-wave::after {
+  content: "";
+  position: absolute;
+  left: -1rem;
+  right: -1rem;
+  bottom: -0.7rem;
+  height: 1.2rem;
+  border-radius: 999px;
+  background: radial-gradient(120% 100% at 50% 0%, rgba(42, 119, 175, 0.2), transparent 70%);
+  pointer-events: none;
+}
+
+.orca-icon-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 0.45rem;
+  background: rgba(42, 119, 175, 0.12);
+  border: 1px solid rgba(42, 119, 175, 0.2);
+  color: #1f5d8b;
+}
+
+.orca-rich-content {
+  color: #1e293b;
+  line-height: 1.7;
+}
+
+.orca-rich-content h2 {
+  margin: 1.25rem 0 0.5rem;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.orca-rich-content h3 {
+  margin: 1rem 0 0.45rem;
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.orca-rich-content p {
+  margin: 0.75rem 0;
+}
+
+.orca-rich-content ul,
+.orca-rich-content ol {
+  margin: 0.85rem 0 0.85rem 1.25rem;
+  padding-left: 1.25rem;
+}
+
+.orca-rich-content ul {
+  list-style: disc;
+}
+
+.orca-rich-content ol {
+  list-style: decimal;
+}
+
+.orca-rich-content li {
+  margin: 0.25rem 0;
+}
+
+.orca-rich-content blockquote {
+  margin: 1rem 0;
+  padding-left: 1rem;
+  border-left: 4px solid #bae6fd;
+  color: #475569;
+  font-style: italic;
+}
+
+.orca-rich-content img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 1rem 0;
+  border-radius: 0.9rem;
+}
+
+.orca-rich-content a {
+  color: #0f766e;
+  text-decoration: underline;
+}

@@ -1,13 +1,6 @@
-import { useState } from "react";
-import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
-import {
-  checkDbConnection,
-  createStudentProfileInline,
-  getManagedStudents,
-  getParentDashboardData,
-  getViewerContext,
-  updateStudentProfile,
-} from "../server/functions";
+import { useMemo, useState } from "react";
+import { Link, createFileRoute, redirect } from "@tanstack/react-router";
+import { getParentDashboardData, getViewerContext } from "../server/functions";
 
 export const Route = createFileRoute("/")({
   component: Home,
@@ -22,157 +15,168 @@ export const Route = createFileRoute("/")({
       throw redirect({ to: "/student" });
     }
 
-    const [health, studentManager, parentDashboard] = await Promise.all([
-      checkDbConnection(),
-      getManagedStudents(),
-      getParentDashboardData(),
-    ]);
+    const parentDashboard = await getParentDashboardData();
 
     return {
-      health,
-      studentManager,
       parentDashboard,
+      isAdminParent: viewer.isAdminParent ?? false,
     };
   },
 });
 
 function Home() {
   const data = Route.useLoaderData();
-  const router = useRouter();
-  const [createError, setCreateError] = useState<string | null>(null);
-  const [editError, setEditError] = useState<string | null>(null);
-  const [createLoading, setCreateLoading] = useState(false);
-  const [editLoading, setEditLoading] = useState(false);
-  const [editingStudentId, setEditingStudentId] = useState<string | null>(null);
 
-  const [newStudentName, setNewStudentName] = useState("");
-  const [newStudentGrade, setNewStudentGrade] = useState("");
-  const [newStudentBirthDate, setNewStudentBirthDate] = useState("");
-  const [newStudentPin, setNewStudentPin] = useState("");
+  const currentSchoolYear = () => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const start = now.getMonth() >= 7 ? year : year - 1;
+    return `${start}-${start + 1}`;
+  };
 
-  const [editStudentName, setEditStudentName] = useState("");
-  const [editStudentGrade, setEditStudentGrade] = useState("");
-  const [editStudentBirthDate, setEditStudentBirthDate] = useState("");
-  const [editStudentPin, setEditStudentPin] = useState("");
   const [selectedStudentId, setSelectedStudentId] = useState(
     data.parentDashboard.students[0]?.id ?? "",
   );
+  const [selectedYear, setSelectedYear] = useState(() => {
+    const currentYear = currentSchoolYear();
+    if (data.parentDashboard.schoolYears.includes(currentYear)) {
+      return currentYear;
+    }
+    return data.parentDashboard.schoolYears[0] ?? "all";
+  });
 
-  const students = data.studentManager.students;
   const parentStudents = data.parentDashboard.students;
   const selectedStudent = parentStudents.find((student) => student.id === selectedStudentId) ?? null;
   const selectedMetrics = selectedStudentId
     ? data.parentDashboard.metricsByStudent[selectedStudentId] ?? []
     : [];
-
-  const startEditingStudent = (student: {
-    id: string;
-    displayName: string;
-    gradeLevel: string;
-    birthDate: string;
-  }) => {
-    setEditError(null);
-    setEditingStudentId(student.id);
-    setEditStudentName(student.displayName);
-    setEditStudentGrade(student.gradeLevel);
-    setEditStudentBirthDate(student.birthDate);
-    setEditStudentPin("");
-  };
-
-  const resetEditState = () => {
-    setEditingStudentId(null);
-    setEditStudentName("");
-    setEditStudentGrade("");
-    setEditStudentBirthDate("");
-    setEditStudentPin("");
-  };
-
-  const handleCreateStudent = async () => {
-    setCreateError(null);
-
-    if (!newStudentName.trim() || !newStudentGrade.trim() || !newStudentPin.trim()) {
-      setCreateError("Student name, grade, and PIN are required.");
-      return;
+  const filteredMetrics = useMemo(() => {
+    if (selectedYear === "all") {
+      return selectedMetrics;
     }
-
-    if (!/^\d{4,6}$/.test(newStudentPin)) {
-      setCreateError("Student PIN must be 4-6 digits.");
-      return;
+    if (selectedYear === "") {
+      return selectedMetrics.filter((metric) => !metric.schoolYear);
     }
-
-    setCreateLoading(true);
-
-    try {
-      await createStudentProfileInline({
-        data: {
-          displayName: newStudentName.trim(),
-          gradeLevel: newStudentGrade.trim(),
-          birthDate: newStudentBirthDate || undefined,
-          pin: newStudentPin,
-        },
-      });
-
-      setNewStudentName("");
-      setNewStudentGrade("");
-      setNewStudentBirthDate("");
-      setNewStudentPin("");
-      await router.invalidate();
-    } catch {
-      setCreateError("Could not create the student profile.");
-    } finally {
-      setCreateLoading(false);
-    }
-  };
-
-  const handleUpdateStudent = async () => {
-    if (!editingStudentId) {
-      return;
-    }
-
-    setEditError(null);
-
-    if (!editStudentName.trim() || !editStudentGrade.trim()) {
-      setEditError("Student name and grade are required.");
-      return;
-    }
-
-    if (editStudentPin && !/^\d{4,6}$/.test(editStudentPin)) {
-      setEditError("Student PIN must be 4-6 digits when provided.");
-      return;
-    }
-
-    setEditLoading(true);
-
-    try {
-      await updateStudentProfile({
-        data: {
-          profileId: editingStudentId,
-          displayName: editStudentName.trim(),
-          gradeLevel: editStudentGrade.trim(),
-          birthDate: editStudentBirthDate || undefined,
-          pin: editStudentPin || undefined,
-        },
-      });
-
-      resetEditState();
-      await router.invalidate();
-    } catch {
-      setEditError("Could not update the student profile.");
-    } finally {
-      setEditLoading(false);
-    }
-  };
+    return selectedMetrics.filter((metric) => metric.schoolYear === selectedYear);
+  }, [selectedMetrics, selectedYear]);
+  const featureCtas = [
+    {
+      to: "/students",
+      title: "Students",
+      description: "Manage student profiles and PINs.",
+      accentClass: "border-emerald-200 bg-emerald-50/80 text-emerald-900",
+      iconClass: "bg-emerald-100 text-emerald-700",
+      icon: (
+        <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" aria-hidden="true">
+          <path
+            d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2m20 0v-2a4 4 0 0 0-3-3.87M15 3.13a4 4 0 0 1 0 7.75M14 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      ),
+    },
+    {
+      to: "/classes",
+      title: "Classes",
+      description: "Build and organize your curriculum.",
+      accentClass: "border-cyan-200 bg-cyan-50/80 text-cyan-900",
+      iconClass: "bg-cyan-100 text-cyan-700",
+      icon: (
+        <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" aria-hidden="true">
+          <path
+            d="M4 5h16v12H4zM2 17h20M8 21h8"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      ),
+    },
+    {
+      to: "/assignments",
+      title: "Assignments",
+      description: "Create and track student work.",
+      accentClass: "border-violet-200 bg-violet-50/80 text-violet-900",
+      iconClass: "bg-violet-100 text-violet-700",
+      icon: (
+        <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" aria-hidden="true">
+          <path
+            d="M9 11h6M9 15h6M9 7h3M5 3h14a2 2 0 0 1 2 2v14l-4-2-4 2-4-2-4 2V5a2 2 0 0 1 2-2Z"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      ),
+    },
+    ...(data.isAdminParent
+      ? [
+          {
+            to: "/admin",
+            title: "Home Pod",
+            description: "Configure parent admin access.",
+            accentClass: "border-amber-200 bg-amber-50/80 text-amber-900",
+            iconClass: "bg-amber-100 text-amber-700",
+            icon: (
+              <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" aria-hidden="true">
+                <path
+                  d="M12 3 4 7v6c0 5 3.4 7.7 8 8 4.6-.3 8-3 8-8V7l-8-4Zm0 6v4m0 4h.01"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            ),
+          },
+        ]
+      : []),
+  ];
 
   return (
     <div className="space-y-6">
-      <section className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
-        <h1 className="text-3xl font-semibold text-slate-900">ProOrca LMS</h1>
-        <p className="mt-2 text-slate-600">
-          Parent dashboard for student progress tracking and learning completion.
-        </p>
+      <section className="orca-hero orca-wave rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-3">
+            <span className="orca-icon-chip" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+                <path
+                  d="M4 14c3.5 0 5.5-2.5 8-2.5 2 0 3.8 1 6 1.8V9.5l2 1.2-2 1.1v4.7c-2.5-.5-4.2-1.5-6-1.5-2.8 0-4.5 2.5-8 2.5v-3.5Z"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </span>
+            <h2 className="text-xl font-semibold text-slate-900">Parent Quick Actions</h2>
+          </div>
+          <p className="text-sm text-slate-600">Jump to the tools you use most.</p>
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {featureCtas.map((cta) => (
+            <Link
+              key={cta.to}
+              to={cta.to}
+              className={`group rounded-2xl border p-4 transition hover:shadow-sm ${cta.accentClass}`}
+            >
+              <div className={`inline-flex rounded-xl p-2 ${cta.iconClass}`}>{cta.icon}</div>
+              <h3 className="mt-3 text-base font-semibold">{cta.title}</h3>
+              <p className="mt-1 text-sm">{cta.description}</p>
+              <p className="mt-3 text-xs font-medium uppercase tracking-[0.14em]">
+                Open
+              </p>
+            </Link>
+          ))}
+        </div>
       </section>
 
-      <section className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+      <section className="orca-wave rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-xs uppercase tracking-[0.2em] text-cyan-700">Parent View</p>
@@ -188,43 +192,71 @@ function Home() {
 
         {parentStudents.length === 0 ? (
           <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-sm text-slate-600">
-            No students found. Add a student below to begin tracking class completion.
+            No students found. Add a student from the Students page to begin tracking class completion.
           </div>
         ) : (
-          <>
-            <div className="mt-5 flex flex-wrap gap-2">
-              {parentStudents.map((student) => {
-                const isSelected = selectedStudentId === student.id;
-
-                return (
-                  <button
-                    key={student.id}
-                    onClick={() => setSelectedStudentId(student.id)}
-                    className={`rounded-xl border px-4 py-2 text-sm font-medium transition ${
-                      isSelected
-                        ? "border-cyan-600 bg-cyan-600 text-white"
-                        : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
-                    }`}
-                  >
-                    {student.displayName}
-                    {student.gradeLevel ? ` (Grade ${student.gradeLevel})` : ""}
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
-              <h3 className="text-lg font-semibold text-slate-900">
-                {selectedStudent
-                  ? `${selectedStudent.displayName} - Class Completion`
-                  : "Class Completion"}
+          <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,280px)_minmax(0,1fr)]">
+            <aside className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+              <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-slate-700">
+                Students
               </h3>
+              <div className="mt-3 space-y-2">
+                {parentStudents.map((student) => {
+                  const isSelected = selectedStudentId === student.id;
 
-              {selectedMetrics.length === 0 ? (
-                <p className="mt-3 text-sm text-slate-600">No classes assigned yet.</p>
+                  return (
+                    <button
+                      key={student.id}
+                      onClick={() => setSelectedStudentId(student.id)}
+                      className={`w-full rounded-xl border px-4 py-3 text-left text-sm font-medium transition ${
+                        isSelected
+                          ? "border-cyan-600 bg-cyan-600 text-white"
+                          : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
+                      }`}
+                    >
+                      <p>{student.displayName}</p>
+                      <p className={`mt-1 text-xs ${isSelected ? "text-cyan-100" : "text-slate-500"}`}>
+                        {student.gradeLevel ? `Grade ${student.gradeLevel}` : "Grade not set"}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            </aside>
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h3 className="text-lg font-semibold text-slate-900">
+                  {selectedStudent
+                    ? `${selectedStudent.displayName} - Class Completion`
+                    : "Class Completion"}
+                </h3>
+                <select
+                  value={selectedYear}
+                  onChange={(event) => setSelectedYear(event.target.value)}
+                  className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700"
+                >
+                  <option value="all">All school years</option>
+                  {data.parentDashboard.schoolYears.map((year) => (
+                    <option key={year} value={year}>
+                      {year}
+                    </option>
+                  ))}
+                  {data.parentDashboard.hasClassesWithoutSchoolYear ? (
+                    <option value="">No year set</option>
+                  ) : null}
+                </select>
+              </div>
+
+              {filteredMetrics.length === 0 ? (
+                <p className="mt-3 text-sm text-slate-600">
+                  {selectedYear === "all"
+                    ? "No classes assigned yet."
+                    : `No classes found for ${selectedYear === "" ? "No year set" : selectedYear}.`}
+                </p>
               ) : (
                 <div className="mt-4 space-y-3">
-                  {selectedMetrics.map((metric) => (
+                  {filteredMetrics.map((metric) => (
                     <article key={metric.classId} className="rounded-xl border border-slate-200 bg-white p-4">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <h4 className="font-semibold text-slate-900">{metric.classTitle}</h4>
@@ -250,205 +282,8 @@ function Home() {
                 </div>
               )}
             </div>
-          </>
+          </div>
         )}
-      </section>
-
-      <section className="grid gap-6 xl:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
-        <article className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-xs uppercase tracking-[0.2em] text-emerald-700">Student Management</p>
-              <h2 className="mt-2 text-xl font-semibold text-slate-900">Add Student</h2>
-              <p className="mt-2 text-sm text-slate-600">
-                Parent accounts can create student records directly from the dashboard.
-              </p>
-            </div>
-            <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
-              {students.length} {students.length === 1 ? "student" : "students"}
-            </span>
-          </div>
-
-          <div className="mt-5 space-y-4">
-            <label className="block space-y-2">
-              <span className="text-sm font-medium text-slate-700">Student Name</span>
-              <input
-                value={newStudentName}
-                onChange={(event) => setNewStudentName(event.target.value)}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                placeholder="Sarah"
-              />
-            </label>
-
-            <label className="block space-y-2">
-              <span className="text-sm font-medium text-slate-700">Grade Level</span>
-              <input
-                value={newStudentGrade}
-                onChange={(event) => setNewStudentGrade(event.target.value)}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                placeholder="9"
-              />
-              <p className="text-xs text-slate-500">Grade is required for every student profile.</p>
-            </label>
-
-            <label className="block space-y-2">
-              <span className="text-sm font-medium text-slate-700">Birth Date</span>
-              <input
-                type="date"
-                value={newStudentBirthDate}
-                onChange={(event) => setNewStudentBirthDate(event.target.value)}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
-              />
-            </label>
-
-            <label className="block space-y-2">
-              <span className="text-sm font-medium text-slate-700">Student PIN</span>
-              <input
-                type="password"
-                inputMode="numeric"
-                value={newStudentPin}
-                onChange={(event) => setNewStudentPin(event.target.value.replace(/\D/g, "").slice(0, 6))}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                placeholder="1234"
-                maxLength={6}
-              />
-              <p className="text-xs text-slate-500">Use 4-6 digits for the student PIN.</p>
-            </label>
-          </div>
-
-          {createError ? (
-            <p className="mt-4 rounded-lg bg-rose-50 p-3 text-sm font-medium text-rose-700">{createError}</p>
-          ) : null}
-
-          <button
-            onClick={() => {
-              void handleCreateStudent();
-            }}
-            disabled={createLoading || editLoading}
-            className="mt-5 w-full rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
-          >
-            {createLoading ? "Creating..." : "Create Student"}
-          </button>
-        </article>
-
-        <article className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-xs uppercase tracking-[0.2em] text-cyan-700">Student Management</p>
-              <h2 className="mt-2 text-xl font-semibold text-slate-900">Manage Students</h2>
-              <p className="mt-2 text-sm text-slate-600">
-                Review each student profile and update the details parents control.
-              </p>
-            </div>
-          </div>
-
-          {students.length === 0 ? (
-            <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-sm text-slate-600">
-              No student profiles yet. Create the first student from the form on the left.
-            </div>
-          ) : (
-            <div className="mt-5 space-y-4">
-              {students.map((student) => {
-                const isEditing = editingStudentId === student.id;
-
-                return (
-                  <div key={student.id} className="rounded-2xl border border-slate-200 bg-slate-50/80 p-5">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <h3 className="text-lg font-semibold text-slate-900">{student.displayName}</h3>
-                        <p className="mt-1 text-sm text-slate-600">Grade {student.gradeLevel || "Required"}</p>
-                        <p className="mt-1 text-xs text-slate-500">
-                          {student.birthDate ? `Birth date: ${student.birthDate}` : "Birth date not set"}
-                        </p>
-                      </div>
-
-                      <button
-                        onClick={() => {
-                          if (isEditing) {
-                            resetEditState();
-                            return;
-                          }
-
-                          startEditingStudent(student);
-                        }}
-                        className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
-                      >
-                        {isEditing ? "Cancel" : "Edit Details"}
-                      </button>
-                    </div>
-
-                    {isEditing ? (
-                      <div className="mt-5 space-y-4 border-t border-slate-200 pt-5">
-                        <label className="block space-y-2">
-                          <span className="text-sm font-medium text-slate-700">Student Name</span>
-                          <input
-                            value={editStudentName}
-                            onChange={(event) => setEditStudentName(event.target.value)}
-                            className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                          />
-                        </label>
-
-                        <label className="block space-y-2">
-                          <span className="text-sm font-medium text-slate-700">Grade Level</span>
-                          <input
-                            value={editStudentGrade}
-                            onChange={(event) => setEditStudentGrade(event.target.value)}
-                            className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                          />
-                          <p className="text-xs text-slate-500">Grade is required when updating a student.</p>
-                        </label>
-
-                        <label className="block space-y-2">
-                          <span className="text-sm font-medium text-slate-700">Birth Date</span>
-                          <input
-                            type="date"
-                            value={editStudentBirthDate}
-                            onChange={(event) => setEditStudentBirthDate(event.target.value)}
-                            className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                          />
-                        </label>
-
-                        <label className="block space-y-2">
-                          <span className="text-sm font-medium text-slate-700">Reset Student PIN</span>
-                          <input
-                            type="password"
-                            inputMode="numeric"
-                            value={editStudentPin}
-                            onChange={(event) => setEditStudentPin(event.target.value.replace(/\D/g, "").slice(0, 6))}
-                            className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
-                            placeholder="Leave blank to keep current PIN"
-                            maxLength={6}
-                          />
-                        </label>
-
-                        {editError ? (
-                          <p className="rounded-lg bg-rose-50 p-3 text-sm font-medium text-rose-700">{editError}</p>
-                        ) : null}
-
-                        <button
-                          onClick={() => {
-                            void handleUpdateStudent();
-                          }}
-                          disabled={editLoading || createLoading}
-                          className="w-full rounded-xl bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700 disabled:opacity-60"
-                        >
-                          {editLoading ? "Saving..." : "Save Student Details"}
-                        </button>
-                      </div>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </article>
-      </section>
-
-      <section className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-900">System Snapshot</h2>
-        <pre className="mt-3 overflow-auto rounded-xl bg-slate-100 p-4 text-sm text-slate-800">
-          {JSON.stringify(data.health, null, 2)}
-        </pre>
       </section>
     </div>
   );

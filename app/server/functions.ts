@@ -1,11 +1,12 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getRequest, setResponseHeader } from "@tanstack/react-start/server";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { env } from "cloudflare:workers";
 import { z } from "zod";
 import { getDb } from "../db/client";
 import {
   assignments,
+  classEnrollments,
   classes,
   healthCheck,
   memberships,
@@ -15,67 +16,111 @@ import {
   users,
 } from "../db/schema";
 import { auth, getRoleContext, requireActiveRole } from "../lib/auth";
-import { generateQuizDraft, searchYoutubeForVideos } from "../lib/ai";
+import { fetchYoutubeTranscript, generateQuizDraft, searchYoutubeForVideos } from "../lib/ai";
 
 const COOKIE_MAX_AGE_SECONDS = 60 * 60 * 8;
-const PBKDF2_ITERATIONS = 100000;
+const DEFAULT_PBKDF2_ITERATIONS = 100000;
+const PASSWORD_HASH_VERSION = "pbkdf2_sha256";
+const MIN_PBKDF2_ITERATIONS = 50000;
+const MAX_PBKDF2_ITERATIONS = 600000;
+const subtleCrypto = crypto.subtle as SubtleCrypto & {
+  timingSafeEqual(a: BufferSource, b: BufferSource): boolean;
+};
 
 function buildCookie(name: string, value: string, maxAgeSeconds = COOKIE_MAX_AGE_SECONDS) {
   return `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=${maxAgeSeconds}`;
 }
 
+function getPasswordHashIterations() {
+  const configuredIterations = Number(
+    (env as Env & { PASSWORD_PBKDF2_ITERATIONS?: string }).PASSWORD_PBKDF2_ITERATIONS,
+  );
+
+  if (!Number.isInteger(configuredIterations)) {
+    return DEFAULT_PBKDF2_ITERATIONS;
+  }
+
+  return Math.min(MAX_PBKDF2_ITERATIONS, Math.max(MIN_PBKDF2_ITERATIONS, configuredIterations));
+}
+
+async function derivePasswordHash(
+  password: string,
+  salt: Uint8Array,
+  iterations: number,
+): Promise<Uint8Array> {
+  const passwordBytes = new TextEncoder().encode(password);
+  const importedKey = await crypto.subtle.importKey("raw", passwordBytes, "PBKDF2", false, [
+    "deriveBits",
+  ]);
+  const derivedBits = await crypto.subtle.deriveBits(
+    {
+      name: "PBKDF2",
+      salt: salt as BufferSource,
+      hash: "SHA-256",
+      iterations,
+    },
+    importedKey,
+    256,
+  );
+
+  return new Uint8Array(derivedBits);
+}
+
+function toBase64(bytes: Uint8Array) {
+  return btoa(String.fromCharCode(...Array.from(bytes)));
+}
+
+function fromBase64(value: string) {
+  return new Uint8Array(atob(value).split("").map((char) => char.charCodeAt(0)));
+}
+
+function parseStoredPasswordHash(storedHash: string) {
+  if (storedHash.startsWith(`${PASSWORD_HASH_VERSION}$`)) {
+    const [, iterationsRaw, saltB64, hashB64] = storedHash.split("$");
+    const iterations = Number(iterationsRaw);
+
+    if (!Number.isInteger(iterations) || !saltB64 || !hashB64) {
+      return null;
+    }
+
+    return {
+      iterations,
+      salt: fromBase64(saltB64),
+      hash: fromBase64(hashB64),
+    };
+  }
+
+  const [saltB64, hashB64] = storedHash.split(":");
+  if (!saltB64 || !hashB64) {
+    return null;
+  }
+
+  return {
+    iterations: DEFAULT_PBKDF2_ITERATIONS,
+    salt: fromBase64(saltB64),
+    hash: fromBase64(hashB64),
+  };
+}
+
 // Password hashing using PBKDF2 (Web Standard API)
 async function hashPassword(password: string): Promise<string> {
   const salt = crypto.getRandomValues(new Uint8Array(16));
-  const encoder = new TextEncoder();
-  const passwordBytes = encoder.encode(password);
+  const iterations = getPasswordHashIterations();
+  const derivedKeyBytes = await derivePasswordHash(password, salt, iterations);
 
-  const key = await crypto.subtle.deriveKey(
-    {
-      name: "PBKDF2",
-      salt: salt,
-      hash: "SHA-256",
-      iterations: PBKDF2_ITERATIONS,
-    },
-    await crypto.subtle.importKey("raw", passwordBytes, "PBKDF2", false, ["deriveKey"]),
-    { name: "HMAC", hash: "SHA-256", length: 256 },
-    true,
-    ["sign"]
-  );
-
-  const derivedKeyBytes = await crypto.subtle.exportKey("raw", key);
-  const saltB64 = btoa(String.fromCharCode(...Array.from(salt)));
-  const hashB64 = btoa(String.fromCharCode(...Array.from(new Uint8Array(derivedKeyBytes))));
-
-  return `${saltB64}:${hashB64}`;
+  return `${PASSWORD_HASH_VERSION}$${iterations}$${toBase64(salt)}$${toBase64(derivedKeyBytes)}`;
 }
 
 async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
   try {
-    const [saltB64, hashB64] = storedHash.split(":");
-    if (!saltB64 || !hashB64) return false;
+    const parsedHash = parseStoredPasswordHash(storedHash);
+    if (!parsedHash) return false;
 
-    const salt = new Uint8Array(atob(saltB64).split("").map((c) => c.charCodeAt(0)));
-    const encoder = new TextEncoder();
-    const passwordBytes = encoder.encode(password);
-
-    const key = await crypto.subtle.deriveKey(
-      {
-        name: "PBKDF2",
-        salt: salt,
-        hash: "SHA-256",
-        iterations: PBKDF2_ITERATIONS,
-      },
-      await crypto.subtle.importKey("raw", passwordBytes, "PBKDF2", false, ["deriveKey"]),
-      { name: "HMAC", hash: "SHA-256", length: 256 },
-      true,
-      ["sign"]
+    const computedHash = await derivePasswordHash(password, parsedHash.salt, parsedHash.iterations);
+    return subtleCrypto.timingSafeEqual(
+      computedHash as BufferSource,
+      parsedHash.hash as BufferSource,
     );
-
-    const derivedKeyBytes = await crypto.subtle.exportKey("raw", key);
-    const computedHashB64 = btoa(String.fromCharCode(...Array.from(new Uint8Array(derivedKeyBytes))));
-
-    return computedHashB64 === hashB64;
   } catch {
     return false;
   }
@@ -351,6 +396,7 @@ export const continueAsParent = createServerFn({ method: "POST" }).handler(async
 const switchWorkspaceViewInput = z.object({
   mode: z.enum(["parent", "student"]),
   profileId: z.string().optional(),
+  // Required when switching FROM student → parent (PIN-guard so child can't self-escalate)
   parentPin: z.string().regex(/^\d{4,6}$/).optional(),
 });
 
@@ -382,11 +428,28 @@ export const switchWorkspaceView = createServerFn({ method: "POST" })
       userRecord?.role === "admin" ||
       Boolean(adminMembership);
 
+    // ── Switch to parent view ──────────────────────────────────────────────────
+    // Requires parent PIN when the current session is a student session,
+    // so a child cannot self-escalate to the parent workspace.
     if (data.mode === "parent") {
+      const isCurrentlyStudent = session.activeRole === "student";
+
+      if (isCurrentlyStudent) {
+        if (!data.parentPin) throw new Error("PIN_REQUIRED");
+        if (!userRecord?.parentPin) throw new Error("FORBIDDEN");
+        const hash = await hashParentPin(data.parentPin);
+        if (hash !== userRecord.parentPin) throw new Error("INVALID_PIN");
+      }
+
+      // Preserve the current profileId in the parent cookie so the shell can
+      // pre-select the same student next time without re-picking.
+      const preservedProfileId = session.session.profileId ?? undefined;
+
       setRoleSessionCookies({
         role: "parent",
         userId: session.user.id,
         organizationId,
+        profileId: preservedProfileId,
         isAdminParent,
       });
 
@@ -396,22 +459,10 @@ export const switchWorkspaceView = createServerFn({ method: "POST" })
       };
     }
 
-    if (!data.parentPin) {
-      throw new Error("PIN_REQUIRED");
-    }
-
-    if (!userRecord?.parentPin) {
-      throw new Error("FORBIDDEN");
-    }
-
-    const parentPinHash = await hashParentPin(data.parentPin);
-    if (parentPinHash !== userRecord.parentPin) {
-      throw new Error("INVALID_PIN");
-    }
-
-    if (!data.profileId) {
-      throw new Error("PROFILE_REQUIRED");
-    }
+    // ── Switch to student view ────────────────────────────────────────────────
+    // No PIN required — the parent is already authenticated.
+    // profileId is required to know which student to activate.
+    if (!data.profileId) throw new Error("PROFILE_REQUIRED");
 
     const profile = await db.query.profiles.findFirst({
       where: and(
@@ -422,9 +473,7 @@ export const switchWorkspaceView = createServerFn({ method: "POST" })
       ),
     });
 
-    if (!profile) {
-      throw new Error("FORBIDDEN");
-    }
+    if (!profile) throw new Error("FORBIDDEN");
 
     setRoleSessionCookies({
       role: "student",
@@ -541,7 +590,6 @@ export const getManagedStudents = createServerFn({ method: "GET" }).handler(asyn
     where: and(
       eq(profiles.parentUserId, session.user.id),
       eq(profiles.organizationId, organizationId),
-      eq(profiles.status, "active"),
     ),
     orderBy: [desc(profiles.createdAt)],
   });
@@ -552,6 +600,7 @@ export const getManagedStudents = createServerFn({ method: "GET" }).handler(asyn
       displayName: profile.displayName,
       gradeLevel: profile.gradeLevel ?? "",
       birthDate: profile.birthDate ?? "",
+      status: profile.status,
       createdAt: profile.createdAt,
       updatedAt: profile.updatedAt,
     })),
@@ -589,6 +638,21 @@ export const getParentDashboardData = createServerFn({ method: "GET" }).handler(
       orderBy: [desc(submissions.createdAt)],
     }),
   ]);
+
+  const enrollmentRows = classRows.length && studentRows.length
+    ? await db.query.classEnrollments.findMany({
+        where: and(
+          inArray(
+            classEnrollments.classId,
+            classRows.map((classRow) => classRow.id),
+          ),
+          inArray(
+            classEnrollments.profileId,
+            studentRows.map((student) => student.id),
+          ),
+        ),
+      })
+    : [];
 
   const studentIds = new Set(studentRows.map((student) => student.id));
 
@@ -634,15 +698,28 @@ export const getParentDashboardData = createServerFn({ method: "GET" }).handler(
     submissionsByStudentClass.set(key, existing);
   }
 
+  const enrolledClassIdsByStudent = new Map<string, Set<string>>();
+  for (const enrollment of enrollmentRows) {
+    if (!studentIds.has(enrollment.profileId)) {
+      continue;
+    }
+
+    const existing = enrolledClassIdsByStudent.get(enrollment.profileId) ?? new Set<string>();
+    existing.add(enrollment.classId);
+    enrolledClassIdsByStudent.set(enrollment.profileId, existing);
+  }
+
   const metricsByStudent = studentRows.reduce<Record<string, Array<{
     classId: string;
     classTitle: string;
+    schoolYear: string | null;
     assignedCount: number;
     submittedCount: number;
     completionPercent: number;
     averageScore: number | null;
   }>>>((acc, student) => {
-    const assignedClasses = classRows.filter((classRow) => classRow.studentProfileId === student.id);
+    const assignedClassIds = enrolledClassIdsByStudent.get(student.id) ?? new Set<string>();
+    const assignedClasses = classRows.filter((classRow) => assignedClassIds.has(classRow.id));
 
     acc[student.id] = assignedClasses.map((classRow) => {
       const assignedCount = assignmentsByClass.get(classRow.id) ?? 0;
@@ -659,6 +736,7 @@ export const getParentDashboardData = createServerFn({ method: "GET" }).handler(
       return {
         classId: classRow.id,
         classTitle: classRow.title,
+        schoolYear: classRow.schoolYear ?? null,
         assignedCount,
         submittedCount,
         completionPercent,
@@ -669,6 +747,16 @@ export const getParentDashboardData = createServerFn({ method: "GET" }).handler(
     return acc;
   }, {});
 
+  const schoolYears = Array.from(
+    new Set(
+      classRows
+        .map((classRow) => classRow.schoolYear)
+        .filter((year): year is string => typeof year === "string" && /^\d{4}-\d{4}$/.test(year)),
+    ),
+  ).sort().reverse();
+
+  const hasClassesWithoutSchoolYear = classRows.some((classRow) => !classRow.schoolYear);
+
   return {
     students: studentRows.map((student) => ({
       id: student.id,
@@ -676,6 +764,8 @@ export const getParentDashboardData = createServerFn({ method: "GET" }).handler(
       gradeLevel: student.gradeLevel ?? "",
     })),
     metricsByStudent,
+    schoolYears,
+    hasClassesWithoutSchoolYear,
   };
 });
 
@@ -1122,17 +1212,18 @@ export const getAdminConsoleData = createServerFn({ method: "GET" }).handler(
       session.session.activeOrganizationId,
     );
 
-    const actor = await db.query.users.findFirst({
-      where: eq(users.id, session.user.id),
-    });
-
-    const actorAdminMembership = await db.query.memberships.findFirst({
-      where: and(
-        eq(memberships.userId, session.user.id),
-        eq(memberships.organizationId, organizationId),
-        eq(memberships.role, "admin"),
-      ),
-    });
+    const [actor, actorAdminMembership] = await Promise.all([
+      db.query.users.findFirst({
+        where: eq(users.id, session.user.id),
+      }),
+      db.query.memberships.findFirst({
+        where: and(
+          eq(memberships.userId, session.user.id),
+          eq(memberships.organizationId, organizationId),
+          eq(memberships.role, "admin"),
+        ),
+      }),
+    ]);
 
     if (
       session.activeRole !== "admin" &&
@@ -1142,24 +1233,25 @@ export const getAdminConsoleData = createServerFn({ method: "GET" }).handler(
       throw new Error("FORBIDDEN");
     }
 
-    const organizationRecord = await db.query.organizations.findFirst({
-      where: eq(organizations.id, organizationId),
-    });
-
-    const memberRows = await db
-      .select({
-        membershipId: memberships.id,
-        userId: users.id,
-        name: users.name,
-        email: users.email,
-        role: memberships.role,
-        accountRole: users.role,
-        createdAt: memberships.createdAt,
-      })
-      .from(memberships)
-      .innerJoin(users, eq(memberships.userId, users.id))
-      .where(eq(memberships.organizationId, organizationId))
-      .orderBy(desc(memberships.createdAt));
+    const [organizationRecord, memberRows] = await Promise.all([
+      db.query.organizations.findFirst({
+        where: eq(organizations.id, organizationId),
+      }),
+      db
+        .select({
+          membershipId: memberships.id,
+          userId: users.id,
+          name: users.name,
+          email: users.email,
+          role: memberships.role,
+          accountRole: users.role,
+          createdAt: memberships.createdAt,
+        })
+        .from(memberships)
+        .innerJoin(users, eq(memberships.userId, users.id))
+        .where(eq(memberships.organizationId, organizationId))
+        .orderBy(desc(memberships.createdAt)),
+    ]);
 
     return {
       organization: organizationRecord,
@@ -1171,10 +1263,16 @@ export const getAdminConsoleData = createServerFn({ method: "GET" }).handler(
   },
 );
 
+const schoolYearSchema = z
+  .string()
+  .regex(/^\d{4}-\d{4}$/, "School year must be in YYYY-YYYY format (e.g. 2024-2025)")
+  .optional();
+
 const createClassInput = z.object({
   title: z.string().min(1),
   description: z.string().optional(),
-  studentProfileId: z.string().min(1),
+  schoolYear: schoolYearSchema,
+  studentProfileIds: z.array(z.string().min(1)).min(1),
 });
 
 export const createClassRecord = createServerFn({ method: "POST" })
@@ -1189,17 +1287,19 @@ export const createClassRecord = createServerFn({ method: "POST" })
     );
 
     const classId = crypto.randomUUID();
+    const uniqueProfileIds = Array.from(new Set(data.studentProfileIds));
 
-    const targetStudent = await db.query.profiles.findFirst({
+    const canManageAllStudents = session.activeRole === "admin";
+    const targetStudents = await db.query.profiles.findMany({
       where: and(
-        eq(profiles.id, data.studentProfileId),
-        eq(profiles.parentUserId, session.user.id),
         eq(profiles.organizationId, organizationId),
         eq(profiles.status, "active"),
+        ...(canManageAllStudents ? [] : [eq(profiles.parentUserId, session.user.id)]),
+        inArray(profiles.id, uniqueProfileIds),
       ),
     });
 
-    if (!targetStudent) {
+    if (targetStudents.length !== uniqueProfileIds.length) {
       throw new Error("FORBIDDEN");
     }
 
@@ -1208,9 +1308,17 @@ export const createClassRecord = createServerFn({ method: "POST" })
       organizationId,
       title: data.title,
       description: data.description,
-      studentProfileId: data.studentProfileId,
+      schoolYear: data.schoolYear ?? null,
       createdByUserId: session.user.id,
     });
+
+    await db.insert(classEnrollments).values(
+      uniqueProfileIds.map((profileId) => ({
+        id: crypto.randomUUID(),
+        classId,
+        profileId,
+      })),
+    );
 
     return {
       success: true,
@@ -1222,7 +1330,8 @@ const updateClassInput = z.object({
   classId: z.string().min(1),
   title: z.string().min(1),
   description: z.string().optional(),
-  studentProfileId: z.string().min(1),
+  schoolYear: schoolYearSchema,
+  studentProfileIds: z.array(z.string().min(1)).min(1),
 });
 
 export const updateClassRecord = createServerFn({ method: "POST" })
@@ -1247,28 +1356,48 @@ export const updateClassRecord = createServerFn({ method: "POST" })
       throw new Error("NOT_FOUND");
     }
 
-    const targetStudent = await db.query.profiles.findFirst({
+    const uniqueProfileIds = Array.from(new Set(data.studentProfileIds));
+
+    const canManageAllStudents = session.activeRole === "admin";
+    const targetStudents = await db.query.profiles.findMany({
       where: and(
-        eq(profiles.id, data.studentProfileId),
-        eq(profiles.parentUserId, session.user.id),
         eq(profiles.organizationId, organizationId),
         eq(profiles.status, "active"),
+        ...(canManageAllStudents ? [] : [eq(profiles.parentUserId, session.user.id)]),
+        inArray(profiles.id, uniqueProfileIds),
       ),
     });
 
-    if (!targetStudent) {
+    if (targetStudents.length !== uniqueProfileIds.length) {
       throw new Error("FORBIDDEN");
     }
 
-    await db
-      .update(classes)
-      .set({
-        title: data.title.trim(),
-        description: data.description?.trim() || null,
-        studentProfileId: data.studentProfileId,
-        updatedAt: new Date().toISOString(),
-      })
-      .where(and(eq(classes.id, data.classId), eq(classes.organizationId, organizationId)));
+    try {
+      await db
+        .update(classes)
+        .set({
+          title: data.title.trim(),
+          description: data.description?.trim() || null,
+          schoolYear: data.schoolYear ?? null,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(and(eq(classes.id, data.classId), eq(classes.organizationId, organizationId)));
+
+      await db
+        .delete(classEnrollments)
+        .where(eq(classEnrollments.classId, data.classId));
+
+      await db.insert(classEnrollments).values(
+        uniqueProfileIds.map((profileId) => ({
+          id: crypto.randomUUID(),
+          classId: data.classId,
+          profileId,
+        })),
+      );
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown class update DB error";
+      throw new Error(`CLASS_UPDATE_DB_ERROR: ${errorMessage}`);
+    }
 
     return { success: true };
   });
@@ -1283,6 +1412,7 @@ export const getClassEngineData = createServerFn({ method: "GET" }).handler(
       session.session.activeOrganizationId,
     );
 
+    const canManageAllStudents = session.activeRole === "admin";
     const [classRows, studentRows] = await Promise.all([
       db.query.classes.findMany({
         where: eq(classes.organizationId, organizationId),
@@ -1290,33 +1420,43 @@ export const getClassEngineData = createServerFn({ method: "GET" }).handler(
       }),
       db.query.profiles.findMany({
         where: and(
-          eq(profiles.parentUserId, session.user.id),
           eq(profiles.organizationId, organizationId),
           eq(profiles.status, "active"),
+          ...(canManageAllStudents ? [] : [eq(profiles.parentUserId, session.user.id)]),
         ),
         orderBy: [desc(profiles.createdAt)],
       }),
     ]);
 
+    const enrollmentRows = classRows.length
+      ? await db.query.classEnrollments.findMany({
+          where: inArray(
+            classEnrollments.classId,
+            classRows.map((classRow) => classRow.id),
+          ),
+        })
+      : [];
+
     const studentMap = new Map(studentRows.map((student) => [student.id, student]));
+    const enrollmentsByClassId = new Map<string, string[]>();
+
+    for (const enrollment of enrollmentRows) {
+      const existing = enrollmentsByClassId.get(enrollment.classId) ?? [];
+      existing.push(enrollment.profileId);
+      enrollmentsByClassId.set(enrollment.classId, existing);
+    }
 
     return {
       classes: classRows.map((classRow) => ({
         ...classRow,
-        studentProfile: classRow.studentProfileId
-          ? (() => {
-              const student = studentMap.get(classRow.studentProfileId);
-              if (!student) {
-                return null;
-              }
-
-              return {
-                id: student.id,
-                displayName: student.displayName,
-                gradeLevel: student.gradeLevel ?? null,
-              };
-            })()
-          : null,
+        enrolledStudents: (enrollmentsByClassId.get(classRow.id) ?? [])
+          .map((profileId) => studentMap.get(profileId))
+          .filter((student): student is NonNullable<typeof student> => Boolean(student))
+          .map((student) => ({
+            id: student.id,
+            displayName: student.displayName,
+            gradeLevel: student.gradeLevel ?? null,
+          })),
       })),
       students: studentRows.map((student) => ({
         id: student.id,
@@ -1359,12 +1499,23 @@ export const searchYoutubeWithAI = createServerFn({ method: "POST" })
     return { videos };
   });
 
+const ASSIGNMENT_CONTENT_TYPES = [
+  "text",
+  "file",
+  "url",
+  "video",
+  "quiz",
+  "essay_questions",
+  "report",
+] as const;
+
 const createAssignmentInput = z.object({
   classId: z.string().min(1),
   title: z.string().min(1),
   description: z.string().optional(),
-  contentType: z.enum(["text", "file", "url", "video", "essay", "quiz"]),
+  contentType: z.enum(ASSIGNMENT_CONTENT_TYPES),
   contentRef: z.string().optional(),
+  linkedAssignmentId: z.string().optional(),
   dueAt: z.string().optional(),
 });
 
@@ -1390,6 +1541,17 @@ export const createAssignmentRecord = createServerFn({ method: "POST" })
       throw new Error("FORBIDDEN");
     }
 
+    // If linking to another assignment, verify it belongs to this org
+    if (data.linkedAssignmentId) {
+      const linked = await db.query.assignments.findFirst({
+        where: and(
+          eq(assignments.id, data.linkedAssignmentId),
+          eq(assignments.organizationId, organizationId),
+        ),
+      });
+      if (!linked) throw new Error("LINKED_ASSIGNMENT_NOT_FOUND");
+    }
+
     const assignmentId = crypto.randomUUID();
 
     await db.insert(assignments).values({
@@ -1400,6 +1562,7 @@ export const createAssignmentRecord = createServerFn({ method: "POST" })
       description: data.description,
       contentType: data.contentType,
       contentRef: data.contentRef,
+      linkedAssignmentId: data.linkedAssignmentId ?? null,
       dueAt: data.dueAt,
       createdByUserId: session.user.id,
     });
@@ -1414,6 +1577,8 @@ const updateAssignmentInput = z.object({
   assignmentId: z.string().min(1),
   title: z.string().min(1),
   description: z.string().optional(),
+  contentRef: z.string().optional(),
+  linkedAssignmentId: z.string().nullable().optional(),
   dueAt: z.string().optional(),
 });
 
@@ -1439,11 +1604,27 @@ export const updateAssignmentRecord = createServerFn({ method: "POST" })
       throw new Error("NOT_FOUND");
     }
 
+    // If linking to another assignment, verify it belongs to this org
+    if (data.linkedAssignmentId) {
+      const linked = await db.query.assignments.findFirst({
+        where: and(
+          eq(assignments.id, data.linkedAssignmentId),
+          eq(assignments.organizationId, organizationId),
+        ),
+      });
+      if (!linked) throw new Error("LINKED_ASSIGNMENT_NOT_FOUND");
+    }
+
     await db
       .update(assignments)
       .set({
         title: data.title.trim(),
         description: data.description?.trim() || null,
+        contentRef: data.contentRef !== undefined ? data.contentRef : existing.contentRef,
+        linkedAssignmentId:
+          data.linkedAssignmentId !== undefined
+            ? data.linkedAssignmentId
+            : existing.linkedAssignmentId,
         dueAt: data.dueAt || null,
         updatedAt: new Date().toISOString(),
       })
@@ -1528,6 +1709,59 @@ export const deleteStudentProfileRecord = createServerFn({ method: "POST" })
     return { success: true };
   });
 
+export const archiveStudentProfile = createServerFn({ method: "POST" })
+  .inputValidator((data) => deleteWithPinInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    await verifyParentPinForSession(session.user.id, data.parentPin);
+    const db = getDb();
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+    const existing = await db.query.profiles.findFirst({
+      where: and(
+        eq(profiles.id, data.id),
+        eq(profiles.parentUserId, session.user.id),
+        eq(profiles.organizationId, organizationId),
+        eq(profiles.status, "active"),
+      ),
+    });
+    if (!existing) throw new Error("NOT_FOUND");
+    await db
+      .update(profiles)
+      .set({ status: "archived", updatedAt: new Date().toISOString() })
+      .where(eq(profiles.id, data.id));
+    return { success: true };
+  });
+
+const restoreStudentInput = z.object({ id: z.string().min(1) });
+
+export const restoreStudentProfile = createServerFn({ method: "POST" })
+  .inputValidator((data) => restoreStudentInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+    const existing = await db.query.profiles.findFirst({
+      where: and(
+        eq(profiles.id, data.id),
+        eq(profiles.parentUserId, session.user.id),
+        eq(profiles.organizationId, organizationId),
+        eq(profiles.status, "archived"),
+      ),
+    });
+    if (!existing) throw new Error("NOT_FOUND");
+    await db
+      .update(profiles)
+      .set({ status: "active", updatedAt: new Date().toISOString() })
+      .where(eq(profiles.id, data.id));
+    return { success: true };
+  });
+
 export const getCurriculumBuilderData = createServerFn({ method: "GET" }).handler(
   async () => {
     const session = await requireActiveRole(["admin", "parent"]);
@@ -1556,6 +1790,38 @@ export const getCurriculumBuilderData = createServerFn({ method: "GET" }).handle
   },
 );
 
+// ── Quiz generation from a specific video (fetches transcript first) ──────────
+
+const generateQuizFromVideoInput = z.object({
+  videoId: z.string().min(1),
+  videoTitle: z.string().min(1),
+  videoDescription: z.string().optional(),
+  gradeLevel: z.string().optional(),
+  questionCount: z.number().int().min(3).max(10).default(5),
+});
+
+export const generateQuizFromVideo = createServerFn({ method: "POST" })
+  .inputValidator((data) => generateQuizFromVideoInput.parse(data))
+  .handler(async ({ data }) => {
+    await requireActiveRole(["admin", "parent"]);
+
+    // Try to fetch transcript — falls back gracefully if unavailable
+    const transcript = await fetchYoutubeTranscript(data.videoId);
+
+    const quiz = await generateQuizDraft({
+      topic: data.videoTitle,
+      gradeLevel: data.gradeLevel,
+      questionCount: data.questionCount,
+      transcript: transcript ?? undefined,
+      videoDescription: data.videoDescription,
+    });
+
+    return {
+      quiz,
+      usedTranscript: transcript !== null,
+    };
+  });
+
 const generateQuizInput = z.object({
   topic: z.string().min(3),
   gradeLevel: z.string().optional(),
@@ -1567,7 +1833,7 @@ export const generateQuizDraftForCurriculum = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     await requireActiveRole(["admin", "parent"]);
 
-    const quiz = await generateQuizDraft(data);
+    const quiz = await generateQuizDraft({ topic: data.topic, gradeLevel: data.gradeLevel, questionCount: data.questionCount });
     return {
       quiz,
     };
@@ -1634,11 +1900,29 @@ export const getStudentWorkspaceData = createServerFn({ method: "GET" })
       data?.profileId,
     );
 
+    const enrolledClassRows = await db
+      .select({ classId: classes.id })
+      .from(classEnrollments)
+      .innerJoin(classes, eq(classEnrollments.classId, classes.id))
+      .where(
+        and(
+          eq(classEnrollments.profileId, profile.id),
+          eq(classes.organizationId, organizationId),
+        ),
+      );
+
+    const enrolledClassIds = enrolledClassRows.map((row) => row.classId);
+
     const [assignmentRows, submissionRows] = await Promise.all([
-      db.query.assignments.findMany({
-        where: eq(assignments.organizationId, organizationId),
-        orderBy: [desc(assignments.createdAt)],
-      }),
+      enrolledClassIds.length
+        ? db.query.assignments.findMany({
+            where: and(
+              eq(assignments.organizationId, organizationId),
+              inArray(assignments.classId, enrolledClassIds),
+            ),
+            orderBy: [desc(assignments.createdAt)],
+          })
+        : Promise.resolve([]),
       db.query.submissions.findMany({
         where: and(
           eq(submissions.organizationId, organizationId),
@@ -1656,22 +1940,6 @@ export const getStudentWorkspaceData = createServerFn({ method: "GET" })
       },
       assignments: assignmentRows,
       submissions: submissionRows,
-      lesson: {
-        videoUrl:
-          "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4",
-        checkpoints: [
-          {
-            id: "q1",
-            atSeconds: 3,
-            prompt: "What is the first visual detail you notice in the flower video?",
-          },
-          {
-            id: "q2",
-            atSeconds: 8,
-            prompt: "Describe one change you observed after the opening frames.",
-          },
-        ],
-      },
     };
   });
 
@@ -1726,6 +1994,17 @@ export const submitAssignmentWork = createServerFn({ method: "POST" })
     ]);
 
     if (!assignmentRecord || !profileRecord) {
+      throw new Error("FORBIDDEN");
+    }
+
+    const enrollment = await db.query.classEnrollments.findFirst({
+      where: and(
+        eq(classEnrollments.classId, assignmentRecord.classId),
+        eq(classEnrollments.profileId, data.profileId),
+      ),
+    });
+
+    if (!enrollment) {
       throw new Error("FORBIDDEN");
     }
 
@@ -1808,13 +2087,28 @@ export const getProgressSnapshot = createServerFn({ method: "GET" })
       data?.profileId,
     );
 
-    const [classRows, assignmentRows, submissionRows] = await Promise.all([
-      db.query.classes.findMany({
-        where: eq(classes.organizationId, organizationId),
-      }),
-      db.query.assignments.findMany({
-        where: eq(assignments.organizationId, organizationId),
-      }),
+    const enrolledClassRows = await db
+      .select({ classId: classes.id, classTitle: classes.title })
+      .from(classEnrollments)
+      .innerJoin(classes, eq(classEnrollments.classId, classes.id))
+      .where(
+        and(
+          eq(classEnrollments.profileId, profile.id),
+          eq(classes.organizationId, organizationId),
+        ),
+      );
+
+    const enrolledClassIds = enrolledClassRows.map((row) => row.classId);
+
+    const [assignmentRows, submissionRows] = await Promise.all([
+      enrolledClassIds.length
+        ? db.query.assignments.findMany({
+            where: and(
+              eq(assignments.organizationId, organizationId),
+              inArray(assignments.classId, enrolledClassIds),
+            ),
+          })
+        : Promise.resolve([]),
       db.query.submissions.findMany({
         where: and(
           eq(submissions.organizationId, organizationId),
@@ -1827,15 +2121,15 @@ export const getProgressSnapshot = createServerFn({ method: "GET" })
       submissionRows.map((row) => [row.assignmentId, row]),
     );
 
-    const mastery = classRows.map((classRow) => {
+    const mastery = enrolledClassRows.map((classRow) => {
       const classAssignments = assignmentRows.filter(
-        (assignment) => assignment.classId === classRow.id,
+        (assignment) => assignment.classId === classRow.classId,
       );
 
       if (classAssignments.length === 0) {
         return {
-          classId: classRow.id,
-          classTitle: classRow.title,
+          classId: classRow.classId,
+          classTitle: classRow.classTitle,
           completionPercent: 0,
           averageScore: null as number | null,
         };
@@ -1866,8 +2160,8 @@ export const getProgressSnapshot = createServerFn({ method: "GET" })
           : null;
 
       return {
-        classId: classRow.id,
-        classTitle: classRow.title,
+        classId: classRow.classId,
+        classTitle: classRow.classTitle,
         completionPercent,
         averageScore,
       };

@@ -211,7 +211,7 @@ function RegisterPage() {
               onKeyDown={handleKeyDown}
               className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"
               placeholder="1234"
-              maxLength="6"
+              maxLength={6}
             />
             <p className="mt-1 text-xs text-slate-500">4-6 digits. Required for students to switch to their workspace.</p>
           </label>
