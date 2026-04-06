@@ -39,6 +39,7 @@ function RootComponent() {
           isAdminParent={shellData.isAdminParent}
           activeProfileId={shellData.activeProfileId}
           profiles={shellData.profiles}
+          pendingRewardsCount={shellData.pendingRewardsCount ?? 0}
         >
           <Outlet />
         </AppShell>

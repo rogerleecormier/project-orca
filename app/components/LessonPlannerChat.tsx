@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { lessonPlannerChat } from "../server/functions";
+import { OrcaMark } from "./icons/orca-mark";
 
 type Message = {
   role: "user" | "assistant";
@@ -18,6 +19,37 @@ type Props = {
   classList: string[];
   onCreateAssignment?: (suggestion: AssignmentSuggestion) => void;
 };
+
+type ChatHistoryItem = {
+  id: string;
+  title: string;
+  messages: Message[];
+  updatedAt: string;
+};
+
+const CHAT_STORAGE_KEY = "proorca.lessonPlannerChat.v2";
+const MAX_HISTORY_ITEMS = 12;
+
+function buildWelcomeMessage(studentName: string, grade: string | null): Message {
+  return {
+    role: "assistant",
+    content: `Hi! I'm your curriculum assistant for ${studentName}${grade ? ` (Grade ${grade})` : ""}. I can help you plan lessons, suggest topics, or generate assignment sequences. What would you like to work on?`,
+  };
+}
+
+function getHistoryTitle(messages: Message[]) {
+  const firstUserMessage = messages.find((message) => message.role === "user")?.content.trim();
+  if (!firstUserMessage) {
+    return "Untitled chat";
+  }
+  return firstUserMessage.length > 48
+    ? `${firstUserMessage.slice(0, 48).trimEnd()}...`
+    : firstUserMessage;
+}
+
+function shouldArchiveMessages(messages: Message[]) {
+  return messages.some((message) => message.role === "user");
+}
 
 function extractTopicFromPrompt(prompt: string) {
   return prompt
@@ -111,11 +143,13 @@ function MessageBubble({
   grade,
   previousUserPrompt,
   onCreateAssignment,
+  onSuggestionSelected,
 }: {
   message: Message;
   grade: string | null;
   previousUserPrompt: string | null;
   onCreateAssignment?: (s: AssignmentSuggestion) => void;
+  onSuggestionSelected?: () => void;
 }) {
   const isUser = message.role === "user";
   const parsedSuggestions = !isUser ? parseAssignmentSuggestions(message.content) : [];
@@ -129,30 +163,45 @@ function MessageBubble({
 
   return (
     <div className={`flex flex-col gap-1.5 ${isUser ? "items-end" : "items-start"}`}>
-      <div
-        className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${
-          isUser
-            ? "bg-cyan-600 text-white"
-            : "bg-slate-100 text-slate-800 border border-slate-200"
-        }`}
-      >
-        {displayText}
-      </div>
-      {suggestions.length > 0 && onCreateAssignment ? (
-        <div className="flex w-full max-w-[85%] flex-col gap-2">
-          {suggestions.map((suggestion) => (
-            <button
-              key={`${suggestion.title}-${suggestion.type}`}
-              onClick={() => onCreateAssignment(suggestion)}
-              className="rounded-xl border border-cyan-200 bg-cyan-50 px-3 py-2 text-left text-xs text-cyan-900 hover:bg-cyan-100 transition"
-            >
-              <p className="font-semibold">Create: {suggestion.title}</p>
-              <p className="mt-0.5 text-[11px] uppercase tracking-wide text-cyan-700">{suggestion.type}</p>
-              <p className="mt-1 text-xs text-cyan-900/90">{suggestion.description}</p>
-            </button>
-          ))}
+      {/* Main bubble */}
+      {displayText ? (
+        <div
+          className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${
+            isUser
+              ? "bg-cyan-600 text-white"
+              : "bg-slate-100 text-slate-800 border border-slate-200"
+          }`}
+        >
+          {displayText}
         </div>
       ) : null}
+
+      {/* Suggestion cards — each rendered as its own bubble-style card */}
+      {suggestions.length > 0 && onCreateAssignment
+        ? suggestions.map((suggestion) => (
+            <div
+              key={`${suggestion.title}-${suggestion.type}`}
+              className="max-w-[85%] rounded-2xl border border-cyan-200 bg-cyan-50/80 px-3.5 py-3 text-sm"
+            >
+              <p className="font-semibold text-cyan-900 leading-snug">{suggestion.title}</p>
+              <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-cyan-600">
+                {suggestion.type}
+              </p>
+              <p className="mt-1.5 text-xs leading-relaxed text-cyan-900/80">
+                {suggestion.description}
+              </p>
+              <button
+                onClick={() => {
+                  onCreateAssignment(suggestion);
+                  onSuggestionSelected?.();
+                }}
+                className="mt-2.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 transition"
+              >
+                + Create Assignment
+              </button>
+            </div>
+          ))
+        : null}
     </div>
   );
 }
@@ -160,6 +209,8 @@ function MessageBubble({
 export function LessonPlannerChat({ studentName, grade, classList, onCreateAssignment }: Props) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [history, setHistory] = useState<ChatHistoryItem[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -167,13 +218,46 @@ export function LessonPlannerChat({ studentName, grade, classList, onCreateAssig
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
+    try {
+      const raw = localStorage.getItem(CHAT_STORAGE_KEY);
+      if (!raw) {
+        return;
+      }
+
+      const parsed = JSON.parse(raw) as {
+        currentMessages?: Message[];
+        history?: ChatHistoryItem[];
+      };
+
+      if (Array.isArray(parsed.currentMessages) && parsed.currentMessages.length > 0) {
+        setMessages(parsed.currentMessages);
+      }
+
+      if (Array.isArray(parsed.history)) {
+        setHistory(parsed.history.slice(0, MAX_HISTORY_ITEMS));
+      }
+    } catch {
+      // Ignore malformed persisted chat state.
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        CHAT_STORAGE_KEY,
+        JSON.stringify({
+          currentMessages: messages,
+          history,
+        }),
+      );
+    } catch {
+      // Ignore storage write failures.
+    }
+  }, [messages, history]);
+
+  useEffect(() => {
     if (open && messages.length === 0) {
-      setMessages([
-        {
-          role: "assistant",
-          content: `Hi! I'm your curriculum assistant for ${studentName}${grade ? ` (Grade ${grade})` : ""}. I can help you plan lessons, suggest topics, or generate assignment sequences. What would you like to work on?`,
-        },
-      ]);
+      setMessages([buildWelcomeMessage(studentName, grade)]);
     }
   }, [open, messages.length, studentName, grade]);
 
@@ -188,6 +272,47 @@ export function LessonPlannerChat({ studentName, grade, classList, onCreateAssig
       inputRef.current?.focus();
     }
   }, [open]);
+
+  const archiveCurrentChat = () => {
+    if (!shouldArchiveMessages(messages)) {
+      return;
+    }
+
+    const historyItem: ChatHistoryItem = {
+      id: crypto.randomUUID(),
+      title: getHistoryTitle(messages),
+      messages,
+      updatedAt: new Date().toISOString(),
+    };
+
+    setHistory((current) => [historyItem, ...current].slice(0, MAX_HISTORY_ITEMS));
+  };
+
+  const startNewChat = () => {
+    archiveCurrentChat();
+    setMessages([buildWelcomeMessage(studentName, grade)]);
+    setInput("");
+    setError(null);
+    setShowHistory(false);
+  };
+
+  const restoreHistoryItem = (item: ChatHistoryItem) => {
+    archiveCurrentChat();
+    setMessages(item.messages);
+    setInput("");
+    setError(null);
+    setShowHistory(false);
+  };
+
+  const clearHistory = () => {
+    setHistory([]);
+    setShowHistory(false);
+  };
+
+  const handleCreateAssignmentFromSuggestion = (suggestion: AssignmentSuggestion) => {
+    onCreateAssignment?.(suggestion);
+    setOpen(false);
+  };
 
   const send = async () => {
     const text = input.trim();
@@ -233,35 +358,16 @@ export function LessonPlannerChat({ studentName, grade, classList, onCreateAssig
       <button
         onClick={() => setOpen(true)}
         aria-label="Open AI Lesson Planner"
-        className="fixed bottom-6 right-6 z-40 flex items-center gap-2 rounded-full bg-cyan-600 px-4 py-3 text-sm font-semibold text-white shadow-lg hover:bg-cyan-700 transition"
+        className="fixed bottom-6 right-6 z-40 flex h-10 w-16 items-center justify-center rounded-full bg-cyan-600 text-white shadow-lg hover:bg-cyan-700 transition"
+        title="Open Orca Assistant"
       >
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          className="h-5 w-5 shrink-0"
-          aria-hidden="true"
-        >
-          <path
-            d="M9.5 2a6.5 6.5 0 0 1 6.34 5.022A5.5 5.5 0 0 1 19 12.5c0 3.038-2.462 5.5-5.5 5.5H7A5 5 0 0 1 7 8h.085A6.504 6.504 0 0 1 9.5 2Z"
-            stroke="currentColor"
-            strokeWidth="1.6"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-          <path
-            d="M8 13h8M8 17h5"
-            stroke="currentColor"
-            strokeWidth="1.6"
-            strokeLinecap="round"
-          />
-        </svg>
-        AI Assistant
+        <OrcaMark className="h-8 w-8 shrink-0" alt="Open Orca Assistant" />
       </button>
 
       {/* Modal */}
       {open ? (
         <div
-          className="fixed inset-0 z-50 flex items-end justify-end pb-24 pr-6 sm:items-center sm:justify-end sm:pb-0 sm:pr-6"
+          className="fixed inset-0 z-50 flex items-end justify-end pb-20 pr-6 sm:items-end sm:justify-end sm:pb-20 sm:pr-6"
           role="dialog"
           aria-modal="true"
           aria-label="AI Lesson Planner"
@@ -275,30 +381,86 @@ export function LessonPlannerChat({ studentName, grade, classList, onCreateAssig
           />
 
           {/* Panel */}
-          <div className="relative flex w-full max-w-sm flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl sm:h-[580px] h-[500px]">
+          <div className="relative flex w-[min(24rem,calc(100vw-1rem))] max-w-none flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl h-[min(500px,calc(100dvh-6.5rem))] sm:h-[min(580px,calc(100dvh-7rem))]">
             {/* Header */}
             <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
               <div>
-                <p className="text-sm font-semibold text-slate-900">AI Lesson Planner</p>
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-cyan-100 text-cyan-700" aria-hidden="true">
+                    <OrcaMark className="h-5 w-5" alt="" />
+                  </span>
+                </div>
                 <p className="text-xs text-slate-500">
                   {studentName}{grade ? ` · Grade ${grade}` : ""}
                 </p>
               </div>
-              <button
-                onClick={() => setOpen(false)}
-                className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100"
-                aria-label="Close"
-              >
-                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden="true">
-                  <path
-                    d="M18 6 6 18M6 6l12 12"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                  />
-                </svg>
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setShowHistory((current) => !current)}
+                  className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100"
+                  aria-label="Toggle chat history"
+                >
+                  History
+                </button>
+                <button
+                  onClick={startNewChat}
+                  className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-100"
+                  aria-label="Start new chat"
+                >
+                  New Chat
+                </button>
+                <button
+                  onClick={() => setOpen(false)}
+                  className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100"
+                  aria-label="Close"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden="true">
+                    <path
+                      d="M18 6 6 18M6 6l12 12"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                </button>
+              </div>
             </div>
+
+            {showHistory ? (
+              <div className="max-h-44 overflow-y-auto border-b border-slate-200 bg-slate-50 px-4 py-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Chat History</p>
+                  {history.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={clearHistory}
+                      className="text-[11px] font-medium text-rose-600 hover:text-rose-700"
+                    >
+                      Clear
+                    </button>
+                  ) : null}
+                </div>
+                {history.length === 0 ? (
+                  <p className="text-xs text-slate-500">No saved chats yet.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {history.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => restoreHistoryItem(item)}
+                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-left hover:bg-slate-100"
+                      >
+                        <p className="text-xs font-semibold text-slate-800">{item.title}</p>
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          {new Date(item.updatedAt).toLocaleString()}
+                        </p>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : null}
 
             {/* Messages */}
             <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
@@ -317,7 +479,8 @@ export function LessonPlannerChat({ studentName, grade, classList, onCreateAssig
                       message={msg}
                       grade={grade}
                       previousUserPrompt={previousUserPrompt}
-                      onCreateAssignment={onCreateAssignment}
+                      onCreateAssignment={handleCreateAssignmentFromSuggestion}
+                      onSuggestionSelected={() => setShowHistory(false)}
                     />
                   );
                 })()

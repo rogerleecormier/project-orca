@@ -1,6 +1,8 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Link, useRouter, useRouterState } from "@tanstack/react-router";
+import { LessonPlannerChat } from "./LessonPlannerChat";
+import { OrcaMark } from "./icons/orca-mark";
 import { logoutSession, switchWorkspaceView } from "../server/functions";
 
 type ActiveRole = "admin" | "parent" | "student";
@@ -18,7 +20,10 @@ type AppShellProps = {
   isAdminParent: boolean;
   activeProfileId: string | null;
   profiles: StudentProfile[];
+  pendingRewardsCount?: number;
 };
+
+const CHAT_SUGGESTION_STORAGE_KEY = "proorca.lessonPlanner.selectedSuggestion.v1";
 
 // ── Inline PIN prompt (student → parent quick-switch) ─────────────────────────
 
@@ -82,6 +87,7 @@ export function AppShell({
   isAdminParent,
   activeProfileId,
   profiles,
+  pendingRewardsCount = 0,
 }: AppShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -92,6 +98,18 @@ export function AppShell({
   const [selectedStudentId, setSelectedStudentId] = useState(
     activeProfileId ?? profiles[0]?.id ?? "",
   );
+
+  useEffect(() => {
+    if (profiles.length === 0) {
+      setSelectedStudentId("");
+      return;
+    }
+
+    const stillExists = profiles.some((profile) => profile.id === selectedStudentId);
+    if (!stillExists) {
+      setSelectedStudentId(activeProfileId ?? profiles[0]?.id ?? "");
+    }
+  }, [profiles, selectedStudentId, activeProfileId]);
 
   // PIN prompt state (student → parent)
   const [showPinPrompt, setShowPinPrompt] = useState(false);
@@ -104,7 +122,7 @@ export function AppShell({
   });
 
   if (!isAuthenticated || isLoggingOut) {
-    return <main className="min-h-screen p-4 md:p-8">{children}</main>;
+    return <>{children}</>;
   }
 
   const roleLabel =
@@ -123,6 +141,26 @@ export function AppShell({
   const canAccessAdmin = activeRole === "admin" || (activeRole === "parent" && isAdminParent);
   const canAccessParentModules = activeRole === "parent" || activeRole === "admin";
   const isStudentSession = activeRole === "student";
+  const fallbackProfile = activeStudentProfile ?? profiles[0] ?? null;
+
+  const handleCreateAssignmentFromChat = (suggestion: {
+    title: string;
+    type: string;
+    description: string;
+  }) => {
+    try {
+      sessionStorage.setItem(CHAT_SUGGESTION_STORAGE_KEY, JSON.stringify(suggestion));
+    } catch {
+      // Ignore storage write failures and still navigate.
+    }
+
+    if (pathname.startsWith("/assignments")) {
+      window.dispatchEvent(new CustomEvent("proorca:lesson-planner-suggestion"));
+      return;
+    }
+
+    window.location.assign("/assignments");
+  };
 
   // ── Switch parent → student (no PIN needed, parent is authenticated) ─────────
   const switchToStudent = async () => {
@@ -132,8 +170,13 @@ export function AppShell({
     try {
       await switchWorkspaceView({ data: { mode: "student", profileId: selectedStudentId } });
       window.location.assign("/student");
-    } catch {
-      setSwitchError("Could not switch to student view.");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "";
+      if (msg.includes("FORBIDDEN") || msg.includes("PROFILE_REQUIRED")) {
+        setSwitchError("Selected student is no longer available. Pick an active student and try again.");
+      } else {
+        setSwitchError("Could not switch to student view.");
+      }
     } finally {
       setIsSwitching(false);
     }
@@ -168,15 +211,7 @@ export function AppShell({
             <p className="text-xs uppercase tracking-[0.25em] text-cyan-700">Project Orca</p>
             <div className="mt-2 flex items-center gap-2">
               <span className="orca-icon-chip" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4">
-                  <path
-                    d="M4 14c3.5 0 5.5-2.5 8-2.5 2 0 3.8 1 6 1.8V9.5l2 1.2-2 1.1v4.7c-2.5-.5-4.2-1.5-6-1.5-2.8 0-4.5 2.5-8 2.5v-3.5Z"
-                    stroke="currentColor"
-                    strokeWidth="1.6"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
+                <OrcaMark className="h-6 w-6" alt="" />
               </span>
               <h1 className="text-2xl font-semibold text-slate-900">ProOrca</h1>
             </div>
@@ -246,6 +281,18 @@ export function AppShell({
 
             {canAccessParentModules ? (
               <Link
+                to="/templates"
+                className={`block w-full rounded-xl px-3 py-2 text-left text-sm font-medium transition ${
+                  pathname.startsWith("/templates") ? "bg-cyan-50 text-cyan-900" : "text-slate-700 hover:bg-slate-100"
+                }`}
+                onClick={() => setSidebarOpen(false)}
+              >
+                Templates
+              </Link>
+            ) : null}
+
+            {canAccessParentModules ? (
+              <Link
                 to="/gradebook"
                 className={`block w-full rounded-xl px-3 py-2 text-left text-sm font-medium transition ${
                   pathname.startsWith("/gradebook") ? "bg-cyan-50 text-cyan-900" : "text-slate-700 hover:bg-slate-100"
@@ -270,6 +317,35 @@ export function AppShell({
 
             {canAccessParentModules ? (
               <Link
+                to="/skill-trees"
+                className={`block w-full rounded-xl px-3 py-2 text-left text-sm font-medium transition ${
+                  pathname.startsWith("/skill-tree") ? "bg-cyan-50 text-cyan-900" : "text-slate-700 hover:bg-slate-100"
+                }`}
+                onClick={() => setSidebarOpen(false)}
+              >
+                Skill Maps
+              </Link>
+            ) : null}
+
+            {canAccessParentModules ? (
+              <Link
+                to="/rewards"
+                className={`relative flex items-center justify-between rounded-xl px-3 py-2 text-sm font-medium transition ${
+                  pathname.startsWith("/rewards") ? "bg-cyan-50 text-cyan-900" : "text-slate-700 hover:bg-slate-100"
+                }`}
+                onClick={() => setSidebarOpen(false)}
+              >
+                Rewards
+                {pendingRewardsCount > 0 ? (
+                  <span className="flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-[10px] font-bold text-white">
+                    {pendingRewardsCount > 9 ? "9+" : pendingRewardsCount}
+                  </span>
+                ) : null}
+              </Link>
+            ) : null}
+
+            {canAccessParentModules ? (
+              <Link
                 to="/settings"
                 className={`block w-full rounded-xl px-3 py-2 text-left text-sm font-medium transition ${
                   pathname.startsWith("/settings") ? "bg-cyan-50 text-cyan-900" : "text-slate-700 hover:bg-slate-100"
@@ -284,11 +360,23 @@ export function AppShell({
               <Link
                 to="/student"
                 className={`block w-full rounded-xl px-3 py-2 text-left text-sm font-medium transition ${
-                  pathname.startsWith("/student") ? "bg-cyan-50 text-cyan-900" : "text-slate-700 hover:bg-slate-100"
+                  pathname.startsWith("/student") && !pathname.startsWith("/students") ? "bg-cyan-50 text-cyan-900" : "text-slate-700 hover:bg-slate-100"
                 }`}
                 onClick={() => setSidebarOpen(false)}
               >
                 Student Workspace
+              </Link>
+            ) : null}
+
+            {isStudentSession ? (
+              <Link
+                to="/skill-trees"
+                className={`block w-full rounded-xl px-3 py-2 text-left text-sm font-medium transition ${
+                  pathname.startsWith("/skill-tree") ? "bg-cyan-50 text-cyan-900" : "text-slate-700 hover:bg-slate-100"
+                }`}
+                onClick={() => setSidebarOpen(false)}
+              >
+                My Skill Map
               </Link>
             ) : null}
           </nav>
@@ -398,6 +486,13 @@ export function AppShell({
           </header>
 
           <main className="flex-1 p-4 md:p-8">{children}</main>
+
+          <LessonPlannerChat
+            studentName={fallbackProfile?.displayName ?? "your student"}
+            grade={fallbackProfile?.gradeLevel ?? null}
+            classList={[]}
+            onCreateAssignment={canAccessParentModules ? handleCreateAssignmentFromChat : undefined}
+          />
         </div>
       </div>
     </div>

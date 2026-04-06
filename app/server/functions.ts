@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getRequest, setResponseHeader } from "@tanstack/react-start/server";
-import { and, desc, eq, gte, inArray, isNull, lte, or } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, isNull, lte, or, sql, sum } from "drizzle-orm";
 import { env } from "cloudflare:workers";
 import { z } from "zod";
 import { getDb } from "../db/client";
@@ -14,6 +14,15 @@ import {
   memberships,
   organizations,
   profiles,
+  rewardClaims,
+  rewardTiers,
+  rewardTrackXpSnapshots,
+  rewardTracks,
+  skillTreeEdges,
+  skillTreeNodeAssignments,
+  skillTreeNodeProgress,
+  skillTreeNodes,
+  skillTrees,
   submissions,
   users,
   weekPlan,
@@ -22,9 +31,13 @@ import { auth, getRoleContext, requireActiveRole } from "../lib/auth";
 import {
   fetchYoutubeTranscript,
   fetchYoutubeTranscriptWithMeta,
+  generateCurriculumTree,
+  generateNodeExpansion,
   generateQuizDraft,
+  generateRewardSuggestions,
   generateWeekPlanWithAI as aiGenerateWeekPlan,
   gradeSubmission,
+  layoutRadialTree,
   searchYoutubeForVideos,
 } from "../lib/ai";
 
@@ -352,6 +365,791 @@ export const resetParentPinWithPassword = createServerFn({ method: "POST" })
     };
   });
 
+const contentResetWithPinInput = z.object({
+  parentPin: z.string().regex(/^\d{4,6}$/),
+});
+
+const DEMO_STUDENTS = [
+  { displayName: "Ava Rivers", gradeLevel: "3" },
+  { displayName: "Noah Chen", gradeLevel: "5" },
+  { displayName: "Mia Patel", gradeLevel: "7" },
+  { displayName: "Lucas Gomez", gradeLevel: "9" },
+] as const;
+
+function getCurrentSchoolYearLabel() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const start = now.getMonth() >= 7 ? year : year - 1;
+  return `${start}-${start + 1}`;
+}
+
+function buildDemoAssignments(
+  gradeLevel: string,
+  studentName: string,
+  subject: string,
+) {
+  if (subject === "Math") {
+    return [
+      {
+        title: `Demo · Number Sense Foundations (Grade ${gradeLevel})`,
+        description: `Warm up with core number sense strategies for ${studentName}.`,
+        contentType: "text" as const,
+        contentRef:
+          "<h2>Number Sense Warmup</h2><p>Read the examples and explain your strategy for each problem in your own words.</p>",
+      },
+      {
+        title: `Demo · Algebra Checkpoint Quiz (Grade ${gradeLevel})`,
+        description: "Quick check on order of operations and variables.",
+        contentType: "quiz" as const,
+        contentRef: JSON.stringify({
+          title: "Algebra Checkpoint",
+          questions: [
+            {
+              question: "What is 3 + 4 × 2?",
+              options: ["14", "11", "16", "10"],
+              answerIndex: 1,
+              explanation: "Multiply first, then add.",
+            },
+            {
+              question: "Solve for x: x + 5 = 12",
+              options: ["5", "6", "7", "8"],
+              answerIndex: 2,
+              explanation: "Subtract 5 from both sides.",
+            },
+            {
+              question: "What is 24 ÷ (3 × 2)?",
+              options: ["4", "8", "6", "12"],
+              answerIndex: 0,
+              explanation: "Evaluate inside parentheses first.",
+            },
+          ],
+        }),
+      },
+      {
+        title: `Demo · Multi-Step Problem Solving Report`,
+        description: "Show your process and explain your reasoning.",
+        contentType: "report" as const,
+        contentRef:
+          "<h3>Report Prompt</h3><p>Choose one multi-step word problem, solve it, and explain each step clearly.</p>",
+      },
+      {
+        title: `Demo · Fractions Video Lesson`,
+        description: "Watch and summarize key fraction strategies.",
+        contentType: "video" as const,
+        contentRef: JSON.stringify({
+          videos: [
+            {
+              videoId: "demo-fractions-101",
+              title: "Fractions in Real Life",
+              channel: "ProOrca Demo",
+              description: "Conceptual intro to fractions.",
+              thumbnail: "https://i.ytimg.com/vi/demo-fractions-101/hqdefault.jpg",
+              transcript: "Fractions represent equal parts of a whole...",
+            },
+          ],
+        }),
+      },
+    ];
+  }
+
+  if (subject === "Science") {
+    return [
+      {
+        title: `Demo · Cell Biology Reading`,
+        description: "Guided reading on cell structure and function.",
+        contentType: "text" as const,
+        contentRef:
+          "<h2>Cells 101</h2><p>Read this overview and write five facts about organelles.</p>",
+      },
+      {
+        title: `Demo · Scientific Method Quiz`,
+        description: "Identify variables, hypothesis, and conclusions.",
+        contentType: "quiz" as const,
+        contentRef: JSON.stringify({
+          title: "Scientific Method Quiz",
+          questions: [
+            {
+              question: "What step comes after forming a hypothesis?",
+              options: ["Draw conclusions", "Run an experiment", "Ask a question", "Share results"],
+              answerIndex: 1,
+              explanation: "You test the hypothesis with an experiment.",
+            },
+            {
+              question: "Which is the independent variable?",
+              options: ["The measured outcome", "The changed factor", "The control group", "The data chart"],
+              answerIndex: 1,
+              explanation: "The independent variable is what you change.",
+            },
+          ],
+        }),
+      },
+      {
+        title: `Demo · Lab Reflection Report`,
+        description: "Document observations, data, and conclusions.",
+        contentType: "report" as const,
+        contentRef:
+          "<h3>Lab Reflection</h3><p>Summarize your experiment setup, observations, and what your data suggests.</p>",
+      },
+      {
+        title: `Demo · Photosynthesis Resource`,
+        description: "Explore visual explanations and key vocabulary.",
+        contentType: "url" as const,
+        contentRef: "https://en.wikipedia.org/wiki/Photosynthesis",
+      },
+    ];
+  }
+
+  if (subject === "US History") {
+    return [
+      {
+        title: `Demo · American Revolution Overview`,
+        description: "Read about causes and major turning points.",
+        contentType: "text" as const,
+        contentRef:
+          "<h2>American Revolution</h2><p>Explain three causes of the revolution and one long-term effect.</p>",
+      },
+      {
+        title: `Demo · Constitution Essay Questions`,
+        description: "Respond to open-ended historical prompts.",
+        contentType: "essay_questions" as const,
+        contentRef: JSON.stringify({
+          questions: [
+            "Why did the founders design checks and balances?",
+            "How did the Constitution shape federal and state powers?",
+          ],
+        }),
+      },
+      {
+        title: `Demo · Timeline Quiz`,
+        description: "Sequence key events from colonial period to founding.",
+        contentType: "quiz" as const,
+        contentRef: JSON.stringify({
+          title: "US History Timeline Quiz",
+          questions: [
+            {
+              question: "Which document came first?",
+              options: ["US Constitution", "Declaration of Independence", "Bill of Rights", "Articles of Confederation"],
+              answerIndex: 1,
+              explanation: "The Declaration came in 1776.",
+            },
+            {
+              question: "The Bill of Rights was added to address:",
+              options: ["Tax policy", "Individual liberties", "Territory borders", "Trade treaties"],
+              answerIndex: 1,
+              explanation: "It protects rights and freedoms.",
+            },
+          ],
+        }),
+      },
+      {
+        title: `Demo · Primary Source Report`,
+        description: "Analyze one historical source in context.",
+        contentType: "report" as const,
+        contentRef:
+          "<h3>Source Analysis</h3><p>Choose one primary source and explain audience, purpose, and historical impact.</p>",
+      },
+    ];
+  }
+
+  return [
+    {
+      title: `Demo · Reading and Vocabulary (${subject})`,
+      description: "Read and annotate key ideas.",
+      contentType: "text" as const,
+      contentRef: `<h2>${subject} Reading</h2><p>Read and summarize the most important ideas from this lesson.</p>`,
+    },
+    {
+      title: `Demo · Quick Check Quiz (${subject})`,
+      description: "Short understanding check.",
+      contentType: "quiz" as const,
+      contentRef: JSON.stringify({
+        title: `${subject} Quick Check`,
+        questions: [
+          {
+            question: `What is the main focus of ${subject}?`,
+            options: ["Option A", "Option B", "Option C", "Option D"],
+            answerIndex: 0,
+            explanation: "This is a demo question.",
+          },
+        ],
+      }),
+    },
+    {
+      title: `Demo · Written Response (${subject})`,
+      description: "Respond in complete sentences.",
+      contentType: "essay_questions" as const,
+      contentRef: JSON.stringify({
+        questions: [
+          `Describe one important concept from ${subject}.`,
+          "What evidence supports your explanation?",
+        ],
+      }),
+    },
+    {
+      title: `Demo · Reflection Report (${subject})`,
+      description: "Summarize what you learned this week.",
+      contentType: "report" as const,
+      contentRef: "<p>Write a short reflection on this week's learning.</p>",
+    },
+  ];
+}
+
+type DemoAssignmentSeed = ReturnType<typeof buildDemoAssignments>[number];
+type DemoTreeScale = "small" | "medium" | "large" | "very_large";
+
+const DEMO_NODE_TOPICS: Record<string, string[]> = {
+  Math: [
+    "Number Sense",
+    "Operations Fluency",
+    "Fractions",
+    "Decimals",
+    "Ratios",
+    "Expressions",
+    "Equations",
+    "Graphing",
+    "Geometry Basics",
+    "Data and Probability",
+  ],
+  Science: [
+    "Scientific Method",
+    "Cells",
+    "Genetics",
+    "Ecosystems",
+    "Matter and Energy",
+    "Forces and Motion",
+    "Earth Systems",
+    "Chemistry Reactions",
+    "Astronomy",
+    "Engineering Design",
+  ],
+  "US History": [
+    "Colonial America",
+    "Revolution",
+    "Constitution",
+    "Early Republic",
+    "Westward Expansion",
+    "Civil War",
+    "Reconstruction",
+    "Industrialization",
+    "World Wars",
+    "Modern America",
+  ],
+};
+
+function getNodeCountForScale(scale: DemoTreeScale) {
+  if (scale === "small") return 5;
+  if (scale === "medium") return 10;
+  if (scale === "large") return 18;
+  return 56;
+}
+
+function getClassTreeScales(
+  subject: string,
+  studentIndex: number,
+): Array<{ label: string; scale: DemoTreeScale }> {
+  const primaryScale: DemoTreeScale =
+    subject === "Math" ? "medium" : subject === "Science" ? "medium" : "small";
+
+  const specs: Array<{ label: string; scale: DemoTreeScale }> = [
+    { label: "Core", scale: primaryScale },
+  ];
+
+  if (subject === "Science" && studentIndex === 2) {
+    specs.push({ label: "Lab Expedition", scale: "large" });
+  }
+
+  if (subject === "US History" && studentIndex === DEMO_STUDENTS.length - 1) {
+    specs.push({ label: "Mastery Marathon", scale: "very_large" });
+  }
+
+  return specs;
+}
+
+function buildNodeAssignmentSeeds(
+  subject: string,
+  gradeLevel: string,
+  studentName: string,
+  nodeTitle: string,
+  nodeIndex: number,
+): DemoAssignmentSeed[] {
+  const lessonType = (["text", "video", "url"][nodeIndex % 3] ?? "text") as
+    | "text"
+    | "video"
+    | "url";
+  const lessonTitle = `Demo · ${nodeTitle} Lesson`;
+  const lessonDescription = `Core lesson work for ${studentName} in ${subject}.`;
+  const lessonContentRef =
+    lessonType === "video"
+      ? JSON.stringify({
+          videos: [
+            {
+              videoId: `demo-${subject.toLowerCase().replace(/\s+/g, "-")}-${nodeIndex + 1}`,
+              title: `${nodeTitle} Walkthrough`,
+              channel: "ProOrca Demo",
+              description: `Guided walkthrough for ${nodeTitle}.`,
+              thumbnail: "https://i.ytimg.com/vi/demo/hqdefault.jpg",
+              transcript: `This demo video explains ${nodeTitle} for grade ${gradeLevel}.`,
+            },
+          ],
+        })
+      : lessonType === "url"
+        ? `https://en.wikipedia.org/wiki/${encodeURIComponent(nodeTitle)}`
+        : `<h2>${nodeTitle}</h2><p>Read and summarize the most important ideas for grade ${gradeLevel}.</p>`;
+
+  return [
+    {
+      title: lessonTitle,
+      description: lessonDescription,
+      contentType: lessonType,
+      contentRef: lessonContentRef,
+    },
+    {
+      title: `Demo · ${nodeTitle} Quiz`,
+      description: "Auto-graded checkpoint linked to the lesson.",
+      contentType: "quiz",
+      contentRef: JSON.stringify({
+        title: `${nodeTitle} Checkpoint`,
+        questions: [
+          {
+            question: `Which statement best matches ${nodeTitle}?`,
+            options: ["Key idea A", "Key idea B", "Key idea C", "Key idea D"],
+            answerIndex: 0,
+            explanation: "This is the demo correct response.",
+          },
+          {
+            question: `How is ${nodeTitle} used in ${subject}?`,
+            options: ["Approach 1", "Approach 2", "Approach 3", "Approach 4"],
+            answerIndex: 1,
+            explanation: "This option best matches the demo lesson objective.",
+          },
+        ],
+      }),
+    },
+    ...(nodeIndex % 6 === 0
+      ? [
+          {
+            title: `Demo · ${nodeTitle} Reflection`,
+            description: "Linked written response after quiz completion.",
+            contentType: (nodeIndex % 2 === 0 ? "report" : "essay_questions") as
+              | "report"
+              | "essay_questions",
+            contentRef:
+              nodeIndex % 2 === 0
+                ? `<h3>${nodeTitle} Reflection</h3><p>Explain what you learned and how you would apply it.</p>`
+                : JSON.stringify({
+                    questions: [
+                      `What is the most important idea in ${nodeTitle}?`,
+                      `How confident are you with ${nodeTitle}, and what would help next?`,
+                    ],
+                  }),
+          },
+        ]
+      : []),
+  ];
+}
+
+export const seedDemoWorkspaceContent = createServerFn({ method: "POST" })
+  .inputValidator((data) => contentResetWithPinInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    await verifyParentPinForSession(session.user.id, data.parentPin);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const existingDemoClass = await db.query.classes.findFirst({
+      where: and(
+        eq(classes.organizationId, organizationId),
+        sql`${classes.title} like 'Demo · %'`,
+      ),
+    });
+
+    if (existingDemoClass) {
+      throw new Error("DEMO_CONTENT_ALREADY_EXISTS");
+    }
+
+    const schoolYear = getCurrentSchoolYearLabel();
+    const subjectCycle = ["Math", "Science", "US History"] as const;
+    const now = new Date();
+    const monday = new Date(now);
+    const day = monday.getDay();
+    const shift = day === 0 ? -6 : 1 - day;
+    monday.setDate(monday.getDate() + shift);
+    monday.setHours(0, 0, 0, 0);
+
+    let classesCreated = 0;
+    let studentsCreated = 0;
+    let assignmentsCreated = 0;
+    let templatesCreated = 0;
+    let treesCreated = 0;
+
+    for (const [studentIndex, student] of DEMO_STUDENTS.entries()) {
+      const profileId = crypto.randomUUID();
+      const pinHash = await hashStudentPin("1111");
+
+      await db.insert(profiles).values({
+        id: profileId,
+        organizationId,
+        parentUserId: session.user.id,
+        displayName: student.displayName,
+        gradeLevel: student.gradeLevel,
+        pinHash,
+        status: "active",
+      });
+      studentsCreated += 1;
+
+      for (const subject of subjectCycle) {
+        const classId = crypto.randomUUID();
+        await db.insert(classes).values({
+          id: classId,
+          organizationId,
+          title: `Demo · Grade ${student.gradeLevel} ${subject}`,
+          description: `Demo curriculum track for ${student.displayName}`,
+          schoolYear,
+          createdByUserId: session.user.id,
+        });
+        classesCreated += 1;
+
+        await db.insert(classEnrollments).values({
+          id: crypto.randomUUID(),
+          classId,
+          profileId,
+        });
+
+        const templateSource = buildDemoAssignments(student.gradeLevel, student.displayName, subject)[0];
+        const topicPool = DEMO_NODE_TOPICS[subject] ?? [
+          `${subject} Foundations`,
+          `${subject} Practice`,
+          `${subject} Checkpoint`,
+          `${subject} Mastery`,
+        ];
+        const classTreeSpecs = getClassTreeScales(subject, studentIndex);
+        const quizAssignmentIds: string[] = [];
+        const writtenAssignmentIds: string[] = [];
+        let weekPlanSeeded = 0;
+
+        for (const [treeIndex, treeSpec] of classTreeSpecs.entries()) {
+          const treeId = crypto.randomUUID();
+          const nodeCount = getNodeCountForScale(treeSpec.scale);
+          await db.insert(skillTrees).values({
+            id: treeId,
+            organizationId,
+            classId,
+            profileId,
+            title: `Demo Skill Map · Grade ${student.gradeLevel} ${subject} (${treeSpec.label})`,
+            description: `${treeSpec.scale.replace("_", " ")} progression path for ${student.displayName}`,
+            gradeLevel: student.gradeLevel,
+            subject,
+            schoolYear,
+            createdByUserId: session.user.id,
+          });
+          treesCreated += 1;
+
+          const nodeIds: string[] = [];
+          const edgeRows: Array<{
+            id: string;
+            treeId: string;
+            sourceNodeId: string;
+            targetNodeId: string;
+            edgeType: "required" | "optional" | "bonus";
+          }> = [];
+          const progressedCutoff = Math.max(2, Math.floor(nodeCount * 0.14));
+          const availableCutoff = Math.max(4, Math.floor(nodeCount * 0.28));
+
+          for (let nodeIndex = 0; nodeIndex < nodeCount; nodeIndex += 1) {
+            const nodeId = crypto.randomUUID();
+            nodeIds.push(nodeId);
+            const column = nodeIndex % 8;
+            const row = Math.floor(nodeIndex / 8);
+            const topic = topicPool[nodeIndex % topicPool.length] ?? `${subject} Topic`;
+            const cycle = Math.floor(nodeIndex / topicPool.length) + 1;
+            const nodeTitle = `${topic} ${cycle}`;
+            const nodeType: "lesson" | "milestone" | "boss" | "branch" | "elective" =
+              nodeIndex === nodeCount - 1
+                ? "boss"
+                : nodeIndex % 7 === 0
+                  ? "milestone"
+                  : nodeIndex % 5 === 0
+                    ? "branch"
+                    : "lesson";
+
+            await db.insert(skillTreeNodes).values({
+              id: nodeId,
+              treeId,
+              organizationId,
+              title: nodeTitle,
+              description: `Demo ${subject} node ${nodeIndex + 1} of ${nodeCount}.`,
+              subject,
+              nodeType,
+              xpReward: 80 + (nodeIndex % 6) * 20,
+              positionX: 180 + column * 160,
+              positionY: 100 + row * 130 + (column % 2 === 0 ? 0 : 20),
+              radius: treeSpec.scale === "very_large" ? 24 : 28,
+              isRequired: nodeType !== "branch",
+            });
+
+            const nodeAssignmentSeeds = buildNodeAssignmentSeeds(
+              subject,
+              student.gradeLevel,
+              student.displayName,
+              nodeTitle,
+              nodeIndex,
+            );
+
+            let previousAssignmentId: string | null = null;
+            for (const [orderIndex, assignmentSeed] of nodeAssignmentSeeds.entries()) {
+              const assignmentId = crypto.randomUUID();
+              const dueAt = new Date(monday);
+              dueAt.setDate(monday.getDate() + ((nodeIndex + orderIndex + treeIndex * 2) % 28));
+              dueAt.setHours(16 + (orderIndex % 2), 0, 0, 0);
+
+              await db.insert(assignments).values({
+                id: assignmentId,
+                organizationId,
+                classId,
+                title: assignmentSeed.title,
+                description: assignmentSeed.description,
+                contentType: assignmentSeed.contentType,
+                contentRef: assignmentSeed.contentRef,
+                linkedAssignmentId: previousAssignmentId,
+                dueAt: dueAt.toISOString(),
+                createdByUserId: session.user.id,
+              });
+              assignmentsCreated += 1;
+
+              await db.insert(skillTreeNodeAssignments).values({
+                id: crypto.randomUUID(),
+                nodeId,
+                assignmentId,
+                orderIndex,
+              });
+
+              if (assignmentSeed.contentType === "quiz" && quizAssignmentIds.length < 12) {
+                quizAssignmentIds.push(assignmentId);
+              }
+
+              if (
+                (assignmentSeed.contentType === "report" ||
+                  assignmentSeed.contentType === "essay_questions") &&
+                writtenAssignmentIds.length < 12
+              ) {
+                writtenAssignmentIds.push(assignmentId);
+              }
+
+              if (orderIndex === 0 && weekPlanSeeded < 20) {
+                await db.insert(weekPlan).values({
+                  id: crypto.randomUUID(),
+                  organizationId,
+                  profileId,
+                  assignmentId,
+                  scheduledDate: dueAt.toISOString().slice(0, 10),
+                  orderIndex: weekPlanSeeded,
+                });
+                weekPlanSeeded += 1;
+              }
+
+              previousAssignmentId = assignmentId;
+            }
+
+            const progressStatus: "complete" | "in_progress" | "available" | "locked" =
+              nodeIndex === 0
+                ? "complete"
+                : nodeIndex < progressedCutoff
+                  ? "in_progress"
+                  : nodeIndex < availableCutoff
+                    ? "available"
+                    : "locked";
+
+            await db.insert(skillTreeNodeProgress).values({
+              id: crypto.randomUUID(),
+              nodeId,
+              profileId,
+              treeId,
+              status: progressStatus,
+              xpEarned: progressStatus === "complete" ? 100 : progressStatus === "in_progress" ? 40 : 0,
+              completedAt: progressStatus === "complete" ? new Date().toISOString() : null,
+              updatedAt: new Date().toISOString(),
+            });
+
+            if (nodeIndex > 0) {
+              edgeRows.push({
+                id: crypto.randomUUID(),
+                treeId,
+                sourceNodeId: nodeIds[nodeIndex - 1]!,
+                targetNodeId: nodeId,
+                edgeType: "required",
+              });
+            }
+            if (nodeIndex > 2 && nodeIndex % 4 === 0) {
+              edgeRows.push({
+                id: crypto.randomUUID(),
+                treeId,
+                sourceNodeId: nodeIds[nodeIndex - 3]!,
+                targetNodeId: nodeId,
+                edgeType: "optional",
+              });
+            }
+            if (nodeIndex > 5 && nodeIndex % 7 === 0) {
+              edgeRows.push({
+                id: crypto.randomUUID(),
+                treeId,
+                sourceNodeId: nodeIds[nodeIndex - 6]!,
+                targetNodeId: nodeId,
+                edgeType: "bonus",
+              });
+            }
+          }
+
+          if (edgeRows.length > 0) {
+            await db.insert(skillTreeEdges).values(edgeRows);
+          }
+        }
+
+        if (quizAssignmentIds[0]) {
+          await db.insert(submissions).values({
+            id: crypto.randomUUID(),
+            organizationId,
+            assignmentId: quizAssignmentIds[0],
+            profileId,
+            submittedByUserId: session.user.id,
+            textResponse: JSON.stringify([0, 1]),
+            status: "graded",
+            score: 91,
+            reviewedAt: new Date().toISOString(),
+          });
+        }
+
+        if (writtenAssignmentIds[0]) {
+          await db.insert(submissions).values({
+            id: crypto.randomUUID(),
+            organizationId,
+            assignmentId: writtenAssignmentIds[0],
+            profileId,
+            submittedByUserId: session.user.id,
+            textResponse: "This is a demo submission for parent review.",
+            status: "submitted",
+          });
+        }
+
+        await db.insert(assignmentTemplates).values({
+          id: crypto.randomUUID(),
+          organizationId,
+          title: `${templateSource.title} Template`,
+          description: `Reusable demo template for Grade ${student.gradeLevel} ${subject}.`,
+          contentType: templateSource.contentType,
+          contentRef: templateSource.contentRef,
+          tags: JSON.stringify([
+            `subject:${subject.toLowerCase().replace(/\s+/g, "-")}`,
+            `grade:${student.gradeLevel}`,
+            "scope:demo",
+          ]),
+          isPublic: false,
+          createdByUserId: session.user.id,
+        });
+        templatesCreated += 1;
+      }
+    }
+
+    return {
+      success: true,
+      note: "Demo content seeded. Student demo PIN is 1111.",
+      summary: {
+        studentsCreated,
+        classesCreated,
+        assignmentsCreated,
+        treesCreated,
+        templatesCreated,
+      },
+    };
+  });
+
+export const resetWorkspaceContent = createServerFn({ method: "POST" })
+  .inputValidator((data) => contentResetWithPinInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    await verifyParentPinForSession(session.user.id, data.parentPin);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const orgClasses = await db.query.classes.findMany({
+      where: eq(classes.organizationId, organizationId),
+      columns: { id: true },
+    });
+    const orgProfiles = await db.query.profiles.findMany({
+      where: eq(profiles.organizationId, organizationId),
+      columns: { id: true },
+    });
+    const orgAssignments = await db.query.assignments.findMany({
+      where: eq(assignments.organizationId, organizationId),
+      columns: { id: true },
+    });
+    const orgTrees = await db.query.skillTrees.findMany({
+      where: eq(skillTrees.organizationId, organizationId),
+      columns: { id: true },
+    });
+
+    const classIds = orgClasses.map((row) => row.id);
+    const profileIds = orgProfiles.map((row) => row.id);
+    const assignmentIds = orgAssignments.map((row) => row.id);
+    const treeIds = orgTrees.map((row) => row.id);
+
+    await db.delete(weekPlan).where(eq(weekPlan.organizationId, organizationId));
+    await db.delete(submissions).where(eq(submissions.organizationId, organizationId));
+
+    if (treeIds.length > 0) {
+      await db.delete(skillTreeNodeProgress).where(inArray(skillTreeNodeProgress.treeId, treeIds));
+      await db.delete(skillTreeEdges).where(inArray(skillTreeEdges.treeId, treeIds));
+      await db.delete(skillTreeNodes).where(eq(skillTreeNodes.organizationId, organizationId));
+      await db.delete(skillTrees).where(eq(skillTrees.organizationId, organizationId));
+    }
+
+    if (classIds.length > 0 || profileIds.length > 0) {
+      if (classIds.length > 0 && profileIds.length > 0) {
+        await db.delete(classEnrollments).where(
+          or(
+            inArray(classEnrollments.classId, classIds),
+            inArray(classEnrollments.profileId, profileIds),
+          ),
+        );
+      } else if (classIds.length > 0) {
+        await db.delete(classEnrollments).where(inArray(classEnrollments.classId, classIds));
+      } else if (profileIds.length > 0) {
+        await db.delete(classEnrollments).where(inArray(classEnrollments.profileId, profileIds));
+      }
+    }
+
+    if (assignmentIds.length > 0) {
+      await db.delete(skillTreeNodeAssignments).where(inArray(skillTreeNodeAssignments.assignmentId, assignmentIds));
+    }
+
+    await db.delete(assignments).where(eq(assignments.organizationId, organizationId));
+    await db.delete(classes).where(eq(classes.organizationId, organizationId));
+    await db.delete(profiles).where(eq(profiles.organizationId, organizationId));
+    await db.delete(assignmentTemplates).where(
+      or(
+        eq(assignmentTemplates.organizationId, organizationId),
+        eq(assignmentTemplates.createdByUserId, session.user.id),
+      ),
+    );
+
+    return {
+      success: true,
+      summary: {
+        classesDeleted: classIds.length,
+        profilesDeleted: profileIds.length,
+        assignmentsDeleted: assignmentIds.length,
+        skillTreesDeleted: treeIds.length,
+      },
+    };
+  });
+
 const studentDisplayNameSchema = z.string().trim().min(1).max(100);
 const studentGradeLevelSchema = z.string().trim().min(1).max(20);
 
@@ -416,7 +1214,96 @@ export const loginAsParent = createServerFn({ method: "POST" })
     return {
       success: true,
       role: "parent" as const,
-      nextStep: "student-selection" as const,
+      nextStep: "role-selection" as const,
+    };
+  });
+
+const completePostLoginRoleSelectionInput = z.discriminatedUnion("mode", [
+  z.object({
+    mode: z.literal("parent"),
+    parentPin: z.string().regex(/^\d{4,6}$/),
+  }),
+  z.object({
+    mode: z.literal("student"),
+    profileId: z.string().min(1),
+    studentPin: z.string().regex(/^\d{4,8}$/),
+  }),
+]);
+
+export const completePostLoginRoleSelection = createServerFn({ method: "POST" })
+  .inputValidator((data) => completePostLoginRoleSelectionInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["parent", "admin"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const [userRecord, adminMembership] = await Promise.all([
+      db.query.users.findFirst({
+        where: eq(users.id, session.user.id),
+      }),
+      db.query.memberships.findFirst({
+        where: and(
+          eq(memberships.userId, session.user.id),
+          eq(memberships.organizationId, organizationId),
+          eq(memberships.role, "admin"),
+        ),
+      }),
+    ]);
+
+    const isAdminParent =
+      session.activeRole === "admin" ||
+      userRecord?.role === "admin" ||
+      Boolean(adminMembership);
+
+    if (data.mode === "parent") {
+      await verifyParentPinForSession(session.user.id, data.parentPin);
+      setRoleSessionCookies({
+        role: "parent",
+        userId: session.user.id,
+        organizationId,
+        isAdminParent,
+      });
+
+      return {
+        success: true,
+        activeRole: "parent" as const,
+      };
+    }
+
+    const profile = await db.query.profiles.findFirst({
+      where: and(
+        eq(profiles.id, data.profileId),
+        eq(profiles.parentUserId, session.user.id),
+        eq(profiles.organizationId, organizationId),
+        eq(profiles.status, "active"),
+      ),
+    });
+
+    if (!profile) {
+      throw new Error("FORBIDDEN");
+    }
+
+    const incomingPinHash = await hashStudentPin(data.studentPin);
+    if (incomingPinHash !== profile.pinHash) {
+      throw new Error("INVALID_PIN");
+    }
+
+    setRoleSessionCookies({
+      role: "student",
+      userId: session.user.id,
+      organizationId,
+      profileId: profile.id,
+      isAdminParent,
+    });
+
+    return {
+      success: true,
+      activeRole: "student" as const,
+      profileId: profile.id,
     };
   });
 
@@ -854,6 +1741,9 @@ export const getParentDashboardData = createServerFn({ method: "GET" }).handler(
 
   for (const submission of submissionRows) {
     if (!studentIds.has(submission.profileId)) {
+      continue;
+    }
+    if (submission.status === "returned") {
       continue;
     }
 
@@ -1301,18 +2191,32 @@ export const getRoleSwitcherData = createServerFn({ method: "POST" }).handler(
       };
     }
 
-    const rows = await db.query.profiles.findMany({
-      where: and(
-        eq(profiles.parentUserId, roleContext.userId),
-        eq(profiles.status, "active"),
-      ),
-    });
+    const orgId = roleContext.organizationId;
+
+    const [rows, pendingClaimsRows] = await Promise.all([
+      db.query.profiles.findMany({
+        where: and(
+          eq(profiles.parentUserId, roleContext.userId),
+          eq(profiles.status, "active"),
+        ),
+      }),
+      orgId
+        ? db.query.rewardClaims.findMany({
+            where: and(
+              eq(rewardClaims.organizationId, orgId),
+              eq(rewardClaims.status, "claimed"),
+            ),
+            columns: { id: true },
+          })
+        : Promise.resolve([]),
+    ]);
 
     return {
       isAuthenticated: true,
       activeRole: roleContext.activeRole,
       isAdminParent: roleContext.isAdminParent,
       activeProfileId: roleContext.profileId ?? null,
+      pendingRewardsCount: pendingClaimsRows.length,
       profiles: rows.map((row) => ({
         id: row.id,
         displayName: row.displayName,
@@ -2104,6 +3008,167 @@ export const listTemplates = createServerFn({ method: "GET" })
     return { templates };
   });
 
+export const getTemplateManagerData = createServerFn({ method: "GET" }).handler(async () => {
+  const session = await requireActiveRole(["admin", "parent"]);
+  const db = getDb();
+
+  const organizationId = await resolveActiveOrganizationId(
+    session.user.id,
+    session.session.activeOrganizationId,
+  );
+
+  const [templates, classRows] = await Promise.all([
+    getAccessibleAssignmentTemplates(db, {
+      organizationId,
+      userId: session.user.id,
+    }),
+    db.query.classes.findMany({
+      where: eq(classes.organizationId, organizationId),
+      orderBy: [desc(classes.createdAt)],
+    }),
+  ]);
+
+  return {
+    templates,
+    classes: classRows.map((row) => ({ id: row.id, title: row.title })),
+  };
+});
+
+const duplicateTemplateToMineInput = z.object({
+  templateId: z.string().min(1),
+  tags: z.array(z.string().trim().min(1).max(60)).max(20).optional(),
+});
+
+export const duplicateTemplateToMine = createServerFn({ method: "POST" })
+  .inputValidator((data) => duplicateTemplateToMineInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const accessible = await getAccessibleAssignmentTemplates(db, {
+      organizationId,
+      userId: session.user.id,
+    });
+    const template = accessible.find((row) => row.id === data.templateId);
+
+    if (!template) {
+      throw new Error("NOT_FOUND");
+    }
+
+    const templateId = crypto.randomUUID();
+    const tags = normalizeTemplateTags(data.tags ?? template.tags, {
+      fallbackSubjectTag: "subject:custom",
+    });
+
+    await db.insert(assignmentTemplates).values({
+      id: templateId,
+      organizationId,
+      title: template.title,
+      description: template.description,
+      contentType: template.contentType,
+      contentRef: template.contentRef,
+      tags: JSON.stringify(tags),
+      isPublic: false,
+      createdByUserId: session.user.id,
+    });
+
+    return {
+      success: true,
+      templateId,
+      tags,
+    };
+  });
+
+const updateAssignmentTemplateInput = z.object({
+  templateId: z.string().min(1),
+  title: z.string().trim().min(1).max(180),
+  description: z.string().optional(),
+  contentType: z.enum(ASSIGNMENT_CONTENT_TYPES),
+  contentRef: z.string().optional(),
+  tags: z.array(z.string().trim().min(1).max(60)).max(20).optional(),
+});
+
+export const updateAssignmentTemplate = createServerFn({ method: "POST" })
+  .inputValidator((data) => updateAssignmentTemplateInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const existing = await db.query.assignmentTemplates.findFirst({
+      where: and(
+        eq(assignmentTemplates.id, data.templateId),
+        eq(assignmentTemplates.organizationId, organizationId),
+        eq(assignmentTemplates.createdByUserId, session.user.id),
+      ),
+    });
+
+    if (!existing) {
+      throw new Error("NOT_FOUND");
+    }
+
+    const tags = normalizeTemplateTags(data.tags ?? parseStoredTemplateTags(existing.tags), {
+      fallbackSubjectTag: "subject:custom",
+    });
+
+    await db
+      .update(assignmentTemplates)
+      .set({
+        title: data.title.trim(),
+        description: data.description?.trim() || null,
+        contentType: data.contentType,
+        contentRef: data.contentRef?.trim() || null,
+        tags: JSON.stringify(tags),
+      })
+      .where(eq(assignmentTemplates.id, existing.id));
+
+    return {
+      success: true,
+      templateId: existing.id,
+      tags,
+    };
+  });
+
+const deleteTemplateInput = z.object({
+  templateId: z.string().min(1),
+});
+
+export const deleteAssignmentTemplate = createServerFn({ method: "POST" })
+  .inputValidator((data) => deleteTemplateInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const existing = await db.query.assignmentTemplates.findFirst({
+      where: and(
+        eq(assignmentTemplates.id, data.templateId),
+        eq(assignmentTemplates.organizationId, organizationId),
+        eq(assignmentTemplates.createdByUserId, session.user.id),
+      ),
+    });
+
+    if (!existing) {
+      throw new Error("NOT_FOUND");
+    }
+
+    await db.delete(assignmentTemplates).where(eq(assignmentTemplates.id, existing.id));
+    return { success: true };
+  });
+
 const createAssignmentFromTemplateInput = z.object({
   templateId: z.string().min(1),
   classId: z.string().min(1),
@@ -2765,6 +3830,14 @@ const submitAssignmentInput = z.object({
   fileBase64: z.string().optional(),
 });
 
+type QuizQuestionForScoring = {
+  answerIndex: number;
+};
+
+type QuizPayloadForScoring = {
+  questions?: QuizQuestionForScoring[];
+};
+
 function decodeBase64ToUint8Array(base64Text: string) {
   const normalized = base64Text.includes(",")
     ? base64Text.split(",").pop() ?? ""
@@ -2777,6 +3850,43 @@ function decodeBase64ToUint8Array(base64Text: string) {
   }
 
   return bytes;
+}
+
+function computeQuizAutoScore(
+  assignmentRecord: typeof assignments.$inferSelect,
+  textResponse?: string,
+) {
+  if (assignmentRecord.contentType !== "quiz" || !textResponse) {
+    return null;
+  }
+
+  let payload: QuizPayloadForScoring | null = null;
+  try {
+    payload = assignmentRecord.contentRef
+      ? (JSON.parse(assignmentRecord.contentRef) as QuizPayloadForScoring)
+      : null;
+  } catch {
+    payload = null;
+  }
+
+  const questions = payload?.questions ?? [];
+  if (questions.length === 0) {
+    return null;
+  }
+
+  let answers: number[] | null = null;
+  try {
+    answers = JSON.parse(textResponse) as number[];
+  } catch {
+    answers = null;
+  }
+
+  if (!answers) {
+    return null;
+  }
+
+  const correct = questions.filter((question, index) => answers[index] === question.answerIndex).length;
+  return Math.round((correct / questions.length) * 100);
 }
 
 export const submitAssignmentWork = createServerFn({ method: "POST" })
@@ -2821,6 +3931,10 @@ export const submitAssignmentWork = createServerFn({ method: "POST" })
       throw new Error("FORBIDDEN");
     }
 
+    const nowIso = new Date().toISOString();
+    const score = computeQuizAutoScore(assignmentRecord, data.textResponse);
+    const nextStatus = typeof score === "number" ? "graded" : "submitted";
+
     let assetKey: string | undefined;
 
     if (data.fileBase64 && data.fileName) {
@@ -2847,14 +3961,21 @@ export const submitAssignmentWork = createServerFn({ method: "POST" })
     });
 
     if (existing) {
+      if (existing.status !== "returned") {
+        throw new Error("ALREADY_SUBMITTED");
+      }
+
       await db
         .update(submissions)
         .set({
           textResponse: data.textResponse,
           assetKey: assetKey ?? existing.assetKey,
-          status: "submitted",
-          submittedAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
+          status: nextStatus,
+          score,
+          feedbackJson: null,
+          reviewedAt: typeof score === "number" ? nowIso : null,
+          submittedAt: nowIso,
+          updatedAt: nowIso,
           submittedByUserId: session.user.id,
         })
         .where(eq(submissions.id, existing.id));
@@ -2867,14 +3988,58 @@ export const submitAssignmentWork = createServerFn({ method: "POST" })
         submittedByUserId: session.user.id,
         assetKey,
         textResponse: data.textResponse,
-        status: "submitted",
+        status: nextStatus,
+        score,
+        reviewedAt: typeof score === "number" ? nowIso : null,
       });
     }
 
     return {
       success: true,
       assetKey: assetKey ?? null,
+      score,
+      status: nextStatus,
     };
+  });
+
+const releaseSubmissionInput = z.object({
+  submissionId: z.string().min(1),
+});
+
+export const releaseSubmissionToStudent = createServerFn({ method: "POST" })
+  .inputValidator((data) => releaseSubmissionInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const existing = await db.query.submissions.findFirst({
+      where: and(
+        eq(submissions.id, data.submissionId),
+        eq(submissions.organizationId, organizationId),
+      ),
+    });
+
+    if (!existing) {
+      throw new Error("NOT_FOUND");
+    }
+
+    await db
+      .update(submissions)
+      .set({
+        status: "returned",
+        score: null,
+        feedbackJson: null,
+        reviewedAt: null,
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(submissions.id, existing.id));
+
+    return { success: true };
   });
 
 const progressSnapshotInput = z
@@ -2953,7 +4118,7 @@ export const getProgressSnapshot = createServerFn({ method: "GET" })
 
       for (const assignment of classAssignments) {
         const submission = submissionByAssignmentId.get(assignment.id);
-        if (!submission) {
+        if (!submission || submission.status === "returned") {
           continue;
         }
 
@@ -2980,12 +4145,41 @@ export const getProgressSnapshot = createServerFn({ method: "GET" })
       };
     });
 
+    // ── XP level from skill trees ────────────────────────────────────────────
+    const XP_THRESHOLDS = [0, 200, 500, 900, 1400, 2000, 2700, 3500, 4400, 5400, 6500];
+    const XP_TITLES = [
+      "Curious Learner", "Explorer", "Scholar", "Apprentice", "Journeyman",
+      "Adept", "Expert", "Master", "Grand Scholar", "Sage",
+    ];
+
+    const xpProgressRows = await db
+      .select({ xpEarned: skillTreeNodeProgress.xpEarned })
+      .from(skillTreeNodeProgress)
+      .where(eq(skillTreeNodeProgress.profileId, profile.id));
+
+    const totalXp = xpProgressRows.reduce((acc, r) => acc + (r.xpEarned ?? 0), 0);
+
+    let level = 1;
+    for (let i = 0; i < XP_THRESHOLDS.length; i++) {
+      if (totalXp >= XP_THRESHOLDS[i]!) level = i + 1;
+    }
+    const xpTitle = XP_TITLES[level - 1] ?? "Curious Learner";
+    const currentThreshold = XP_THRESHOLDS[level - 1] ?? 0;
+    const nextThreshold = XP_THRESHOLDS[level] ?? null;
+    const xpToNextLevel = nextThreshold !== null ? nextThreshold - totalXp : null;
+
     return {
       profile: {
         id: profile.id,
         displayName: profile.displayName,
       },
       mastery,
+      xpLevel: level,
+      xpTitle,
+      totalXp,
+      currentThreshold,
+      nextThreshold,
+      xpToNextLevel,
     };
   });
 
@@ -3423,4 +4617,2008 @@ export const lessonPlannerChat = createServerFn({ method: "POST" })
     const responseText = ensureSuggestionTags(rawResponseText, lastUserMessage, data.grade);
 
     return { content: responseText };
+  });
+
+// ─── SKILL TREE FUNCTIONS ───
+
+export const getSkillTreesForOrg = createServerFn({ method: "GET" }).handler(async () => {
+  const session = await requireActiveRole(["admin", "parent"]);
+  const db = getDb();
+
+  const organizationId = await resolveActiveOrganizationId(
+    session.user.id,
+    session.session.activeOrganizationId,
+  );
+
+  const treeRows = await db.query.skillTrees.findMany({
+    where: eq(skillTrees.organizationId, organizationId),
+    orderBy: [desc(skillTrees.createdAt)],
+  });
+
+  if (treeRows.length === 0) {
+    return { trees: [] };
+  }
+
+  const treeIds = treeRows.map((t) => t.id);
+
+  const [nodeCounts, classRows] = await Promise.all([
+    db
+      .select({ treeId: skillTreeNodes.treeId, nodeCount: count() })
+      .from(skillTreeNodes)
+      .where(inArray(skillTreeNodes.treeId, treeIds))
+      .groupBy(skillTreeNodes.treeId),
+    db.query.classes.findMany({
+      where: inArray(
+        classes.id,
+        treeRows.map((t) => t.classId).filter((id): id is string => id !== null && id !== undefined),
+      ),
+    }),
+  ]);
+
+  const nodeCountMap = new Map(nodeCounts.map((r) => [r.treeId, r.nodeCount]));
+  const classMap = new Map(classRows.map((c) => [c.id, c.title]));
+
+  const trees = treeRows.map((tree) => ({
+    ...tree,
+    nodeCount: nodeCountMap.get(tree.id) ?? 0,
+    classTitle: tree.classId ? (classMap.get(tree.classId) ?? null) : null,
+  }));
+
+  return { trees };
+});
+
+const getSkillTreeDataInput = z.object({
+  treeId: z.string(),
+  profileId: z.string().optional(),
+});
+
+export const getSkillTreeData = createServerFn({ method: "GET" })
+  .inputValidator((data) => getSkillTreeDataInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent", "student"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const tree = await db.query.skillTrees.findFirst({
+      where: and(eq(skillTrees.id, data.treeId), eq(skillTrees.organizationId, organizationId)),
+    });
+
+    if (!tree) {
+      throw new Error("NOT_FOUND");
+    }
+
+    const [nodes, edges, progressRows] = await Promise.all([
+      db.query.skillTreeNodes.findMany({
+        where: eq(skillTreeNodes.treeId, data.treeId),
+      }),
+      db.query.skillTreeEdges.findMany({
+        where: eq(skillTreeEdges.treeId, data.treeId),
+      }),
+      data.profileId
+        ? db.query.skillTreeNodeProgress.findMany({
+            where: and(
+              eq(skillTreeNodeProgress.treeId, data.treeId),
+              eq(skillTreeNodeProgress.profileId, data.profileId),
+            ),
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const nodeIds = nodes.map((n) => n.id);
+
+    const junctionRows = nodeIds.length
+      ? await db.query.skillTreeNodeAssignments.findMany({
+          where: inArray(skillTreeNodeAssignments.nodeId, nodeIds),
+          orderBy: [desc(skillTreeNodeAssignments.orderIndex)],
+        })
+      : [];
+
+    const assignmentIds = [...new Set(junctionRows.map((j) => j.assignmentId))];
+
+    const assignmentRows = assignmentIds.length
+      ? await db.query.assignments.findMany({
+          where: inArray(assignments.id, assignmentIds),
+        })
+      : [];
+
+    const assignmentMap = new Map(assignmentRows.map((a) => [a.id, a]));
+
+    const nodeAssignmentMap = new Map<string, typeof assignmentRows>();
+    for (const junction of junctionRows) {
+      const existing = nodeAssignmentMap.get(junction.nodeId) ?? [];
+      const assignment = assignmentMap.get(junction.assignmentId);
+      if (assignment) existing.push(assignment);
+      nodeAssignmentMap.set(junction.nodeId, existing);
+    }
+
+    const nodeAssignments = nodes.map((node) => ({
+      nodeId: node.id,
+      assignments: nodeAssignmentMap.get(node.id) ?? [],
+    }));
+
+    const earnedXp = progressRows.reduce((acc, p) => acc + p.xpEarned, 0);
+    const totalXp = nodes.reduce((acc, n) => acc + n.xpReward, 0);
+
+    return {
+      tree,
+      nodes,
+      edges,
+      nodeAssignments,
+      nodeProgress: progressRows,
+      earnedXp,
+      totalXp,
+    };
+  });
+
+const createSkillTreeInput = z.object({
+  classId: z.string().optional(),
+  title: z.string().min(1).max(200),
+  description: z.string().optional(),
+  gradeLevel: z.string().optional(),
+  subject: z.string().optional(),
+  schoolYear: z.string().optional(),
+});
+
+export const createSkillTree = createServerFn({ method: "POST" })
+  .inputValidator((data) => createSkillTreeInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const treeId = crypto.randomUUID();
+    const rootNodeId = crypto.randomUUID();
+    const now = new Date().toISOString();
+
+    await db.insert(skillTrees).values({
+      id: treeId,
+      organizationId,
+      classId: data.classId ?? null,
+      title: data.title.trim(),
+      description: data.description?.trim() ?? null,
+      gradeLevel: data.gradeLevel ?? null,
+      subject: data.subject ?? null,
+      schoolYear: data.schoolYear ?? null,
+      createdByUserId: session.user.id,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await db.insert(skillTreeNodes).values({
+      id: rootNodeId,
+      treeId,
+      organizationId,
+      title: "Start Here",
+      icon: "🌟",
+      colorRamp: "teal",
+      nodeType: "milestone",
+      positionX: 500,
+      positionY: 60,
+      xpReward: 0,
+      radius: 32,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    return { treeId, rootNodeId };
+  });
+
+const upsertSkillTreeNodeInput = z.object({
+  treeId: z.string(),
+  nodeId: z.string().optional(),
+  title: z.string().min(1).max(200),
+  description: z.string().optional(),
+  subject: z.string().optional(),
+  icon: z.string().optional(),
+  colorRamp: z.string().optional(),
+  nodeType: z.enum(["lesson", "milestone", "boss", "branch", "elective"]).optional(),
+  xpReward: z.number().int().optional(),
+  positionX: z.number().int().optional(),
+  positionY: z.number().int().optional(),
+  radius: z.number().int().optional(),
+  isRequired: z.boolean().optional(),
+});
+
+export const upsertSkillTreeNode = createServerFn({ method: "POST" })
+  .inputValidator((data) => upsertSkillTreeNodeInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    // Verify tree belongs to org
+    const tree = await db.query.skillTrees.findFirst({
+      where: and(eq(skillTrees.id, data.treeId), eq(skillTrees.organizationId, organizationId)),
+    });
+    if (!tree) throw new Error("NOT_FOUND");
+
+    const now = new Date().toISOString();
+
+    if (data.nodeId) {
+      // Update existing node — verify it belongs to this tree
+      const existing = await db.query.skillTreeNodes.findFirst({
+        where: and(
+          eq(skillTreeNodes.id, data.nodeId),
+          eq(skillTreeNodes.treeId, data.treeId),
+        ),
+      });
+      if (!existing) throw new Error("NOT_FOUND");
+
+      await db
+        .update(skillTreeNodes)
+        .set({
+          title: data.title.trim(),
+          description: data.description?.trim() ?? existing.description,
+          subject: data.subject ?? existing.subject,
+          icon: data.icon ?? existing.icon,
+          colorRamp: data.colorRamp ?? existing.colorRamp,
+          nodeType: data.nodeType ?? existing.nodeType,
+          xpReward: data.xpReward ?? existing.xpReward,
+          positionX: data.positionX ?? existing.positionX,
+          positionY: data.positionY ?? existing.positionY,
+          radius: data.radius ?? existing.radius,
+          isRequired: data.isRequired ?? existing.isRequired,
+          updatedAt: now,
+        })
+        .where(eq(skillTreeNodes.id, data.nodeId));
+
+      const updated = await db.query.skillTreeNodes.findFirst({
+        where: eq(skillTreeNodes.id, data.nodeId),
+      });
+      return updated!;
+    }
+
+    // Insert new node
+    const nodeId = crypto.randomUUID();
+    await db.insert(skillTreeNodes).values({
+      id: nodeId,
+      treeId: data.treeId,
+      organizationId,
+      title: data.title.trim(),
+      description: data.description?.trim() ?? null,
+      subject: data.subject ?? null,
+      icon: data.icon ?? null,
+      colorRamp: data.colorRamp ?? "blue",
+      nodeType: data.nodeType ?? "lesson",
+      xpReward: data.xpReward ?? 100,
+      positionX: data.positionX ?? 0,
+      positionY: data.positionY ?? 0,
+      radius: data.radius ?? 28,
+      isRequired: data.isRequired ?? false,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const inserted = await db.query.skillTreeNodes.findFirst({
+      where: eq(skillTreeNodes.id, nodeId),
+    });
+    return inserted!;
+  });
+
+const deleteSkillTreeNodeInput = z.object({
+  nodeId: z.string(),
+  parentPin: z.string(),
+});
+
+export const deleteSkillTreeNode = createServerFn({ method: "POST" })
+  .inputValidator((data) => deleteSkillTreeNodeInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    await verifyParentPinForSession(session.user.id, data.parentPin);
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    // Verify node belongs to org
+    const node = await db.query.skillTreeNodes.findFirst({
+      where: and(
+        eq(skillTreeNodes.id, data.nodeId),
+        eq(skillTreeNodes.organizationId, organizationId),
+      ),
+    });
+    if (!node) throw new Error("NOT_FOUND");
+
+    await Promise.all([
+      db
+        .delete(skillTreeEdges)
+        .where(
+          or(
+            eq(skillTreeEdges.sourceNodeId, data.nodeId),
+            eq(skillTreeEdges.targetNodeId, data.nodeId),
+          ),
+        ),
+      db
+        .delete(skillTreeNodeAssignments)
+        .where(eq(skillTreeNodeAssignments.nodeId, data.nodeId)),
+      db
+        .delete(skillTreeNodeProgress)
+        .where(eq(skillTreeNodeProgress.nodeId, data.nodeId)),
+    ]);
+
+    await db.delete(skillTreeNodes).where(eq(skillTreeNodes.id, data.nodeId));
+
+    return { success: true };
+  });
+
+const upsertSkillTreeEdgeInput = z.object({
+  treeId: z.string(),
+  sourceNodeId: z.string(),
+  targetNodeId: z.string(),
+  edgeType: z.enum(["required", "optional", "bonus"]).optional(),
+});
+
+export const upsertSkillTreeEdge = createServerFn({ method: "POST" })
+  .inputValidator((data) => upsertSkillTreeEdgeInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const tree = await db.query.skillTrees.findFirst({
+      where: and(eq(skillTrees.id, data.treeId), eq(skillTrees.organizationId, organizationId)),
+    });
+    if (!tree) throw new Error("NOT_FOUND");
+
+    // Verify both nodes belong to this tree
+    const [sourceNode, targetNode] = await Promise.all([
+      db.query.skillTreeNodes.findFirst({
+        where: and(
+          eq(skillTreeNodes.id, data.sourceNodeId),
+          eq(skillTreeNodes.treeId, data.treeId),
+        ),
+      }),
+      db.query.skillTreeNodes.findFirst({
+        where: and(
+          eq(skillTreeNodes.id, data.targetNodeId),
+          eq(skillTreeNodes.treeId, data.treeId),
+        ),
+      }),
+    ]);
+    if (!sourceNode || !targetNode) throw new Error("NOT_FOUND");
+
+    // Check for existing edge
+    const existing = await db.query.skillTreeEdges.findFirst({
+      where: and(
+        eq(skillTreeEdges.sourceNodeId, data.sourceNodeId),
+        eq(skillTreeEdges.targetNodeId, data.targetNodeId),
+      ),
+    });
+
+    if (existing) {
+      if (data.edgeType && data.edgeType !== existing.edgeType) {
+        await db
+          .update(skillTreeEdges)
+          .set({ edgeType: data.edgeType })
+          .where(eq(skillTreeEdges.id, existing.id));
+      }
+      const updated = await db.query.skillTreeEdges.findFirst({
+        where: eq(skillTreeEdges.id, existing.id),
+      });
+      return updated!;
+    }
+
+    const edgeId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await db.insert(skillTreeEdges).values({
+      id: edgeId,
+      treeId: data.treeId,
+      sourceNodeId: data.sourceNodeId,
+      targetNodeId: data.targetNodeId,
+      edgeType: data.edgeType ?? "required",
+      createdAt: now,
+    });
+
+    const inserted = await db.query.skillTreeEdges.findFirst({
+      where: eq(skillTreeEdges.id, edgeId),
+    });
+    return inserted!;
+  });
+
+const deleteSkillTreeEdgeInput = z.object({
+  edgeId: z.string(),
+});
+
+export const deleteSkillTreeEdge = createServerFn({ method: "POST" })
+  .inputValidator((data) => deleteSkillTreeEdgeInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const edge = await db.query.skillTreeEdges.findFirst({
+      where: eq(skillTreeEdges.id, data.edgeId),
+    });
+    if (!edge) throw new Error("NOT_FOUND");
+
+    const tree = await db.query.skillTrees.findFirst({
+      where: and(eq(skillTrees.id, edge.treeId), eq(skillTrees.organizationId, organizationId)),
+    });
+    if (!tree) throw new Error("FORBIDDEN");
+
+    await db.delete(skillTreeEdges).where(eq(skillTreeEdges.id, data.edgeId));
+
+    return { success: true };
+  });
+
+const linkAssignmentToNodeInput = z.object({
+  nodeId: z.string(),
+  assignmentId: z.string(),
+  orderIndex: z.number().int().optional(),
+});
+
+export const linkAssignmentToNode = createServerFn({ method: "POST" })
+  .inputValidator((data) => linkAssignmentToNodeInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const [node, assignment] = await Promise.all([
+      db.query.skillTreeNodes.findFirst({
+        where: and(
+          eq(skillTreeNodes.id, data.nodeId),
+          eq(skillTreeNodes.organizationId, organizationId),
+        ),
+      }),
+      db.query.assignments.findFirst({
+        where: and(
+          eq(assignments.id, data.assignmentId),
+          eq(assignments.organizationId, organizationId),
+        ),
+      }),
+    ]);
+    if (!node || !assignment) throw new Error("NOT_FOUND");
+
+    const junctionId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await db.insert(skillTreeNodeAssignments).values({
+      id: junctionId,
+      nodeId: data.nodeId,
+      assignmentId: data.assignmentId,
+      orderIndex: data.orderIndex ?? 0,
+      createdAt: now,
+    });
+
+    const inserted = await db.query.skillTreeNodeAssignments.findFirst({
+      where: eq(skillTreeNodeAssignments.id, junctionId),
+    });
+    return inserted!;
+  });
+
+const unlinkAssignmentFromNodeInput = z.object({
+  nodeId: z.string(),
+  assignmentId: z.string(),
+});
+
+export const unlinkAssignmentFromNode = createServerFn({ method: "POST" })
+  .inputValidator((data) => unlinkAssignmentFromNodeInput.parse(data))
+  .handler(async ({ data }) => {
+    await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    await db
+      .delete(skillTreeNodeAssignments)
+      .where(
+        and(
+          eq(skillTreeNodeAssignments.nodeId, data.nodeId),
+          eq(skillTreeNodeAssignments.assignmentId, data.assignmentId),
+        ),
+      );
+
+    return { success: true };
+  });
+
+const updateNodePositionsInput = z.object({
+  updates: z.array(
+    z.object({
+      nodeId: z.string(),
+      positionX: z.number().int(),
+      positionY: z.number().int(),
+    }),
+  ),
+});
+
+export const updateNodePositions = createServerFn({ method: "POST" })
+  .inputValidator((data) => updateNodePositionsInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    if (data.updates.length === 0) {
+      return { updated: 0 };
+    }
+
+    const nodeIds = data.updates.map((u) => u.nodeId);
+
+    // Verify all nodes belong to org
+    const nodeRows = await db.query.skillTreeNodes.findMany({
+      where: and(
+        inArray(skillTreeNodes.id, nodeIds),
+        eq(skillTreeNodes.organizationId, organizationId),
+      ),
+    });
+    if (nodeRows.length !== nodeIds.length) throw new Error("FORBIDDEN");
+
+    const now = new Date().toISOString();
+    await Promise.all(
+      data.updates.map((update) =>
+        db
+          .update(skillTreeNodes)
+          .set({ positionX: update.positionX, positionY: update.positionY, updatedAt: now })
+          .where(eq(skillTreeNodes.id, update.nodeId)),
+      ),
+    );
+
+    return { updated: data.updates.length };
+  });
+
+const saveTreeViewportInput = z.object({
+  treeId: z.string(),
+  viewportX: z.number().int(),
+  viewportY: z.number().int(),
+  viewportScale: z.number(),
+});
+
+export const saveTreeViewport = createServerFn({ method: "POST" })
+  .inputValidator((data) => saveTreeViewportInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent", "student"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const tree = await db.query.skillTrees.findFirst({
+      where: and(eq(skillTrees.id, data.treeId), eq(skillTrees.organizationId, organizationId)),
+    });
+    if (!tree) throw new Error("NOT_FOUND");
+
+    await db
+      .update(skillTrees)
+      .set({
+        viewportX: data.viewportX,
+        viewportY: data.viewportY,
+        viewportScale: Math.round(data.viewportScale * 100),
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(skillTrees.id, data.treeId));
+
+    return { success: true };
+  });
+
+const markNodeCompleteInput = z.object({
+  nodeId: z.string(),
+  profileId: z.string(),
+});
+
+export const markNodeComplete = createServerFn({ method: "POST" })
+  .inputValidator((data) => markNodeCompleteInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent", "student"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    // a) Verify node belongs to org
+    const node = await db.query.skillTreeNodes.findFirst({
+      where: and(
+        eq(skillTreeNodes.id, data.nodeId),
+        eq(skillTreeNodes.organizationId, organizationId),
+      ),
+    });
+    if (!node) throw new Error("NOT_FOUND");
+
+    // b) Fetch linked assignments
+    const junctionRows = await db.query.skillTreeNodeAssignments.findMany({
+      where: eq(skillTreeNodeAssignments.nodeId, data.nodeId),
+    });
+
+    // c) Verify submissions exist for each linked assignment
+    if (junctionRows.length > 0) {
+      const assignmentIds = junctionRows.map((j) => j.assignmentId);
+      const submissionRows = await db.query.submissions.findMany({
+        where: and(
+          inArray(submissions.assignmentId, assignmentIds),
+          eq(submissions.profileId, data.profileId),
+        ),
+      });
+      const submittedAssignmentIds = new Set(submissionRows.map((s) => s.assignmentId));
+      const allComplete = assignmentIds.every((id) => submittedAssignmentIds.has(id));
+      if (!allComplete) throw new Error("ASSIGNMENTS_INCOMPLETE");
+    }
+
+    // d) Upsert progress row to complete
+    const now = new Date().toISOString();
+    const existingProgress = await db.query.skillTreeNodeProgress.findFirst({
+      where: and(
+        eq(skillTreeNodeProgress.nodeId, data.nodeId),
+        eq(skillTreeNodeProgress.profileId, data.profileId),
+      ),
+    });
+
+    if (existingProgress) {
+      await db
+        .update(skillTreeNodeProgress)
+        .set({
+          status: "complete",
+          xpEarned: node.xpReward,
+          completedAt: now,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(skillTreeNodeProgress.nodeId, data.nodeId),
+            eq(skillTreeNodeProgress.profileId, data.profileId),
+          ),
+        );
+    } else {
+      await db.insert(skillTreeNodeProgress).values({
+        id: crypto.randomUUID(),
+        nodeId: data.nodeId,
+        profileId: data.profileId,
+        treeId: node.treeId,
+        status: "complete",
+        xpEarned: node.xpReward,
+        completedAt: now,
+        updatedAt: now,
+      });
+    }
+
+    // e) Find outgoing edges and unlock newly eligible target nodes
+    const outgoingEdges = await db.query.skillTreeEdges.findMany({
+      where: eq(skillTreeEdges.sourceNodeId, data.nodeId),
+    });
+
+    const unlockedNodeIds: string[] = [];
+
+    await Promise.all(
+      outgoingEdges.map(async (edge) => {
+        // Get all incoming edges to the target node
+        const incomingEdges = await db.query.skillTreeEdges.findMany({
+          where: eq(skillTreeEdges.targetNodeId, edge.targetNodeId),
+        });
+
+        const incomingSourceIds = incomingEdges.map((e) => e.sourceNodeId);
+
+        // Check if all incoming source nodes are completed/mastery for this profile
+        const completedSourceRows = incomingSourceIds.length
+          ? await db.query.skillTreeNodeProgress.findMany({
+              where: and(
+                inArray(skillTreeNodeProgress.nodeId, incomingSourceIds),
+                eq(skillTreeNodeProgress.profileId, data.profileId),
+              ),
+            })
+          : [];
+
+        const completedSet = new Set(
+          completedSourceRows
+            .filter((p) => p.status === "complete" || p.status === "mastery")
+            .map((p) => p.nodeId),
+        );
+
+        const allPrereqsMet = incomingSourceIds.every((id) => completedSet.has(id));
+
+        if (allPrereqsMet) {
+          // Upsert target to available (only if currently locked)
+          const targetProgress = await db.query.skillTreeNodeProgress.findFirst({
+            where: and(
+              eq(skillTreeNodeProgress.nodeId, edge.targetNodeId),
+              eq(skillTreeNodeProgress.profileId, data.profileId),
+            ),
+          });
+
+          if (!targetProgress) {
+            await db.insert(skillTreeNodeProgress).values({
+              id: crypto.randomUUID(),
+              nodeId: edge.targetNodeId,
+              profileId: data.profileId,
+              treeId: node.treeId,
+              status: "available",
+              xpEarned: 0,
+              updatedAt: now,
+            });
+            unlockedNodeIds.push(edge.targetNodeId);
+          } else if (targetProgress.status === "locked") {
+            await db
+              .update(skillTreeNodeProgress)
+              .set({ status: "available", updatedAt: now })
+              .where(
+                and(
+                  eq(skillTreeNodeProgress.nodeId, edge.targetNodeId),
+                  eq(skillTreeNodeProgress.profileId, data.profileId),
+                ),
+              );
+            unlockedNodeIds.push(edge.targetNodeId);
+          }
+        }
+      }),
+    );
+
+    // f) Sum total earned XP for this profile on this tree
+    const xpResult = await db
+      .select({ total: sum(skillTreeNodeProgress.xpEarned) })
+      .from(skillTreeNodeProgress)
+      .where(
+        and(
+          eq(skillTreeNodeProgress.treeId, node.treeId),
+          eq(skillTreeNodeProgress.profileId, data.profileId),
+        ),
+      );
+
+    const newTotalXp = Number(xpResult[0]?.total ?? 0);
+
+    // g) Sync active reward track XP if one exists for this profile
+    let newlyUnlockedRewardTierIds: string[] = [];
+    let rewardTrackXpEarned = 0;
+
+    const activeTrack = await db.query.rewardTracks.findFirst({
+      where: and(
+        eq(rewardTracks.profileId, data.profileId),
+        eq(rewardTracks.isActive, true),
+      ),
+    });
+
+    if (activeTrack) {
+      const syncResult = await syncTrackXp(
+        db,
+        activeTrack.id,
+        data.profileId,
+        organizationId,
+      );
+      newlyUnlockedRewardTierIds = syncResult.newlyUnlockedTierIds;
+      rewardTrackXpEarned = syncResult.xpEarned;
+    }
+
+    return {
+      success: true,
+      xpEarned: node.xpReward,
+      unlockedNodeIds,
+      newTotalXp,
+      newlyUnlockedRewardTierIds,
+      rewardTrackXpEarned,
+    };
+  });
+
+// ─── AI SKILL TREE FUNCTIONS ───
+
+const aiExpandSkillTreeInput = z.object({
+  treeId: z.string(),
+  fromNodeId: z.string(),
+  nodeCount: z.number().int().min(1).max(6).optional(),
+  focusArea: z.string().optional(),
+});
+
+export const aiExpandSkillTree = createServerFn({ method: "POST" })
+  .inputValidator((data) => aiExpandSkillTreeInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    // a) Verify fromNode belongs to this org's tree
+    const fromNode = await db.query.skillTreeNodes.findFirst({
+      where: and(
+        eq(skillTreeNodes.id, data.fromNodeId),
+        eq(skillTreeNodes.organizationId, organizationId),
+      ),
+    });
+    if (!fromNode) throw new Error("NOT_FOUND");
+
+    const tree = await db.query.skillTrees.findFirst({
+      where: and(eq(skillTrees.id, data.treeId), eq(skillTrees.organizationId, organizationId)),
+    });
+    if (!tree) throw new Error("NOT_FOUND");
+
+    // b) Fetch all existing node titles in this tree
+    const existingNodes = await db.query.skillTreeNodes.findMany({
+      where: eq(skillTreeNodes.treeId, data.treeId),
+    });
+    const existingNodeTitles = existingNodes.map((n) => n.title);
+
+    // c) Call generateNodeExpansion
+    const nodeCount = Math.min(data.nodeCount ?? 4, 6);
+    const suggestions = await generateNodeExpansion({
+      fromNodeTitle: fromNode.title,
+      fromNodeDescription: fromNode.description ?? "",
+      subject: tree.subject ?? "general",
+      gradeLevel: tree.gradeLevel ?? "mixed",
+      nodeCount,
+      focusArea: data.focusArea,
+      existingNodeTitles,
+    });
+
+    // d) Insert nodes and edges with fanned-out positions
+    const now = new Date().toISOString();
+    const newNodes: typeof existingNodes = [];
+    const newEdgeIds: string[] = [];
+
+    await Promise.all(
+      suggestions.map(async (suggestion, index) => {
+        const count = suggestions.length;
+        const angle =
+          count === 1
+            ? -Math.PI / 2
+            : (index / (count - 1)) * Math.PI - Math.PI / 2;
+        const rawX = fromNode.positionX + Math.round(Math.cos(angle) * 160);
+        const newX = Math.min(940, Math.max(60, rawX));
+        const newY = fromNode.positionY + 140;
+
+        const nodeId = crypto.randomUUID();
+        await db.insert(skillTreeNodes).values({
+          id: nodeId,
+          treeId: data.treeId,
+          organizationId,
+          title: suggestion.title,
+          description: suggestion.description || null,
+          icon: suggestion.icon || null,
+          colorRamp: suggestion.colorRamp,
+          nodeType: suggestion.nodeType,
+          xpReward: suggestion.xpReward,
+          positionX: newX,
+          positionY: newY,
+          radius: 28,
+          isRequired: false,
+          aiGeneratedDescription: suggestion.description || null,
+          createdAt: now,
+          updatedAt: now,
+        });
+
+        const edgeId = crypto.randomUUID();
+        await db.insert(skillTreeEdges).values({
+          id: edgeId,
+          treeId: data.treeId,
+          sourceNodeId: data.fromNodeId,
+          targetNodeId: nodeId,
+          edgeType: "required",
+          createdAt: now,
+        });
+
+        newEdgeIds.push(edgeId);
+
+        const inserted = await db.query.skillTreeNodes.findFirst({
+          where: eq(skillTreeNodes.id, nodeId),
+        });
+        if (inserted) newNodes.push(inserted);
+      }),
+    );
+
+    const newEdges = newEdgeIds.length
+      ? await db.query.skillTreeEdges.findMany({
+          where: inArray(skillTreeEdges.id, newEdgeIds),
+        })
+      : [];
+
+    return { newNodes, newEdges };
+  });
+
+const aiGenerateNodeAssignmentsInput = z.object({
+  nodeId: z.string(),
+  classId: z.string(),
+  count: z.number().int().min(1).max(8).optional(),
+});
+
+export const aiGenerateNodeAssignments = createServerFn({ method: "POST" })
+  .inputValidator((data) => aiGenerateNodeAssignmentsInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    // a) Fetch node
+    const node = await db.query.skillTreeNodes.findFirst({
+      where: and(
+        eq(skillTreeNodes.id, data.nodeId),
+        eq(skillTreeNodes.organizationId, organizationId),
+      ),
+    });
+    if (!node) throw new Error("NOT_FOUND");
+
+    // b) Fetch the tree's gradeLevel
+    const tree = await db.query.skillTrees.findFirst({
+      where: and(eq(skillTrees.id, node.treeId), eq(skillTrees.organizationId, organizationId)),
+    });
+    if (!tree) throw new Error("NOT_FOUND");
+
+    // Verify classId belongs to org
+    const classRow = await db.query.classes.findFirst({
+      where: and(eq(classes.id, data.classId), eq(classes.organizationId, organizationId)),
+    });
+    if (!classRow) throw new Error("NOT_FOUND");
+
+    const count = data.count ?? 3;
+    const subject = node.subject ?? tree.subject ?? "general";
+    const gradeLevel = tree.gradeLevel ?? "mixed";
+
+    // c) Ask AI for assignment suggestions
+    const prompt = [
+      `For a ${gradeLevel} student learning '${node.title}' in ${subject}, suggest ${count} assignments.`,
+      node.description ? `Context: ${node.description}` : "",
+      `Return JSON array: [{ "type": "text"|"video"|"quiz"|"essay_questions"|"report", "title": string, "description": string }]`,
+      "Return ONLY the JSON array. No markdown, no prose.",
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    const result = await env.AI.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
+      messages: [
+        { role: "system", content: "You are a homeschool curriculum designer. Output only valid JSON." },
+        { role: "user", content: prompt },
+      ],
+      max_tokens: 1200,
+    });
+
+    const responseText =
+      typeof result === "string"
+        ? result
+        : typeof (result as Record<string, unknown>).response === "string"
+          ? ((result as Record<string, unknown>).response as string)
+          : JSON.stringify(result);
+
+    const parsed = (() => {
+      const extracted = (() => {
+        try { return JSON.parse(responseText.trim()); } catch { /* fall through */ }
+        const fenced = responseText.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1];
+        if (fenced) { try { return JSON.parse(fenced.trim()); } catch { /* fall through */ } }
+        const firstBracket = responseText.indexOf("[");
+        const lastBracket = responseText.lastIndexOf("]");
+        if (firstBracket >= 0 && lastBracket > firstBracket) {
+          try { return JSON.parse(responseText.slice(firstBracket, lastBracket + 1)); } catch { /* fall through */ }
+        }
+        return null;
+      })();
+      return Array.isArray(extracted) ? extracted : null;
+    })();
+
+    if (!parsed) throw new Error("AI_ASSIGNMENT_PARSE_FAILED");
+
+    const VALID_TYPES = new Set(["text", "file", "url", "video", "quiz", "essay_questions", "report"]);
+    type SuggestionItem = { type: string; title: string; description: string };
+    const suggestions = (parsed as unknown[])
+      .filter(
+        (item): item is SuggestionItem =>
+          item !== null &&
+          typeof item === "object" &&
+          typeof (item as Record<string, unknown>).type === "string" &&
+          typeof (item as Record<string, unknown>).title === "string",
+      )
+      .map((item) => ({
+        type: VALID_TYPES.has(item.type) ? item.type : "text",
+        title: item.title.trim(),
+        description: typeof item.description === "string" ? item.description.trim() : "",
+      }))
+      .slice(0, count);
+
+    // d) Persist each assignment and e) link to node
+    const now = new Date().toISOString();
+    const createdAssignmentIds: string[] = [];
+
+    await Promise.all(
+      suggestions.map(async (suggestion, index) => {
+        const assignmentId = crypto.randomUUID();
+        await db.insert(assignments).values({
+          id: assignmentId,
+          organizationId,
+          classId: data.classId,
+          title: suggestion.title,
+          description: suggestion.description || null,
+          contentType: suggestion.type as AssignmentContentType,
+          contentRef: null,
+          linkedAssignmentId: null,
+          dueAt: null,
+          createdByUserId: session.user.id,
+          createdAt: now,
+          updatedAt: now,
+        });
+
+        await db.insert(skillTreeNodeAssignments).values({
+          id: crypto.randomUUID(),
+          nodeId: data.nodeId,
+          assignmentId,
+          orderIndex: index,
+          createdAt: now,
+        });
+
+        createdAssignmentIds.push(assignmentId);
+      }),
+    );
+
+    const createdAssignments = createdAssignmentIds.length
+      ? await db.query.assignments.findMany({
+          where: inArray(assignments.id, createdAssignmentIds),
+        })
+      : [];
+
+    return { assignments: createdAssignments, linkedCount: createdAssignments.length };
+  });
+
+const aiSuggestFullCurriculumInput = z.object({
+  treeId: z.string(),
+  subject: z.string().min(1),
+  gradeLevel: z.string().min(1),
+  depth: z.number().int().min(2).max(6).optional(),
+  seedTopic: z.string().optional(),
+});
+
+export const aiSuggestFullCurriculum = createServerFn({ method: "POST" })
+  .inputValidator((data) => aiSuggestFullCurriculumInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const tree = await db.query.skillTrees.findFirst({
+      where: and(eq(skillTrees.id, data.treeId), eq(skillTrees.organizationId, organizationId)),
+    });
+    if (!tree) throw new Error("NOT_FOUND");
+
+    // a) Fetch existing node titles
+    const existingNodes = await db.query.skillTreeNodes.findMany({
+      where: eq(skillTreeNodes.treeId, data.treeId),
+    });
+    const existingNodeTitles = existingNodes.map((n) => n.title);
+
+    // b) Call generateCurriculumTree
+    const suggestions = await generateCurriculumTree({
+      subject: data.subject,
+      gradeLevel: data.gradeLevel,
+      depth: data.depth ?? 4,
+      seedTopic: data.seedTopic,
+      existingNodeTitles,
+    });
+
+    // c) Compute positions via layoutRadialTree
+    const layoutItems = suggestions.map((s) => ({ id: s.tempId, parentId: s.parentTempId }));
+    const positionMap = layoutRadialTree(layoutItems);
+
+    // d) Insert nodes — build tempId → real ID map first
+    const tempIdToRealId = new Map<string, string>();
+    for (const suggestion of suggestions) {
+      tempIdToRealId.set(suggestion.tempId, crypto.randomUUID());
+    }
+
+    const now = new Date().toISOString();
+
+    await Promise.all(
+      suggestions.map(async (suggestion) => {
+        const nodeId = tempIdToRealId.get(suggestion.tempId)!;
+        const pos = positionMap.get(suggestion.tempId) ?? { x: 500, y: 60 };
+
+        await db.insert(skillTreeNodes).values({
+          id: nodeId,
+          treeId: data.treeId,
+          organizationId,
+          title: suggestion.title,
+          description: suggestion.description || null,
+          icon: suggestion.icon || null,
+          colorRamp: suggestion.colorRamp,
+          nodeType: suggestion.nodeType,
+          xpReward: suggestion.xpReward,
+          positionX: pos.x,
+          positionY: pos.y,
+          radius: 28,
+          isRequired: false,
+          aiGeneratedDescription: suggestion.description || null,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }),
+    );
+
+    // e) Insert edges from parentTempId → tempId relationships
+    const edgeInserts = suggestions
+      .filter((s) => s.parentTempId !== null)
+      .map((s) => {
+        const sourceId = tempIdToRealId.get(s.parentTempId!);
+        const targetId = tempIdToRealId.get(s.tempId);
+        if (!sourceId || !targetId) return null;
+        return {
+          id: crypto.randomUUID(),
+          treeId: data.treeId,
+          sourceNodeId: sourceId,
+          targetNodeId: targetId,
+          edgeType: "required" as const,
+          createdAt: now,
+        };
+      })
+      .filter((e): e is NonNullable<typeof e> => e !== null);
+
+    if (edgeInserts.length > 0) {
+      await Promise.all(edgeInserts.map((edge) => db.insert(skillTreeEdges).values(edge)));
+    }
+
+    // Fetch and return inserted rows
+    const realNodeIds = [...tempIdToRealId.values()];
+    const realEdgeIds = edgeInserts.map((e) => e.id);
+
+    const [insertedNodes, insertedEdges] = await Promise.all([
+      realNodeIds.length
+        ? db.query.skillTreeNodes.findMany({ where: inArray(skillTreeNodes.id, realNodeIds) })
+        : Promise.resolve([]),
+      realEdgeIds.length
+        ? db.query.skillTreeEdges.findMany({ where: inArray(skillTreeEdges.id, realEdgeIds) })
+        : Promise.resolve([]),
+    ]);
+
+    return {
+      insertedNodes: insertedNodes.length,
+      insertedEdges: insertedEdges.length,
+      nodes: insertedNodes,
+      edges: insertedEdges,
+    };
+  });
+
+// ── Student skill trees ───────────────────────────────────────────────────────
+
+const studentSkillTreesInput = z.object({ profileId: z.string() });
+
+export const getStudentSkillTrees = createServerFn({ method: "GET" })
+  .inputValidator((data) => studentSkillTreesInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent", "student"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    // Get classes the profile is enrolled in
+    const enrolledRows = await db
+      .select({ classId: classEnrollments.classId })
+      .from(classEnrollments)
+      .where(eq(classEnrollments.profileId, data.profileId));
+
+    const enrolledClassIds = enrolledRows.map((r) => r.classId);
+
+    // Find trees for this org where classId is in enrolled classes
+    const treeRows = enrolledClassIds.length
+      ? await db.query.skillTrees.findMany({
+          where: and(
+            eq(skillTrees.organizationId, organizationId),
+            inArray(skillTrees.classId, enrolledClassIds),
+          ),
+          orderBy: [desc(skillTrees.createdAt)],
+        })
+      : [];
+
+    if (treeRows.length === 0) return [];
+
+    const treeIds = treeRows.map((t) => t.id);
+
+    // Node counts and progress per tree
+    const [nodeCounts, progressRows] = await Promise.all([
+      db
+        .select({ treeId: skillTreeNodes.treeId, total: count() })
+        .from(skillTreeNodes)
+        .where(inArray(skillTreeNodes.treeId, treeIds))
+        .groupBy(skillTreeNodes.treeId),
+      db
+        .select({
+          treeId: skillTreeNodes.treeId,
+          status: skillTreeNodeProgress.status,
+          xpEarned: skillTreeNodeProgress.xpEarned,
+        })
+        .from(skillTreeNodeProgress)
+        .innerJoin(skillTreeNodes, eq(skillTreeNodeProgress.nodeId, skillTreeNodes.id))
+        .where(
+          and(
+            eq(skillTreeNodeProgress.profileId, data.profileId),
+            inArray(skillTreeNodes.treeId, treeIds),
+          ),
+        ),
+    ]);
+
+    const nodeCountMap = new Map(nodeCounts.map((r) => [r.treeId, r.total]));
+
+    // Group progress by tree
+    const progressByTree = new Map<string, typeof progressRows>();
+    for (const row of progressRows) {
+      const existing = progressByTree.get(row.treeId) ?? [];
+      existing.push(row);
+      progressByTree.set(row.treeId, existing);
+    }
+
+    return treeRows.map((tree) => {
+      const prog = progressByTree.get(tree.id) ?? [];
+      const completedNodes = prog.filter(
+        (p) => p.status === "complete" || p.status === "mastery",
+      ).length;
+      const earnedXp = prog.reduce((acc, p) => acc + (p.xpEarned ?? 0), 0);
+      return {
+        tree,
+        completedNodes,
+        totalNodes: nodeCountMap.get(tree.id) ?? 0,
+        earnedXp,
+      };
+    });
+  });
+
+// ─── REWARD TRACKS ───────────────────────────────────────────────────────────
+
+// Internal helper — not exported as a server fn.
+// Computes XP earned within a track's active window, upserts the snapshot,
+// then checks each tier and inserts unclaimed reward claim rows for newly reached tiers.
+async function syncTrackXp(
+  db: ReturnType<typeof getDb>,
+  trackId: string,
+  profileId: string,
+  organizationId: string,
+): Promise<{ xpEarned: number; newlyUnlockedTierIds: string[] }> {
+  // Fetch the track so we know startedAt
+  const track = await db.query.rewardTracks.findFirst({
+    where: eq(rewardTracks.id, trackId),
+  });
+  if (!track) return { xpEarned: 0, newlyUnlockedTierIds: [] };
+
+  // Sum xpEarned from skillTreeNodeProgress for all trees in this org for this profile,
+  // filtered to completedAt >= startedAt when startedAt is set.
+  const orgTreeRows = await db.query.skillTrees.findMany({
+    where: eq(skillTrees.organizationId, organizationId),
+    columns: { id: true },
+  });
+  const orgTreeIds = orgTreeRows.map((t) => t.id);
+
+  let xpEarned = 0;
+  if (orgTreeIds.length > 0) {
+    const conditions = [
+      inArray(skillTreeNodeProgress.treeId, orgTreeIds),
+      eq(skillTreeNodeProgress.profileId, profileId),
+    ];
+    if (track.startedAt) {
+      conditions.push(gte(skillTreeNodeProgress.completedAt, track.startedAt));
+    }
+
+    const xpResult = await db
+      .select({ total: sum(skillTreeNodeProgress.xpEarned) })
+      .from(skillTreeNodeProgress)
+      .where(and(...conditions));
+    xpEarned = Number(xpResult[0]?.total ?? 0);
+  }
+
+  // Upsert snapshot
+  const existingSnapshot = await db.query.rewardTrackXpSnapshots.findFirst({
+    where: and(
+      eq(rewardTrackXpSnapshots.trackId, trackId),
+      eq(rewardTrackXpSnapshots.profileId, profileId),
+    ),
+  });
+
+  const now = new Date().toISOString();
+  if (existingSnapshot) {
+    await db
+      .update(rewardTrackXpSnapshots)
+      .set({ xpEarned, lastUpdatedAt: now })
+      .where(
+        and(
+          eq(rewardTrackXpSnapshots.trackId, trackId),
+          eq(rewardTrackXpSnapshots.profileId, profileId),
+        ),
+      );
+  } else {
+    await db.insert(rewardTrackXpSnapshots).values({
+      id: crypto.randomUUID(),
+      trackId,
+      profileId,
+      xpEarned,
+      lastUpdatedAt: now,
+    });
+  }
+
+  // Check tiers and auto-insert unclaimed claim rows for newly reached tiers
+  const tiers = await db.query.rewardTiers.findMany({
+    where: eq(rewardTiers.trackId, trackId),
+    orderBy: (t, { asc }) => [asc(t.tierNumber)],
+  });
+
+  const existingClaims = await db.query.rewardClaims.findMany({
+    where: and(
+      eq(rewardClaims.trackId, trackId),
+      eq(rewardClaims.profileId, profileId),
+    ),
+    columns: { tierId: true },
+  });
+  const claimedTierIds = new Set(existingClaims.map((c) => c.tierId));
+
+  const newlyUnlockedTierIds: string[] = [];
+  for (const tier of tiers) {
+    if (xpEarned >= tier.xpThreshold && !claimedTierIds.has(tier.id)) {
+      await db.insert(rewardClaims).values({
+        id: crypto.randomUUID(),
+        tierId: tier.id,
+        trackId,
+        profileId,
+        organizationId,
+        status: "unclaimed",
+        createdAt: now,
+        updatedAt: now,
+      });
+      newlyUnlockedTierIds.push(tier.id);
+    }
+  }
+
+  return { xpEarned, newlyUnlockedTierIds };
+}
+
+// ── Parent read: all tracks for org ──────────────────────────────────────────
+
+export const getRewardTracksForOrg = createServerFn({ method: "GET" }).handler(async () => {
+  const session = await requireActiveRole(["admin", "parent"]);
+  const db = getDb();
+
+  const organizationId = await resolveActiveOrganizationId(
+    session.user.id,
+    session.session.activeOrganizationId,
+  );
+
+  const tracks = await db.query.rewardTracks.findMany({
+    where: eq(rewardTracks.organizationId, organizationId),
+    orderBy: (t, { desc: d, asc: a }) => [d(t.isActive), d(t.updatedAt)],
+  });
+
+  const results = await Promise.all(
+    tracks.map(async (track) => {
+      const [profile, tiers, snapshot, pendingClaimRows] = await Promise.all([
+        db.query.profiles.findFirst({
+          where: eq(profiles.id, track.profileId),
+          columns: { id: true, displayName: true },
+        }),
+        db.query.rewardTiers.findMany({
+          where: eq(rewardTiers.trackId, track.id),
+          orderBy: (t, { asc: a }) => [a(t.tierNumber)],
+        }),
+        db.query.rewardTrackXpSnapshots.findFirst({
+          where: and(
+            eq(rewardTrackXpSnapshots.trackId, track.id),
+            eq(rewardTrackXpSnapshots.profileId, track.profileId),
+          ),
+        }),
+        db.query.rewardClaims.findMany({
+          where: and(
+            eq(rewardClaims.trackId, track.id),
+            eq(rewardClaims.status, "claimed"),
+          ),
+          columns: { id: true },
+        }),
+      ]);
+
+      return {
+        ...track,
+        profile: profile ?? null,
+        tiers,
+        snapshot: snapshot ?? null,
+        pendingClaimsCount: pendingClaimRows.length,
+      };
+    }),
+  );
+
+  return results;
+});
+
+// ── Parent read: single track detail ─────────────────────────────────────────
+
+const getRewardTrackDetailInput = z.object({ trackId: z.string() });
+
+export const getRewardTrackDetail = createServerFn({ method: "GET" })
+  .inputValidator((data) => getRewardTrackDetailInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const track = await db.query.rewardTracks.findFirst({
+      where: and(
+        eq(rewardTracks.id, data.trackId),
+        eq(rewardTracks.organizationId, organizationId),
+      ),
+    });
+    if (!track) throw new Error("NOT_FOUND");
+
+    const [profile, tiers, claims, snapshot] = await Promise.all([
+      db.query.profiles.findFirst({
+        where: eq(profiles.id, track.profileId),
+        columns: { id: true, displayName: true, gradeLevel: true },
+      }),
+      db.query.rewardTiers.findMany({
+        where: eq(rewardTiers.trackId, track.id),
+        orderBy: (t, { asc: a }) => [a(t.tierNumber)],
+      }),
+      db.query.rewardClaims.findMany({
+        where: eq(rewardClaims.trackId, track.id),
+      }),
+      db.query.rewardTrackXpSnapshots.findFirst({
+        where: and(
+          eq(rewardTrackXpSnapshots.trackId, track.id),
+          eq(rewardTrackXpSnapshots.profileId, track.profileId),
+        ),
+      }),
+    ]);
+
+    // Join claims with profile display names
+    const claimsWithProfile = claims.map((claim) => ({
+      ...claim,
+      profile: profile && claim.profileId === profile.id
+        ? { displayName: profile.displayName }
+        : null,
+    }));
+
+    return {
+      track,
+      tiers,
+      claims: claimsWithProfile,
+      snapshot: snapshot ?? null,
+      profile: profile ?? null,
+    };
+  });
+
+// ── Parent write: create track ────────────────────────────────────────────────
+
+const createRewardTrackInput = z.object({
+  profileId: z.string(),
+  title: z.string().min(1),
+  description: z.string().optional(),
+  schoolYear: z.string().optional(),
+  totalXpGoal: z.number().int().positive().optional(),
+  tiers: z.array(
+    z.object({
+      tierNumber: z.number().int().min(1),
+      title: z.string().min(1),
+      description: z.string().optional(),
+      icon: z.string().optional(),
+      rewardType: z.string().optional(),
+      estimatedValue: z.string().optional(),
+      isBonusTier: z.boolean().optional(),
+      xpThreshold: z.number().int().nonnegative().optional(),
+    }),
+  ),
+});
+
+export const createRewardTrack = createServerFn({ method: "POST" })
+  .inputValidator((data) => createRewardTrackInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    // Verify the profile belongs to this org
+    const profile = await db.query.profiles.findFirst({
+      where: and(
+        eq(profiles.id, data.profileId),
+        eq(profiles.organizationId, organizationId),
+      ),
+    });
+    if (!profile) throw new Error("FORBIDDEN");
+
+    const totalXpGoal = data.totalXpGoal ?? 5000;
+    const now = new Date().toISOString();
+    const trackId = crypto.randomUUID();
+
+    await db.insert(rewardTracks).values({
+      id: trackId,
+      organizationId,
+      profileId: data.profileId,
+      createdByUserId: session.user.id,
+      title: data.title,
+      description: data.description ?? null,
+      schoolYear: data.schoolYear ?? null,
+      totalXpGoal,
+      isActive: false,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    const tierRows = data.tiers.map((tier) => ({
+      id: crypto.randomUUID(),
+      trackId,
+      organizationId,
+      tierNumber: tier.tierNumber,
+      xpThreshold: tier.xpThreshold ?? Math.round((tier.tierNumber / 10) * totalXpGoal),
+      title: tier.title,
+      description: tier.description ?? null,
+      icon: tier.icon ?? "🎁",
+      rewardType: tier.rewardType ?? "treat",
+      estimatedValue: tier.estimatedValue ?? null,
+      isBonusTier: tier.isBonusTier ?? false,
+      createdAt: now,
+      updatedAt: now,
+    }));
+
+    if (tierRows.length > 0) {
+      await db.insert(rewardTiers).values(tierRows);
+    }
+
+    return { trackId, tierCount: tierRows.length };
+  });
+
+// ── Parent write: update track ────────────────────────────────────────────────
+
+const updateRewardTrackInput = z.object({
+  trackId: z.string(),
+  title: z.string().min(1).optional(),
+  description: z.string().optional(),
+  schoolYear: z.string().optional(),
+  totalXpGoal: z.number().int().positive().optional(),
+});
+
+export const updateRewardTrack = createServerFn({ method: "POST" })
+  .inputValidator((data) => updateRewardTrackInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const track = await db.query.rewardTracks.findFirst({
+      where: and(
+        eq(rewardTracks.id, data.trackId),
+        eq(rewardTracks.organizationId, organizationId),
+      ),
+    });
+    if (!track) throw new Error("NOT_FOUND");
+
+    const now = new Date().toISOString();
+    const updates: Partial<typeof rewardTracks.$inferInsert> = { updatedAt: now };
+    if (data.title !== undefined) updates.title = data.title;
+    if (data.description !== undefined) updates.description = data.description;
+    if (data.schoolYear !== undefined) updates.schoolYear = data.schoolYear;
+    if (data.totalXpGoal !== undefined) updates.totalXpGoal = data.totalXpGoal;
+
+    await db
+      .update(rewardTracks)
+      .set(updates)
+      .where(eq(rewardTracks.id, data.trackId));
+
+    return db.query.rewardTracks.findFirst({ where: eq(rewardTracks.id, data.trackId) });
+  });
+
+// ── Parent write: upsert tier ─────────────────────────────────────────────────
+
+const upsertRewardTierInput = z.object({
+  trackId: z.string(),
+  tierId: z.string().optional(),
+  tierNumber: z.number().int().min(1),
+  title: z.string().min(1),
+  description: z.string().optional(),
+  icon: z.string().optional(),
+  rewardType: z.string().optional(),
+  estimatedValue: z.string().optional(),
+  xpThreshold: z.number().int().nonnegative().optional(),
+  isBonusTier: z.boolean().optional(),
+});
+
+export const upsertRewardTier = createServerFn({ method: "POST" })
+  .inputValidator((data) => upsertRewardTierInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const track = await db.query.rewardTracks.findFirst({
+      where: and(
+        eq(rewardTracks.id, data.trackId),
+        eq(rewardTracks.organizationId, organizationId),
+      ),
+    });
+    if (!track) throw new Error("NOT_FOUND");
+
+    const now = new Date().toISOString();
+    const threshold =
+      data.xpThreshold ?? Math.round((data.tierNumber / 10) * track.totalXpGoal);
+
+    if (data.tierId) {
+      await db
+        .update(rewardTiers)
+        .set({
+          tierNumber: data.tierNumber,
+          title: data.title,
+          description: data.description ?? null,
+          icon: data.icon ?? "🎁",
+          rewardType: data.rewardType ?? "treat",
+          estimatedValue: data.estimatedValue ?? null,
+          xpThreshold: threshold,
+          isBonusTier: data.isBonusTier ?? false,
+          updatedAt: now,
+        })
+        .where(eq(rewardTiers.id, data.tierId));
+      return db.query.rewardTiers.findFirst({ where: eq(rewardTiers.id, data.tierId) });
+    }
+
+    const tierId = crypto.randomUUID();
+    await db.insert(rewardTiers).values({
+      id: tierId,
+      trackId: data.trackId,
+      organizationId,
+      tierNumber: data.tierNumber,
+      xpThreshold: threshold,
+      title: data.title,
+      description: data.description ?? null,
+      icon: data.icon ?? "🎁",
+      rewardType: data.rewardType ?? "treat",
+      estimatedValue: data.estimatedValue ?? null,
+      isBonusTier: data.isBonusTier ?? false,
+      createdAt: now,
+      updatedAt: now,
+    });
+    return db.query.rewardTiers.findFirst({ where: eq(rewardTiers.id, tierId) });
+  });
+
+// ── Parent write: delete tier ─────────────────────────────────────────────────
+
+const deleteRewardTierInput = z.object({ tierId: z.string() });
+
+export const deleteRewardTier = createServerFn({ method: "POST" })
+  .inputValidator((data) => deleteRewardTierInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const tier = await db.query.rewardTiers.findFirst({
+      where: eq(rewardTiers.id, data.tierId),
+    });
+    if (!tier) throw new Error("NOT_FOUND");
+
+    // Verify the tier's track belongs to this org
+    const track = await db.query.rewardTracks.findFirst({
+      where: and(
+        eq(rewardTracks.id, tier.trackId),
+        eq(rewardTracks.organizationId, organizationId),
+      ),
+    });
+    if (!track) throw new Error("FORBIDDEN");
+
+    await db.delete(rewardClaims).where(eq(rewardClaims.tierId, data.tierId));
+    await db.delete(rewardTiers).where(eq(rewardTiers.id, data.tierId));
+
+    return { success: true };
+  });
+
+// ── Parent write: activate track ──────────────────────────────────────────────
+
+const activateRewardTrackInput = z.object({ trackId: z.string() });
+
+export const activateRewardTrack = createServerFn({ method: "POST" })
+  .inputValidator((data) => activateRewardTrackInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const track = await db.query.rewardTracks.findFirst({
+      where: and(
+        eq(rewardTracks.id, data.trackId),
+        eq(rewardTracks.organizationId, organizationId),
+      ),
+    });
+    if (!track) throw new Error("NOT_FOUND");
+
+    const now = new Date().toISOString();
+
+    // a) Deactivate all other tracks for this profile
+    await db
+      .update(rewardTracks)
+      .set({ isActive: false, updatedAt: now })
+      .where(
+        and(
+          eq(rewardTracks.profileId, track.profileId),
+          eq(rewardTracks.organizationId, organizationId),
+        ),
+      );
+
+    // b) Activate this track
+    await db
+      .update(rewardTracks)
+      .set({ isActive: true, startedAt: now, updatedAt: now })
+      .where(eq(rewardTracks.id, data.trackId));
+
+    // c) Insert/reset snapshot at 0 (syncTrackXp will fill it in)
+    const existingSnapshot = await db.query.rewardTrackXpSnapshots.findFirst({
+      where: and(
+        eq(rewardTrackXpSnapshots.trackId, data.trackId),
+        eq(rewardTrackXpSnapshots.profileId, track.profileId),
+      ),
+    });
+    if (!existingSnapshot) {
+      await db.insert(rewardTrackXpSnapshots).values({
+        id: crypto.randomUUID(),
+        trackId: data.trackId,
+        profileId: track.profileId,
+        xpEarned: 0,
+        lastUpdatedAt: now,
+      });
+    }
+
+    // d+e) Sync XP immediately
+    const syncResult = await syncTrackXp(
+      db,
+      data.trackId,
+      track.profileId,
+      organizationId,
+    );
+
+    return {
+      success: true,
+      xpEarned: syncResult.xpEarned,
+      newlyUnlockedTierIds: syncResult.newlyUnlockedTierIds,
+    };
+  });
+
+// ── Parent write: deactivate track ────────────────────────────────────────────
+
+const deactivateRewardTrackInput = z.object({ trackId: z.string() });
+
+export const deactivateRewardTrack = createServerFn({ method: "POST" })
+  .inputValidator((data) => deactivateRewardTrackInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const track = await db.query.rewardTracks.findFirst({
+      where: and(
+        eq(rewardTracks.id, data.trackId),
+        eq(rewardTracks.organizationId, organizationId),
+      ),
+    });
+    if (!track) throw new Error("NOT_FOUND");
+
+    const now = new Date().toISOString();
+    await db
+      .update(rewardTracks)
+      .set({ isActive: false, completedAt: now, updatedAt: now })
+      .where(eq(rewardTracks.id, data.trackId));
+
+    return { success: true };
+  });
+
+// ── Parent write: deliver reward ──────────────────────────────────────────────
+
+const deliverRewardInput = z.object({
+  claimId: z.string(),
+  parentNote: z.string().optional(),
+});
+
+export const deliverReward = createServerFn({ method: "POST" })
+  .inputValidator((data) => deliverRewardInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const claim = await db.query.rewardClaims.findFirst({
+      where: and(
+        eq(rewardClaims.id, data.claimId),
+        eq(rewardClaims.organizationId, organizationId),
+      ),
+    });
+    if (!claim) throw new Error("NOT_FOUND");
+
+    const now = new Date().toISOString();
+    await db
+      .update(rewardClaims)
+      .set({
+        status: "delivered",
+        deliveredAt: now,
+        deliveredByUserId: session.user.id,
+        parentNote: data.parentNote ?? null,
+        updatedAt: now,
+      })
+      .where(eq(rewardClaims.id, data.claimId));
+
+    return db.query.rewardClaims.findFirst({ where: eq(rewardClaims.id, data.claimId) });
+  });
+
+// ── Student: get active reward track ─────────────────────────────────────────
+
+const getActiveRewardTrackForStudentInput = z.object({ profileId: z.string() });
+
+export const getActiveRewardTrackForStudent = createServerFn({ method: "GET" })
+  .inputValidator((data) => getActiveRewardTrackForStudentInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent", "student"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const track = await db.query.rewardTracks.findFirst({
+      where: and(
+        eq(rewardTracks.profileId, data.profileId),
+        eq(rewardTracks.isActive, true),
+      ),
+    });
+    if (!track) return null;
+
+    const [tiers, claims, snapshot] = await Promise.all([
+      db.query.rewardTiers.findMany({
+        where: eq(rewardTiers.trackId, track.id),
+        orderBy: (t, { asc: a }) => [a(t.tierNumber)],
+      }),
+      db.query.rewardClaims.findMany({
+        where: and(
+          eq(rewardClaims.trackId, track.id),
+          eq(rewardClaims.profileId, data.profileId),
+        ),
+      }),
+      db.query.rewardTrackXpSnapshots.findFirst({
+        where: and(
+          eq(rewardTrackXpSnapshots.trackId, track.id),
+          eq(rewardTrackXpSnapshots.profileId, data.profileId),
+        ),
+      }),
+    ]);
+
+    // Sync XP to get fresh value
+    const syncResult = await syncTrackXp(db, track.id, data.profileId, organizationId);
+
+    return {
+      track,
+      tiers,
+      claims,
+      xpEarned: syncResult.xpEarned,
+      newlyUnlockedTierIds: syncResult.newlyUnlockedTierIds,
+    };
+  });
+
+// ── Student: claim reward ─────────────────────────────────────────────────────
+
+const claimRewardInput = z.object({
+  tierId: z.string(),
+  profileId: z.string(),
+});
+
+export const claimReward = createServerFn({ method: "POST" })
+  .inputValidator((data) => claimRewardInput.parse(data))
+  .handler(async ({ data }) => {
+    await requireActiveRole(["admin", "parent", "student"]);
+    const db = getDb();
+
+    const tier = await db.query.rewardTiers.findFirst({
+      where: eq(rewardTiers.id, data.tierId),
+    });
+    if (!tier) throw new Error("NOT_FOUND");
+
+    // Verify the track is active for this profile
+    const track = await db.query.rewardTracks.findFirst({
+      where: and(
+        eq(rewardTracks.id, tier.trackId),
+        eq(rewardTracks.profileId, data.profileId),
+        eq(rewardTracks.isActive, true),
+      ),
+    });
+    if (!track) throw new Error("TIER_NOT_UNLOCKED");
+
+    // Find existing unclaimed claim row
+    const claim = await db.query.rewardClaims.findFirst({
+      where: and(
+        eq(rewardClaims.tierId, data.tierId),
+        eq(rewardClaims.profileId, data.profileId),
+      ),
+    });
+
+    if (!claim || claim.status !== "unclaimed") {
+      throw new Error("TIER_NOT_UNLOCKED");
+    }
+
+    const now = new Date().toISOString();
+    await db
+      .update(rewardClaims)
+      .set({ status: "claimed", claimedAt: now, updatedAt: now })
+      .where(eq(rewardClaims.id, claim.id));
+
+    return { success: true, tier };
+  });
+
+// ── AI: suggest rewards ───────────────────────────────────────────────────────
+
+const aiSuggestRewardsInput = z.object({ profileId: z.string() });
+
+export const aiSuggestRewards = createServerFn({ method: "POST" })
+  .inputValidator((data) => aiSuggestRewardsInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const profile = await db.query.profiles.findFirst({
+      where: and(
+        eq(profiles.id, data.profileId),
+        eq(profiles.organizationId, organizationId),
+      ),
+    });
+    if (!profile) throw new Error("NOT_FOUND");
+
+    const suggestions = await generateRewardSuggestions({
+      gradeLevel: profile.gradeLevel ?? "unknown",
+      studentName: profile.displayName,
+      count: 10,
+    });
+
+    return suggestions;
   });

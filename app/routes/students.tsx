@@ -9,6 +9,7 @@ import {
   updateStudentProfile,
 } from "../server/functions";
 import { DeleteConfirmModal } from "../components/delete-confirm-modal";
+import { OrcaMark } from "../components/icons/orca-mark";
 
 export const Route = createFileRoute("/students")({
   component: StudentsPage,
@@ -196,15 +197,7 @@ function StudentsPage() {
         <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <span className="orca-icon-chip" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
-                <path
-                  d="M4 14c3.5 0 5.5-2.5 8-2.5 2 0 3.8 1 6 1.8V9.5l2 1.2-2 1.1v4.7c-2.5-.5-4.2-1.5-6-1.5-2.8 0-4.5 2.5-8 2.5v-3.5Z"
-                  stroke="currentColor"
-                  strokeWidth="1.6"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
+              <OrcaMark className="h-6 w-6" alt="" />
             </span>
             <h1 className="text-3xl font-semibold text-slate-900">Manage Students</h1>
           </div>

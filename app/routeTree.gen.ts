@@ -9,10 +9,13 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as TemplatesRouteImport } from './routes/templates'
 import { Route as StudentsRouteImport } from './routes/students'
 import { Route as StudentRouteImport } from './routes/student'
+import { Route as SkillTreesRouteImport } from './routes/skill-trees'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SelectStudentRouteImport } from './routes/select-student'
+import { Route as RewardsRouteImport } from './routes/rewards'
 import { Route as RegisterRouteImport } from './routes/register'
 import { Route as PlannerRouteImport } from './routes/planner'
 import { Route as LoginRouteImport } from './routes/login'
@@ -21,7 +24,14 @@ import { Route as ClassesRouteImport } from './routes/classes'
 import { Route as AssignmentsRouteImport } from './routes/assignments'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as SkillTreeTreeIdRouteImport } from './routes/skill-tree.$treeId'
+import { Route as RewardsTrackIdRouteImport } from './routes/rewards.$trackId'
 
+const TemplatesRoute = TemplatesRouteImport.update({
+  id: '/templates',
+  path: '/templates',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const StudentsRoute = StudentsRouteImport.update({
   id: '/students',
   path: '/students',
@@ -32,6 +42,11 @@ const StudentRoute = StudentRouteImport.update({
   path: '/student',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SkillTreesRoute = SkillTreesRouteImport.update({
+  id: '/skill-trees',
+  path: '/skill-trees',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
@@ -40,6 +55,11 @@ const SettingsRoute = SettingsRouteImport.update({
 const SelectStudentRoute = SelectStudentRouteImport.update({
   id: '/select-student',
   path: '/select-student',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RewardsRoute = RewardsRouteImport.update({
+  id: '/rewards',
+  path: '/rewards',
   getParentRoute: () => rootRouteImport,
 } as any)
 const RegisterRoute = RegisterRouteImport.update({
@@ -82,6 +102,16 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SkillTreeTreeIdRoute = SkillTreeTreeIdRouteImport.update({
+  id: '/skill-tree/$treeId',
+  path: '/skill-tree/$treeId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RewardsTrackIdRoute = RewardsTrackIdRouteImport.update({
+  id: '/$trackId',
+  path: '/$trackId',
+  getParentRoute: () => RewardsRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -92,10 +122,15 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/planner': typeof PlannerRoute
   '/register': typeof RegisterRoute
+  '/rewards': typeof RewardsRouteWithChildren
   '/select-student': typeof SelectStudentRoute
   '/settings': typeof SettingsRoute
+  '/skill-trees': typeof SkillTreesRoute
   '/student': typeof StudentRoute
   '/students': typeof StudentsRoute
+  '/templates': typeof TemplatesRoute
+  '/rewards/$trackId': typeof RewardsTrackIdRoute
+  '/skill-tree/$treeId': typeof SkillTreeTreeIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -106,10 +141,15 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/planner': typeof PlannerRoute
   '/register': typeof RegisterRoute
+  '/rewards': typeof RewardsRouteWithChildren
   '/select-student': typeof SelectStudentRoute
   '/settings': typeof SettingsRoute
+  '/skill-trees': typeof SkillTreesRoute
   '/student': typeof StudentRoute
   '/students': typeof StudentsRoute
+  '/templates': typeof TemplatesRoute
+  '/rewards/$trackId': typeof RewardsTrackIdRoute
+  '/skill-tree/$treeId': typeof SkillTreeTreeIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -121,10 +161,15 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/planner': typeof PlannerRoute
   '/register': typeof RegisterRoute
+  '/rewards': typeof RewardsRouteWithChildren
   '/select-student': typeof SelectStudentRoute
   '/settings': typeof SettingsRoute
+  '/skill-trees': typeof SkillTreesRoute
   '/student': typeof StudentRoute
   '/students': typeof StudentsRoute
+  '/templates': typeof TemplatesRoute
+  '/rewards/$trackId': typeof RewardsTrackIdRoute
+  '/skill-tree/$treeId': typeof SkillTreeTreeIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -137,10 +182,15 @@ export interface FileRouteTypes {
     | '/login'
     | '/planner'
     | '/register'
+    | '/rewards'
     | '/select-student'
     | '/settings'
+    | '/skill-trees'
     | '/student'
     | '/students'
+    | '/templates'
+    | '/rewards/$trackId'
+    | '/skill-tree/$treeId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -151,10 +201,15 @@ export interface FileRouteTypes {
     | '/login'
     | '/planner'
     | '/register'
+    | '/rewards'
     | '/select-student'
     | '/settings'
+    | '/skill-trees'
     | '/student'
     | '/students'
+    | '/templates'
+    | '/rewards/$trackId'
+    | '/skill-tree/$treeId'
   id:
     | '__root__'
     | '/'
@@ -165,10 +220,15 @@ export interface FileRouteTypes {
     | '/login'
     | '/planner'
     | '/register'
+    | '/rewards'
     | '/select-student'
     | '/settings'
+    | '/skill-trees'
     | '/student'
     | '/students'
+    | '/templates'
+    | '/rewards/$trackId'
+    | '/skill-tree/$treeId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -180,14 +240,25 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   PlannerRoute: typeof PlannerRoute
   RegisterRoute: typeof RegisterRoute
+  RewardsRoute: typeof RewardsRouteWithChildren
   SelectStudentRoute: typeof SelectStudentRoute
   SettingsRoute: typeof SettingsRoute
+  SkillTreesRoute: typeof SkillTreesRoute
   StudentRoute: typeof StudentRoute
   StudentsRoute: typeof StudentsRoute
+  TemplatesRoute: typeof TemplatesRoute
+  SkillTreeTreeIdRoute: typeof SkillTreeTreeIdRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/templates': {
+      id: '/templates'
+      path: '/templates'
+      fullPath: '/templates'
+      preLoaderRoute: typeof TemplatesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/students': {
       id: '/students'
       path: '/students'
@@ -202,6 +273,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof StudentRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/skill-trees': {
+      id: '/skill-trees'
+      path: '/skill-trees'
+      fullPath: '/skill-trees'
+      preLoaderRoute: typeof SkillTreesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/settings': {
       id: '/settings'
       path: '/settings'
@@ -214,6 +292,13 @@ declare module '@tanstack/react-router' {
       path: '/select-student'
       fullPath: '/select-student'
       preLoaderRoute: typeof SelectStudentRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/rewards': {
+      id: '/rewards'
+      path: '/rewards'
+      fullPath: '/rewards'
+      preLoaderRoute: typeof RewardsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/register': {
@@ -272,8 +357,33 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/skill-tree/$treeId': {
+      id: '/skill-tree/$treeId'
+      path: '/skill-tree/$treeId'
+      fullPath: '/skill-tree/$treeId'
+      preLoaderRoute: typeof SkillTreeTreeIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/rewards/$trackId': {
+      id: '/rewards/$trackId'
+      path: '/$trackId'
+      fullPath: '/rewards/$trackId'
+      preLoaderRoute: typeof RewardsTrackIdRouteImport
+      parentRoute: typeof RewardsRoute
+    }
   }
 }
+
+interface RewardsRouteChildren {
+  RewardsTrackIdRoute: typeof RewardsTrackIdRoute
+}
+
+const RewardsRouteChildren: RewardsRouteChildren = {
+  RewardsTrackIdRoute: RewardsTrackIdRoute,
+}
+
+const RewardsRouteWithChildren =
+  RewardsRoute._addFileChildren(RewardsRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
@@ -284,10 +394,14 @@ const rootRouteChildren: RootRouteChildren = {
   LoginRoute: LoginRoute,
   PlannerRoute: PlannerRoute,
   RegisterRoute: RegisterRoute,
+  RewardsRoute: RewardsRouteWithChildren,
   SelectStudentRoute: SelectStudentRoute,
   SettingsRoute: SettingsRoute,
+  SkillTreesRoute: SkillTreesRoute,
   StudentRoute: StudentRoute,
   StudentsRoute: StudentsRoute,
+  TemplatesRoute: TemplatesRoute,
+  SkillTreeTreeIdRoute: SkillTreeTreeIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

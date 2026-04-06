@@ -1,12 +1,19 @@
 import { useState } from "react";
 import { Link, createFileRoute, redirect } from "@tanstack/react-router";
-import { getViewerContext, loginAsParent } from "../server/functions";
+import { PostLoginRoleModal } from "../components/post-login-role-modal";
+import {
+  completePostLoginRoleSelection,
+  getStudentSelectionOptions,
+  getViewerContext,
+  loginAsParent,
+  logoutSession,
+} from "../server/functions";
 
 export const Route = createFileRoute("/login")({
   loader: async () => {
     const viewer = await getViewerContext();
     if (viewer.isAuthenticated) {
-      throw redirect({ to: viewer.activeRole === "student" ? "/student" : "/select-student" });
+      throw redirect({ to: viewer.activeRole === "student" ? "/student" : "/" });
     }
 
     return null;
@@ -19,6 +26,14 @@ function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [roleModalOpen, setRoleModalOpen] = useState(false);
+  const [roleModalError, setRoleModalError] = useState<string | null>(null);
+  const [roleModalLoading, setRoleModalLoading] = useState(false);
+  const [profiles, setProfiles] = useState<Array<{
+    id: string;
+    displayName: string;
+    gradeLevel: string | null;
+  }>>([]);
 
   const submitParentLogin = async () => {
     setError(null);
@@ -42,12 +57,75 @@ function LoginPage() {
           password: password.trim(),
         },
       });
-
-      window.location.assign("/select-student");
+      const options = await getStudentSelectionOptions();
+      setProfiles(options.profiles);
+      setRoleModalError(null);
+      setRoleModalOpen(true);
     } catch (err) {
       setError("Invalid username or password.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleParentSelection = async (pin: string) => {
+    setRoleModalError(null);
+    setRoleModalLoading(true);
+    try {
+      await completePostLoginRoleSelection({
+        data: {
+          mode: "parent",
+          parentPin: pin,
+        },
+      });
+      window.location.assign("/");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "";
+      setRoleModalError(
+        message === "INVALID_PIN"
+          ? "Incorrect parent PIN."
+          : "Could not continue to parent dashboard.",
+      );
+      setRoleModalLoading(false);
+    }
+  };
+
+  const handleStudentSelection = async (profileId: string, pin: string) => {
+    setRoleModalError(null);
+    setRoleModalLoading(true);
+    try {
+      await completePostLoginRoleSelection({
+        data: {
+          mode: "student",
+          profileId,
+          studentPin: pin,
+        },
+      });
+      window.location.assign("/student");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "";
+      if (message === "INVALID_PIN") {
+        setRoleModalError("Incorrect student PIN.");
+      } else if (message === "FORBIDDEN") {
+        setRoleModalError("Selected student is unavailable.");
+      } else {
+        setRoleModalError("Could not continue to student dashboard.");
+      }
+      setRoleModalLoading(false);
+    }
+  };
+
+  const handleRoleModalCancel = async () => {
+    setRoleModalError(null);
+    setRoleModalLoading(true);
+    try {
+      await logoutSession();
+    } catch {
+      // Ignore logout errors; still force login page refresh.
+    } finally {
+      setRoleModalOpen(false);
+      setRoleModalLoading(false);
+      window.location.assign("/login");
     }
   };
 
@@ -58,7 +136,7 @@ function LoginPage() {
   };
 
   return (
-    <div className="mx-auto grid min-h-[70vh] w-full max-w-3xl gap-6 py-8">
+    <div className="mx-auto grid min-h-[70vh] w-full max-w-3xl gap-6 px-4 py-8">
       <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <p className="text-xs uppercase tracking-[0.2em] text-cyan-700">Parent Login</p>
         <h1 className="mt-2 text-2xl font-semibold text-slate-900">Step 1: Parent Access</h1>
@@ -109,6 +187,22 @@ function LoginPage() {
 
         {error ? <p className="mt-3 text-sm text-rose-700 font-medium">{error}</p> : null}
       </section>
+
+      <PostLoginRoleModal
+        open={roleModalOpen}
+        profiles={profiles}
+        loading={roleModalLoading}
+        error={roleModalError}
+        onCancel={() => {
+          void handleRoleModalCancel();
+        }}
+        onConfirmParent={(pin) => {
+          void handleParentSelection(pin);
+        }}
+        onConfirmStudent={(profileId, pin) => {
+          void handleStudentSelection(profileId, pin);
+        }}
+      />
     </div>
   );
 }

@@ -10,7 +10,14 @@
       "Bash(curl -s --max-time 10 \"https://www.khanacademy.org/api/v1/search?q=fractions&lang=en\")",
       "Bash(python3 -c ':*)",
       "Skill(claude-api)",
-      "Skill(claude-api:*)"
+      "Skill(claude-api:*)",
+      "Bash(pnpm db:generate)",
+      "Bash(pnpm db:migrate:local)",
+      "Bash(pnpm tsc:*)",
+      "Read(//run/media/rogerleecormier/Storage/dev/project-orca/app/routes/**)",
+      "Bash(grep -n 'rewards\\\\|skill-tree\\\\.$treeId' /run/media/rogerleecormier/Storage/dev/project-orca/app/routeTree.gen.ts)",
+      "Bash(pnpm vite:*)",
+      "Bash(node_modules/.bin/tsr generate:*)"
     ]
   }
 }

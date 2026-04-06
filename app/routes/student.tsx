@@ -1,15 +1,21 @@
-import { useMemo, useState } from "react";
-import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
+import { useEffect, useMemo, useState } from "react";
+import { Link, createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import {
   getViewerContext,
   getProgressSnapshot,
+  getStudentSkillTrees,
   getStudentWorkspaceData,
   getTodaysPlan,
   submitAssignmentWork,
+  getActiveRewardTrackForStudent,
+  claimReward,
 } from "../server/functions";
 import { MasteryGallery, SkillTree } from "../components/mastery-gallery";
 import { RichContent } from "../components/rich-content";
+import { StudentRewardTrack } from "../components/StudentRewardTrack";
+import type { RewardClaimData } from "../components/StudentRewardTrack";
+import { RewardUnlockCelebration } from "../components/RewardUnlockCelebration";
 
 export const Route = createFileRoute("/student")({
   loader: async () => {
@@ -23,11 +29,17 @@ export const Route = createFileRoute("/student")({
       throw redirect({ to: "/" });
     }
 
-    return getStudentWorkspaceData({
-      data: {
-        profileId: viewer.profileId ?? undefined,
-      },
-    });
+    const [workspaceData, skillTrees, activeRewardTrack] = await Promise.all([
+      getStudentWorkspaceData({ data: { profileId: viewer.profileId ?? undefined } }),
+      viewer.profileId
+        ? getStudentSkillTrees({ data: { profileId: viewer.profileId } })
+        : Promise.resolve([]),
+      viewer.profileId
+        ? getActiveRewardTrackForStudent({ data: { profileId: viewer.profileId } })
+        : Promise.resolve(null),
+    ]);
+
+    return { ...workspaceData, skillTrees, activeRewardTrack };
   },
   component: StudentWorkspacePage,
 });
@@ -82,6 +94,30 @@ function parseJson<T>(value: string | null | undefined): T | null {
   }
 }
 
+function isSubmissionComplete(submission: SubmissionRow | undefined) {
+  return Boolean(submission && submission.status !== "returned");
+}
+
+function scoreTone(score: number) {
+  if (score >= 80) return "text-emerald-700 bg-emerald-50 border-emerald-200";
+  if (score >= 60) return "text-amber-700 bg-amber-50 border-amber-200";
+  return "text-rose-700 bg-rose-50 border-rose-200";
+}
+
+function ScoredAssignmentBadge({ submission }: { submission: SubmissionRow | undefined }) {
+  if (typeof submission?.score !== "number") {
+    return null;
+  }
+
+  return (
+    <p
+      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold ${scoreTone(submission.score)}`}
+    >
+      Grade: {submission.score}/100
+    </p>
+  );
+}
+
 type UploadPhase = "idle" | "reading" | "uploading" | "done";
 
 async function fileToBase64(
@@ -114,7 +150,9 @@ function AssignmentListView({
   submissions: SubmissionRow[];
   onOpen: (id: string) => void;
 }) {
-  const submittedIds = new Set(submissions.map((s) => s.assignmentId));
+  const submittedIds = new Set(
+    submissions.filter((s) => s.status !== "returned").map((s) => s.assignmentId),
+  );
 
   // Group: video parents with their linked children
   const linkedIds = new Set(
@@ -294,7 +332,7 @@ function VideoAssignmentView({
   saving: boolean;
 }) {
   const payload = parseJson<VideoPayload>(assignment.contentRef);
-  const watched = !!submission;
+  const watched = isSubmissionComplete(submission);
 
   return (
     <div className="space-y-5">
@@ -407,12 +445,21 @@ function QuizAssignmentView({
   const questions = payload?.questions ?? [];
 
   const [started, setStarted] = useState(false);
-  const [answers, setAnswers] = useState<(number | null)[]>(
-    questions.map(() => null),
-  );
+  const [answers, setAnswers] = useState<(number | null)[]>(() => {
+    if (submission?.status === "returned" && submission.textResponse) {
+      try {
+        const previous = JSON.parse(submission.textResponse) as number[];
+        return questions.map((_, index) => (typeof previous[index] === "number" ? previous[index] : null));
+      } catch {
+        return questions.map(() => null);
+      }
+    }
+    return questions.map(() => null);
+  });
   const [submitted, setSubmitted] = useState(false);
 
-  const alreadySubmitted = !!submission;
+  const alreadySubmitted = isSubmissionComplete(submission);
+  const isReturned = submission?.status === "returned";
   const previousAnswers = useMemo(() => {
     if (!submission?.textResponse) return null;
     try {
@@ -423,13 +470,14 @@ function QuizAssignmentView({
   }, [submission?.textResponse]);
 
   const allAnswered = answers.every((a) => a !== null);
-  const score = useMemo(() => {
+  const computedScore = useMemo(() => {
     if (!submitted && !alreadySubmitted) return null;
     const ans = submitted ? answers : previousAnswers;
     if (!ans) return null;
     const correct = questions.filter((q, i) => ans[i] === q.answerIndex).length;
     return Math.round((correct / questions.length) * 100);
   }, [submitted, alreadySubmitted, answers, previousAnswers, questions]);
+  const score = typeof submission?.score === "number" ? submission.score : computedScore;
 
   const handleSubmit = () => {
     const finalized = answers.map((a) => a ?? 0);
@@ -461,6 +509,12 @@ function QuizAssignmentView({
         ) : null}
         {questions.length > 0 ? (
           <p className="text-sm text-slate-500">{questions.length} question{questions.length === 1 ? "" : "s"}</p>
+        ) : null}
+        <ScoredAssignmentBadge submission={submission} />
+        {isReturned ? (
+          <p className="text-sm font-medium text-amber-700">
+            Returned by parent. You can update your answers and submit again.
+          </p>
         ) : null}
 
         {/* Linked video back-nav */}
@@ -538,7 +592,7 @@ function QuizAssignmentView({
           <div className="space-y-5">
             {score !== null ? (
               <div className="rounded-xl bg-slate-50 border border-slate-200 p-4 text-center">
-                <p className="text-2xl font-bold text-slate-900">{score}%</p>
+                <p className="text-2xl font-bold text-slate-900">{score}/100</p>
                 <p className="text-sm text-slate-600">
                   {questions.filter((q, i) => displayAnswers[i] === q.answerIndex).length} of{" "}
                   {questions.length} correct
@@ -625,7 +679,8 @@ function EssayQuestionsView({
   const [answers, setAnswers] = useState<string[]>(questions.map(() => ""));
   const [submitted, setSubmitted] = useState(false);
 
-  const alreadySubmitted = !!submission;
+  const alreadySubmitted = isSubmissionComplete(submission);
+  const isReturned = submission?.status === "returned";
   const previousAnswers = useMemo(() => {
     if (!submission?.textResponse) return null;
     try {
@@ -661,6 +716,12 @@ function EssayQuestionsView({
         <h2 className="text-xl font-semibold text-slate-900">{assignment.title}</h2>
         {assignment.description ? (
           <p className="text-sm text-slate-600">{assignment.description}</p>
+        ) : null}
+        <ScoredAssignmentBadge submission={submission} />
+        {isReturned ? (
+          <p className="text-sm font-medium text-amber-700">
+            Returned by parent. Update your answers and submit again.
+          </p>
         ) : null}
 
         {linkedVideoAssignment ? (
@@ -713,34 +774,40 @@ function EssayQuestionsView({
             const feedback = submission?.feedbackJson
               ? (() => { try { return JSON.parse(submission.feedbackJson) as { score: number; strengths: string[]; improvements: string[]; overallFeedback: string }; } catch { return null; } })()
               : null;
-            if (!feedback) {
+            if (!feedback && typeof submission?.score !== "number") {
               return <p className="text-sm font-medium text-emerald-700">Answers submitted — waiting for review.</p>;
             }
             return (
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <p className="text-sm font-semibold text-slate-900">Score: {feedback.score}/100</p>
+                  <p className="text-sm font-semibold text-slate-900">
+                    Score: {(feedback?.score ?? submission?.score)}/100
+                  </p>
                   <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">Graded</span>
                 </div>
-                <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 space-y-1">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Strengths</p>
-                  <ul className="space-y-0.5">
-                    {feedback.strengths.map((s, i) => (
-                      <li key={i} className="text-sm text-emerald-800">• {s}</li>
-                    ))}
-                  </ul>
-                </div>
-                {feedback.improvements.length > 0 ? (
-                  <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 space-y-1">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Areas to Improve</p>
-                    <ul className="space-y-0.5">
-                      {feedback.improvements.map((s, i) => (
-                        <li key={i} className="text-sm text-amber-800">• {s}</li>
-                      ))}
-                    </ul>
-                  </div>
+                {feedback ? (
+                  <>
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 space-y-1">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Strengths</p>
+                      <ul className="space-y-0.5">
+                        {feedback.strengths.map((s, i) => (
+                          <li key={i} className="text-sm text-emerald-800">• {s}</li>
+                        ))}
+                      </ul>
+                    </div>
+                    {feedback.improvements.length > 0 ? (
+                      <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 space-y-1">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Areas to Improve</p>
+                        <ul className="space-y-0.5">
+                          {feedback.improvements.map((s, i) => (
+                            <li key={i} className="text-sm text-amber-800">• {s}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+                    <p className="text-sm text-slate-600 italic">{feedback.overallFeedback}</p>
+                  </>
                 ) : null}
-                <p className="text-sm text-slate-600 italic">{feedback.overallFeedback}</p>
               </div>
             );
           })()
@@ -777,7 +844,8 @@ function ReportAssignmentView({
 }) {
   const [response, setResponse] = useState(submission?.textResponse ?? "");
   const [submitted, setSubmitted] = useState(false);
-  const alreadySubmitted = !!submission;
+  const alreadySubmitted = isSubmissionComplete(submission);
+  const isReturned = submission?.status === "returned";
 
   const handleSubmit = () => {
     setSubmitted(true);
@@ -797,6 +865,12 @@ function ReportAssignmentView({
 
       <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
         <h2 className="text-xl font-semibold text-slate-900">{assignment.title}</h2>
+        <ScoredAssignmentBadge submission={submission} />
+        {isReturned ? (
+          <p className="text-sm font-medium text-amber-700">
+            Returned by parent. Revise your report and submit again.
+          </p>
+        ) : null}
         {assignment.contentRef ? (
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
             <RichContent html={assignment.contentRef} />
@@ -812,34 +886,40 @@ function ReportAssignmentView({
               const feedback = submission?.feedbackJson
                 ? (() => { try { return JSON.parse(submission.feedbackJson) as { score: number; strengths: string[]; improvements: string[]; overallFeedback: string }; } catch { return null; } })()
                 : null;
-              if (!feedback) {
+              if (!feedback && typeof submission?.score !== "number") {
                 return <p className="text-sm font-medium text-emerald-700">Report submitted — waiting for review.</p>;
               }
               return (
                 <div className="space-y-3">
                   <div className="flex items-center gap-2">
-                    <p className="text-sm font-semibold text-slate-900">Score: {feedback.score}/100</p>
+                    <p className="text-sm font-semibold text-slate-900">
+                      Score: {(feedback?.score ?? submission?.score)}/100
+                    </p>
                     <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">Graded</span>
                   </div>
-                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 space-y-1">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Strengths</p>
-                    <ul className="space-y-0.5">
-                      {feedback.strengths.map((s, i) => (
-                        <li key={i} className="text-sm text-emerald-800">• {s}</li>
-                      ))}
-                    </ul>
-                  </div>
-                  {feedback.improvements.length > 0 ? (
-                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 space-y-1">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Areas to Improve</p>
-                      <ul className="space-y-0.5">
-                        {feedback.improvements.map((s, i) => (
-                          <li key={i} className="text-sm text-amber-800">• {s}</li>
-                        ))}
-                      </ul>
-                    </div>
+                  {feedback ? (
+                    <>
+                      <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 space-y-1">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Strengths</p>
+                        <ul className="space-y-0.5">
+                          {feedback.strengths.map((s, i) => (
+                            <li key={i} className="text-sm text-emerald-800">• {s}</li>
+                          ))}
+                        </ul>
+                      </div>
+                      {feedback.improvements.length > 0 ? (
+                        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 space-y-1">
+                          <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Areas to Improve</p>
+                          <ul className="space-y-0.5">
+                            {feedback.improvements.map((s, i) => (
+                              <li key={i} className="text-sm text-amber-800">• {s}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
+                      <p className="text-sm text-slate-600 italic">{feedback.overallFeedback}</p>
+                    </>
                   ) : null}
-                  <p className="text-sm text-slate-600 italic">{feedback.overallFeedback}</p>
                 </div>
               );
             })()}
@@ -889,7 +969,8 @@ function GenericAssignmentView({
   const [response, setResponse] = useState(submission?.textResponse ?? "");
   const [file, setFile] = useState<File | null>(null);
   const [submitted, setSubmitted] = useState(false);
-  const alreadySubmitted = !!submission;
+  const alreadySubmitted = isSubmissionComplete(submission);
+  const isReturned = submission?.status === "returned";
   const showReview = submitted || alreadySubmitted;
 
   return (
@@ -907,6 +988,12 @@ function GenericAssignmentView({
         <h2 className="text-xl font-semibold text-slate-900">{assignment.title}</h2>
         {assignment.description ? (
           <p className="text-sm text-slate-600">{assignment.description}</p>
+        ) : null}
+        <ScoredAssignmentBadge submission={submission} />
+        {isReturned ? (
+          <p className="text-sm font-medium text-amber-700">
+            Returned by parent. Update your work and submit again.
+          </p>
         ) : null}
 
         {assignment.contentType === "text" && assignment.contentRef ? (
@@ -993,7 +1080,10 @@ function GenericAssignmentView({
             )}
           </>
         ) : (
-          <p className="text-sm font-medium text-emerald-700">Assignment complete.</p>
+          <p className="text-sm font-medium text-emerald-700">
+            Assignment complete.
+            {typeof submission?.score === "number" ? ` Score: ${submission.score}/100.` : ""}
+          </p>
         )}
       </div>
     </div>
@@ -1010,6 +1100,20 @@ function StudentWorkspacePage() {
   const [saving, setSaving] = useState(false);
   const [uploadPhase, setUploadPhase] = useState<UploadPhase>("idle");
   const [readPercent, setReadPercent] = useState<number | undefined>(undefined);
+
+  // Reward track state
+  const [showCelebration, setShowCelebration] = useState(false);
+  const [localClaims, setLocalClaims] = useState<RewardClaimData[]>(
+    data.activeRewardTrack?.claims ?? [],
+  );
+
+  // Show celebration overlay after a short delay if new tiers were unlocked
+  useEffect(() => {
+    if ((data.activeRewardTrack?.newlyUnlockedTierIds?.length ?? 0) > 0) {
+      const timer = setTimeout(() => setShowCelebration(true), 600);
+      return () => clearTimeout(timer);
+    }
+  }, [data.activeRewardTrack?.newlyUnlockedTierIds]);
 
   const progressQuery = useQuery({
     queryKey: ["progress-snapshot", data.profile.id],
@@ -1037,7 +1141,8 @@ function StudentWorkspacePage() {
     [data.assignments],
   );
 
-  const pendingCount = data.assignments.length - data.submissions.length;
+  const pendingCount =
+    data.assignments.length - data.submissions.filter((submission) => submission.status !== "returned").length;
 
   const activeAssignment = activeAssignmentId ? assignmentMap.get(activeAssignmentId) : null;
 
@@ -1089,6 +1194,16 @@ function StudentWorkspacePage() {
 
   const submitQuiz = async (assignmentId: string, answers: number[]) => {
     await submitWork(assignmentId, JSON.stringify(answers));
+  };
+
+  const handleClaimReward = async (tierId: string) => {
+    if (!data.activeRewardTrack) return;
+    await claimReward({ data: { tierId, profileId: data.profile.id } });
+    setLocalClaims((prev) => {
+      const existing = prev.find((c) => c.tierId === tierId);
+      if (existing) return prev.map((c) => c.tierId === tierId ? { ...c, status: "claimed" } : c);
+      return [...prev, { id: tierId + "_claim", tierId, status: "claimed", claimedAt: new Date().toISOString(), deliveredAt: null, parentNote: null }];
+    });
   };
 
   const renderActiveAssignment = () => {
@@ -1161,8 +1276,24 @@ function StudentWorkspacePage() {
     );
   };
 
+  // Tiers that are newly unlocked (for celebration modal)
+  const celebrationTiers = data.activeRewardTrack
+    ? data.activeRewardTrack.tiers.filter((t) =>
+        data.activeRewardTrack!.newlyUnlockedTierIds.includes(t.id),
+      )
+    : [];
+
   return (
     <div className="space-y-6">
+      {/* Reward unlock celebration overlay */}
+      {showCelebration && celebrationTiers.length > 0 ? (
+        <RewardUnlockCelebration
+          tiers={celebrationTiers}
+          onDismiss={() => setShowCelebration(false)}
+          onClaim={handleClaimReward}
+        />
+      ) : null}
+
       {/* Header */}
       <section className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
         <p className="text-xs uppercase tracking-[0.2em] text-cyan-700">Student Workspace</p>
@@ -1177,7 +1308,51 @@ function StudentWorkspacePage() {
               ? "All assignments complete — check your Mastery Gallery below."
               : "No assignments yet."}
         </p>
+        {/* XP level display */}
+        {(progressQuery.data?.totalXp ?? 0) > 0 || (progressQuery.data?.xpLevel ?? 0) > 0 ? (
+          <div className="mt-2 flex items-center gap-2">
+            <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800">
+              Lv {progressQuery.data?.xpLevel ?? 1} — {progressQuery.data?.xpTitle ?? "Curious Learner"}
+            </span>
+            {progressQuery.data?.nextThreshold !== null && progressQuery.data?.nextThreshold !== undefined ? (
+              <>
+                <div className="h-1.5 max-w-[120px] flex-1 overflow-hidden rounded-full bg-slate-200">
+                  <div
+                    className="h-full rounded-full bg-amber-400 transition-all"
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        Math.round(
+                          ((progressQuery.data.totalXp - progressQuery.data.currentThreshold) /
+                            (progressQuery.data.nextThreshold - progressQuery.data.currentThreshold)) *
+                            100,
+                        ),
+                      )}%`,
+                    }}
+                  />
+                </div>
+                <span className="text-xs text-slate-400">
+                  {progressQuery.data.xpToNextLevel} XP to next
+                </span>
+              </>
+            ) : (
+              <span className="text-xs text-slate-400">Max level</span>
+            )}
+          </div>
+        ) : null}
       </section>
+
+      {/* Reward Track */}
+      {data.activeRewardTrack ? (
+        <StudentRewardTrack
+          track={data.activeRewardTrack.track}
+          tiers={data.activeRewardTrack.tiers}
+          claims={localClaims}
+          xpEarned={data.activeRewardTrack.xpEarned}
+          newlyUnlockedTierIds={data.activeRewardTrack.newlyUnlockedTierIds}
+          onClaimReward={handleClaimReward}
+        />
+      ) : null}
 
       {/* Today's Plan */}
       {(todaysPlanQuery.data?.slots.length ?? 0) > 0 ? (
@@ -1191,7 +1366,7 @@ function StudentWorkspacePage() {
           <div className="space-y-2">
             {todaysPlanQuery.data!.slots.map((slot) => {
               const submission = submissionMap.get(slot.assignmentId);
-              const done = !!submission;
+              const done = isSubmissionComplete(submission);
               return (
                 <button
                   key={slot.assignmentId}
@@ -1223,6 +1398,64 @@ function StudentWorkspacePage() {
                 </button>
               );
             })}
+          </div>
+        </section>
+      ) : null}
+
+      {/* Skill Maps section */}
+      {data.skillTrees.length > 0 ? (
+        <section className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-semibold text-slate-900">My Skill Maps</h2>
+              {(progressQuery.data?.totalXp ?? 0) > 0 ? (
+                <span className="rounded-full bg-amber-50 border border-amber-200 px-2.5 py-0.5 text-xs font-medium text-amber-700">
+                  ⭐ {progressQuery.data!.totalXp} XP
+                </span>
+              ) : null}
+            </div>
+          </div>
+          <div className="flex gap-3 overflow-x-auto pb-2">
+            {data.skillTrees.map(({ tree, completedNodes, totalNodes, earnedXp }) => (
+              <article
+                key={tree.id}
+                className="flex w-[200px] shrink-0 flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:shadow-md"
+              >
+                <p className="truncate text-sm font-semibold text-slate-900" title={tree.title}>
+                  {tree.title}
+                </p>
+                {tree.subject ? (
+                  <span className="mt-1 self-start rounded-full border border-cyan-200 bg-cyan-50 px-2 py-0.5 text-[10px] font-medium text-cyan-700">
+                    {tree.subject}
+                  </span>
+                ) : null}
+                <div className="mt-3 space-y-1">
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className="h-full rounded-full bg-emerald-400 transition-all"
+                      style={{
+                        width: totalNodes > 0 ? `${Math.round((completedNodes / totalNodes) * 100)}%` : "0%",
+                      }}
+                    />
+                  </div>
+                  <p className="text-[10px] text-slate-500">
+                    {completedNodes}/{totalNodes} nodes · {earnedXp} XP
+                  </p>
+                </div>
+                <Link
+                  to="/skill-tree/$treeId"
+                  params={{ treeId: tree.id }}
+                  className="mt-3 self-start rounded-xl bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-800 transition"
+                >
+                  Open →
+                </Link>
+              </article>
+            ))}
+          </div>
+          <div className="mt-3">
+            <Link to="/skill-trees" className="text-xs text-slate-500 hover:text-slate-800 transition">
+              View All Skill Maps →
+            </Link>
           </div>
         </section>
       ) : null}

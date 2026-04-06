@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
-import { createFileRoute, redirect } from "@tanstack/react-router";
-import { getGradeBookData, getViewerContext } from "../server/functions";
+import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
+import { getGradeBookData, getViewerContext, releaseSubmissionToStudent } from "../server/functions";
+import { OrcaMark } from "../components/icons/orca-mark";
 
 export const Route = createFileRoute("/gradebook")({
   loader: async () => {
@@ -119,6 +120,7 @@ function SortIcon({ active, dir }: { active: boolean; dir: SortDir }) {
 // ── Page component ────────────────────────────────────────────────────────────
 
 function GradebookPage() {
+  const router = useRouter();
   const data = Route.useLoaderData();
 
   // ── Filter state ──────────────────────────────────────────────────────────
@@ -128,6 +130,28 @@ function GradebookPage() {
   const [filterType, setFilterType] = useState("all");
   const [filterDateFrom, setFilterDateFrom] = useState("");
   const [filterDateTo, setFilterDateTo] = useState("");
+  const [releasingSubmissionIds, setReleasingSubmissionIds] = useState<Set<string>>(new Set());
+
+  const handleRelease = async (submissionId: string) => {
+    if (releasingSubmissionIds.has(submissionId)) {
+      return;
+    }
+    setReleasingSubmissionIds((prev) => new Set(prev).add(submissionId));
+    try {
+      await releaseSubmissionToStudent({
+        data: {
+          submissionId,
+        },
+      });
+      await router.invalidate();
+    } finally {
+      setReleasingSubmissionIds((prev) => {
+        const next = new Set(prev);
+        next.delete(submissionId);
+        return next;
+      });
+    }
+  };
 
   // ── Sort state ────────────────────────────────────────────────────────────
 
@@ -222,25 +246,33 @@ function GradebookPage() {
       <div className="mx-auto max-w-7xl space-y-6">
 
         {/* Header */}
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-semibold text-slate-900">Gradebook</h1>
-            <p className="mt-1 text-sm text-slate-500">
-              All submissions across students and classes.
-            </p>
+        <section className="orca-hero orca-wave rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+          <p className="text-xs uppercase tracking-[0.2em] text-cyan-700">Parent Workspace</p>
+          <div className="mt-2 flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-3">
+                <span className="orca-icon-chip" aria-hidden="true">
+                  <OrcaMark className="h-6 w-6" alt="" />
+                </span>
+                <h1 className="text-2xl font-semibold text-slate-900">Gradebook</h1>
+              </div>
+              <p className="mt-1 text-sm text-slate-500">
+                All submissions across students and classes.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => exportCsv(filtered)}
+              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+            >
+              <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4 text-slate-500" aria-hidden="true">
+                <path d="M10.75 2.75a.75.75 0 0 0-1.5 0v8.614L6.295 8.235a.75.75 0 1 0-1.09 1.03l4.25 4.5a.75.75 0 0 0 1.09 0l4.25-4.5a.75.75 0 0 0-1.09-1.03l-2.955 3.129V2.75Z" />
+                <path d="M3.5 12.75a.75.75 0 0 0-1.5 0v2.5A2.75 2.75 0 0 0 4.75 18h10.5A2.75 2.75 0 0 0 18 15.25v-2.5a.75.75 0 0 0-1.5 0v2.5c0 .69-.56 1.25-1.25 1.25H4.75c-.69 0-1.25-.56-1.25-1.25v-2.5Z" />
+              </svg>
+              Export CSV
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={() => exportCsv(filtered)}
-            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
-          >
-            <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4 text-slate-500" aria-hidden="true">
-              <path d="M10.75 2.75a.75.75 0 0 0-1.5 0v8.614L6.295 8.235a.75.75 0 1 0-1.09 1.03l4.25 4.5a.75.75 0 0 0 1.09 0l4.25-4.5a.75.75 0 0 0-1.09-1.03l-2.955 3.129V2.75Z" />
-              <path d="M3.5 12.75a.75.75 0 0 0-1.5 0v2.5A2.75 2.75 0 0 0 4.75 18h10.5A2.75 2.75 0 0 0 18 15.25v-2.5a.75.75 0 0 0-1.5 0v2.5c0 .69-.56 1.25-1.25 1.25H4.75c-.69 0-1.25-.56-1.25-1.25v-2.5Z" />
-            </svg>
-            Export CSV
-          </button>
-        </div>
+        </section>
 
         {/* Summary chips */}
         <div className="flex flex-wrap gap-3">
@@ -378,6 +410,9 @@ function GradebookPage() {
                       GRADABLE_TYPES.has(row.contentType) &&
                       row.score === null &&
                       (row.status === "submitted" || row.status === "draft");
+                    const canRelease =
+                      row.status === "submitted" || row.status === "graded" || row.status === "draft";
+                    const releasing = releasingSubmissionIds.has(row.submissionId);
 
                     return (
                       <tr key={row.submissionId} className="hover:bg-slate-50/60 transition-colors">
@@ -429,6 +464,16 @@ function GradebookPage() {
                               {row.status.charAt(0).toUpperCase() + row.status.slice(1)}
                             </span>
                           )}
+                          {canRelease ? (
+                            <button
+                              type="button"
+                              disabled={releasing}
+                              onClick={() => void handleRelease(row.submissionId)}
+                              className="ml-2 text-xs font-medium text-violet-700 hover:underline disabled:opacity-60"
+                            >
+                              {releasing ? "Releasing..." : "Release"}
+                            </button>
+                          ) : null}
                         </td>
                       </tr>
                     );

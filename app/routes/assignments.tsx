@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { DeleteConfirmModal } from "../components/delete-confirm-modal";
-import { LessonPlannerChat } from "../components/LessonPlannerChat";
 import { QuizBuilder, type QuizQuestion } from "../components/quiz-builder";
 import { RichContent } from "../components/rich-content";
 import { RichTextEditor } from "../components/rich-text-editor";
 import { VideoSearch, type VideoData } from "../components/video-search";
+import { OrcaMark } from "../components/icons/orca-mark";
 import {
   createAssignmentRecord,
   deleteAssignmentRecord,
@@ -13,6 +13,7 @@ import {
   getCurriculumBuilderData,
   getViewerContext,
   gradeSubmissionWithAI,
+  releaseSubmissionToStudent,
   saveAssignmentAsTemplate,
   updateAssignmentRecord,
   uploadAssignmentFile,
@@ -36,6 +37,9 @@ export const Route = createFileRoute("/assignments")({
 });
 
 type AssignmentType = "text" | "file" | "url" | "video" | "quiz" | "essay_questions" | "report";
+
+const CHAT_SUGGESTION_STORAGE_KEY = "proorca.lessonPlanner.selectedSuggestion.v1";
+const CHAT_SUGGESTION_EVENT = "proorca:lesson-planner-suggestion";
 
 type QuizPayload = {
   title?: string;
@@ -662,6 +666,7 @@ function CurriculumBuilderPage() {
   const [gradingInProgress, setGradingInProgress] = useState<Set<string>>(new Set());
   const [gradingResults, setGradingResults] = useState<Map<string, GradingResult>>(new Map());
   const [gradingErrors, setGradingErrors] = useState<Map<string, string>>(new Map());
+  const [releasingSubmissionIds, setReleasingSubmissionIds] = useState<Set<string>>(new Set());
 
   const handleGradeSubmission = async (
     submissionId: string,
@@ -681,6 +686,37 @@ function CurriculumBuilderPage() {
       setGradingErrors((prev) => new Map(prev).set(submissionId, "Grading failed. Please try again."));
     } finally {
       setGradingInProgress((prev) => { const next = new Set(prev); next.delete(submissionId); return next; });
+    }
+  };
+
+  const handleReleaseSubmission = async (submissionId: string) => {
+    if (releasingSubmissionIds.has(submissionId)) {
+      return;
+    }
+    setReleasingSubmissionIds((prev) => new Set(prev).add(submissionId));
+    try {
+      await releaseSubmissionToStudent({
+        data: {
+          submissionId,
+        },
+      });
+      setGradingResults((prev) => {
+        const next = new Map(prev);
+        next.delete(submissionId);
+        return next;
+      });
+      setGradingErrors((prev) => {
+        const next = new Map(prev);
+        next.delete(submissionId);
+        return next;
+      });
+      await router.invalidate();
+    } finally {
+      setReleasingSubmissionIds((prev) => {
+        const next = new Set(prev);
+        next.delete(submissionId);
+        return next;
+      });
     }
   };
 
@@ -788,6 +824,62 @@ function CurriculumBuilderPage() {
     setQuizGenerateError(null);
     setSuccessMessage(null);
   };
+
+  const applySuggestionToForm = (raw: unknown) => {
+    if (!raw || typeof raw !== "object") {
+      return;
+    }
+
+    const candidate = raw as { title?: unknown; type?: unknown; description?: unknown };
+    if (typeof candidate.title !== "string" || typeof candidate.description !== "string") {
+      return;
+    }
+
+    const validTypes: AssignmentType[] = [
+      "text",
+      "file",
+      "url",
+      "video",
+      "quiz",
+      "essay_questions",
+      "report",
+    ];
+
+    const nextType =
+      typeof candidate.type === "string" && validTypes.includes(candidate.type as AssignmentType)
+        ? (candidate.type as AssignmentType)
+        : "video";
+
+    resetForm({
+      nextContentType: nextType,
+      nextMode: "blank",
+    });
+    setTitle(candidate.title);
+    setDescription(candidate.description);
+    setShowCreateModal(true);
+  };
+
+  useEffect(() => {
+    const consumeSuggestion = () => {
+      try {
+        const raw = sessionStorage.getItem(CHAT_SUGGESTION_STORAGE_KEY);
+        if (!raw) {
+          return;
+        }
+
+        sessionStorage.removeItem(CHAT_SUGGESTION_STORAGE_KEY);
+        applySuggestionToForm(JSON.parse(raw));
+      } catch {
+        sessionStorage.removeItem(CHAT_SUGGESTION_STORAGE_KEY);
+      }
+    };
+
+    consumeSuggestion();
+    window.addEventListener(CHAT_SUGGESTION_EVENT, consumeSuggestion);
+    return () => {
+      window.removeEventListener(CHAT_SUGGESTION_EVENT, consumeSuggestion);
+    };
+  }, []);
 
   const applyTemplateToForm = (template: AssignmentTemplateRow) => {
     const nextType = template.contentType as AssignmentType;
@@ -1702,7 +1794,12 @@ function CurriculumBuilderPage() {
       <section className="orca-hero orca-wave rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
         <p className="text-xs uppercase tracking-[0.2em] text-cyan-700">Parent Workspace</p>
         <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-3xl font-semibold text-slate-900">Manage Assignments</h1>
+          <div className="flex items-center gap-3">
+            <span className="orca-icon-chip" aria-hidden="true">
+              <OrcaMark className="h-6 w-6" alt="" />
+            </span>
+            <h1 className="text-3xl font-semibold text-slate-900">Manage Assignments</h1>
+          </div>
           <button
             type="button"
             onClick={() => {
@@ -1779,6 +1876,9 @@ function CurriculumBuilderPage() {
                       <p className="mt-1 text-sm text-slate-600">
                         Start with your own saved templates or one of the curated public assignments below. Picking a card fills the blank form so you can adjust the class, due date, or content before saving.
                       </p>
+                      <a href="/templates" className="mt-2 inline-block text-xs font-medium text-cyan-700 hover:underline">
+                        Open Template Manager →
+                      </a>
                     </div>
 
                     <label className="space-y-2">
@@ -2280,6 +2380,7 @@ function CurriculumBuilderPage() {
                     {rowSubmissions.map((sub) => {
                       const profile = profileById.get(sub.profileId);
                       const isGrading = gradingInProgress.has(sub.id);
+                      const isReleasing = releasingSubmissionIds.has(sub.id);
                       const localResult = gradingResults.get(sub.id);
                       const gradingError = gradingErrors.get(sub.id);
                       const storedFeedback = sub.feedbackJson
@@ -2302,20 +2403,32 @@ function CurriculumBuilderPage() {
                                 {sub.status === "graded" ? `Graded · ${sub.score ?? "—"}/100` : "Submitted"}
                               </span>
                             </div>
-                            <button
-                              type="button"
-                              disabled={isGrading}
-                              onClick={() =>
-                                void handleGradeSubmission(
-                                  sub.id,
-                                  row.id,
-                                  profile?.gradeLevel ?? "mixed",
-                                )
-                              }
-                              className="shrink-0 rounded-lg border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100 disabled:opacity-60"
-                            >
-                              {isGrading ? "Grading…" : sub.status === "graded" ? "Re-grade with AI" : "AI Grade"}
-                            </button>
+                            <div className="flex shrink-0 items-center gap-2">
+                              <button
+                                type="button"
+                                disabled={isGrading || isReleasing}
+                                onClick={() =>
+                                  void handleGradeSubmission(
+                                    sub.id,
+                                    row.id,
+                                    profile?.gradeLevel ?? "mixed",
+                                  )
+                                }
+                                className="rounded-lg border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100 disabled:opacity-60"
+                              >
+                                {isGrading ? "Grading…" : sub.status === "graded" ? "Re-grade with AI" : "AI Grade"}
+                              </button>
+                              {(sub.status === "submitted" || sub.status === "graded" || sub.status === "draft") ? (
+                                <button
+                                  type="button"
+                                  disabled={isReleasing || isGrading}
+                                  onClick={() => void handleReleaseSubmission(sub.id)}
+                                  className="rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-1.5 text-xs font-medium text-cyan-700 hover:bg-cyan-100 disabled:opacity-60"
+                                >
+                                  {isReleasing ? "Releasing…" : "Release"}
+                                </button>
+                              ) : null}
+                            </div>
                           </div>
 
                           {gradingError ? (
@@ -2530,24 +2643,6 @@ function CurriculumBuilderPage() {
         + Quick Add
       </button>
 
-      <LessonPlannerChat
-        studentName={data.profiles[0]?.displayName ?? "your student"}
-        grade={data.profiles[0]?.gradeLevel ?? null}
-        classList={data.classes.map((c) => c.title)}
-        onCreateAssignment={(suggestion) => {
-          const validTypes: AssignmentType[] = ["text", "file", "url", "video", "quiz", "essay_questions", "report"];
-          const nextType = validTypes.includes(suggestion.type as AssignmentType)
-            ? suggestion.type as AssignmentType
-            : "video";
-          resetForm({
-            nextContentType: nextType,
-            nextMode: "blank",
-          });
-          setTitle(suggestion.title);
-          setDescription(suggestion.description);
-          setShowCreateModal(true);
-        }}
-      />
     </div>
   );
 }

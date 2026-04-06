@@ -440,3 +440,298 @@ export const submissions = sqliteTable(
     index("submissions_org_idx").on(table.organizationId),
   ],
 );
+
+export const skillTrees = sqliteTable(
+  "skill_trees",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    classId: text("class_id").references(() => classes.id, {
+      onDelete: "cascade",
+    }),
+    profileId: text("profile_id").references(() => profiles.id, {
+      onDelete: "cascade",
+    }),
+    title: text("title").notNull(),
+    description: text("description"),
+    gradeLevel: text("grade_level"),
+    subject: text("subject"),
+    schoolYear: text("school_year"),
+    viewportX: integer("viewport_x").notNull().default(0),
+    viewportY: integer("viewport_y").notNull().default(0),
+    viewportScale: integer("viewport_scale").notNull().default(100),
+    createdByUserId: text("created_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    createdAt: text("created_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+    updatedAt: text("updated_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+  },
+  (table) => [
+    index("skill_trees_org_idx").on(table.organizationId),
+    index("skill_trees_class_idx").on(table.classId),
+    index("skill_trees_profile_idx").on(table.profileId),
+  ],
+);
+
+export const skillTreeNodes = sqliteTable(
+  "skill_tree_nodes",
+  {
+    id: text("id").primaryKey(),
+    treeId: text("tree_id")
+      .notNull()
+      .references(() => skillTrees.id, { onDelete: "cascade" }),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    description: text("description"),
+    subject: text("subject"),
+    icon: text("icon"),
+    colorRamp: text("color_ramp").notNull().default("blue"),
+    nodeType: text("node_type", {
+      enum: ["lesson", "milestone", "boss", "branch", "elective"],
+    })
+      .notNull()
+      .default("lesson"),
+    xpReward: integer("xp_reward").notNull().default(100),
+    positionX: integer("position_x").notNull().default(0),
+    positionY: integer("position_y").notNull().default(0),
+    radius: integer("radius").notNull().default(28),
+    isRequired: integer("is_required", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    aiGeneratedDescription: text("ai_generated_description"),
+    createdAt: text("created_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+    updatedAt: text("updated_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+  },
+  (table) => [
+    index("skill_tree_nodes_tree_idx").on(table.treeId),
+    index("skill_tree_nodes_org_idx").on(table.organizationId),
+  ],
+);
+
+export const skillTreeEdges = sqliteTable(
+  "skill_tree_edges",
+  {
+    id: text("id").primaryKey(),
+    treeId: text("tree_id")
+      .notNull()
+      .references(() => skillTrees.id, { onDelete: "cascade" }),
+    sourceNodeId: text("source_node_id")
+      .notNull()
+      .references(() => skillTreeNodes.id, { onDelete: "cascade" }),
+    targetNodeId: text("target_node_id")
+      .notNull()
+      .references(() => skillTreeNodes.id, { onDelete: "cascade" }),
+    edgeType: text("edge_type", {
+      enum: ["required", "optional", "bonus"],
+    })
+      .notNull()
+      .default("required"),
+    createdAt: text("created_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+  },
+  (table) => [
+    index("skill_tree_edges_tree_idx").on(table.treeId),
+    uniqueIndex("skill_tree_edges_source_target_unique").on(
+      table.sourceNodeId,
+      table.targetNodeId,
+    ),
+  ],
+);
+
+export const skillTreeNodeAssignments = sqliteTable(
+  "skill_tree_node_assignments",
+  {
+    id: text("id").primaryKey(),
+    nodeId: text("node_id")
+      .notNull()
+      .references(() => skillTreeNodes.id, { onDelete: "cascade" }),
+    assignmentId: text("assignment_id")
+      .notNull()
+      .references(() => assignments.id, { onDelete: "cascade" }),
+    orderIndex: integer("order_index").notNull().default(0),
+    createdAt: text("created_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+  },
+  (table) => [
+    index("skill_tree_node_assignments_node_idx").on(table.nodeId),
+    uniqueIndex("skill_tree_node_assignments_node_assignment_unique").on(
+      table.nodeId,
+      table.assignmentId,
+    ),
+  ],
+);
+
+export const rewardTracks = sqliteTable(
+  "reward_tracks",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    profileId: text("profile_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    createdByUserId: text("created_by_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    title: text("title").notNull(),
+    description: text("description"),
+    isActive: integer("is_active", { mode: "boolean" }).notNull().default(false),
+    schoolYear: text("school_year"),
+    startedAt: text("started_at"),
+    completedAt: text("completed_at"),
+    totalXpGoal: integer("total_xp_goal").notNull().default(5000),
+    createdAt: text("created_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+    updatedAt: text("updated_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+  },
+  (table) => [
+    index("reward_tracks_org_idx").on(table.organizationId),
+    index("reward_tracks_profile_idx").on(table.profileId),
+  ],
+);
+
+export const rewardTiers = sqliteTable(
+  "reward_tiers",
+  {
+    id: text("id").primaryKey(),
+    trackId: text("track_id")
+      .notNull()
+      .references(() => rewardTracks.id, { onDelete: "cascade" }),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    tierNumber: integer("tier_number").notNull(),
+    xpThreshold: integer("xp_threshold").notNull(),
+    title: text("title").notNull(),
+    description: text("description"),
+    icon: text("icon").default("🎁"),
+    rewardType: text("reward_type").notNull().default("treat"),
+    estimatedValue: text("estimated_value"),
+    isBonusTier: integer("is_bonus_tier", { mode: "boolean" }).default(false),
+    createdAt: text("created_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+    updatedAt: text("updated_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+  },
+  (table) => [
+    uniqueIndex("reward_tiers_track_tier_unique").on(table.trackId, table.tierNumber),
+    index("reward_tiers_track_idx").on(table.trackId),
+  ],
+);
+
+export const rewardClaims = sqliteTable(
+  "reward_claims",
+  {
+    id: text("id").primaryKey(),
+    tierId: text("tier_id")
+      .notNull()
+      .references(() => rewardTiers.id, { onDelete: "cascade" }),
+    trackId: text("track_id")
+      .notNull()
+      .references(() => rewardTracks.id, { onDelete: "cascade" }),
+    profileId: text("profile_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    status: text("status").notNull().default("unclaimed"),
+    claimedAt: text("claimed_at"),
+    deliveredAt: text("delivered_at"),
+    deliveredByUserId: text("delivered_by_user_id").references(() => users.id, {
+      onDelete: "restrict",
+    }),
+    parentNote: text("parent_note"),
+    createdAt: text("created_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+    updatedAt: text("updated_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+  },
+  (table) => [
+    uniqueIndex("reward_claims_tier_profile_unique").on(table.tierId, table.profileId),
+    index("reward_claims_track_profile_idx").on(table.trackId, table.profileId),
+    index("reward_claims_org_status_idx").on(table.organizationId, table.status),
+  ],
+);
+
+export const rewardTrackXpSnapshots = sqliteTable(
+  "reward_track_xp_snapshots",
+  {
+    id: text("id").primaryKey(),
+    trackId: text("track_id")
+      .notNull()
+      .references(() => rewardTracks.id, { onDelete: "cascade" }),
+    profileId: text("profile_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    xpEarned: integer("xp_earned").notNull().default(0),
+    lastUpdatedAt: text("last_updated_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+  },
+  (table) => [
+    uniqueIndex("reward_track_xp_snapshots_track_profile_unique").on(
+      table.trackId,
+      table.profileId,
+    ),
+  ],
+);
+
+export const skillTreeNodeProgress = sqliteTable(
+  "skill_tree_node_progress",
+  {
+    id: text("id").primaryKey(),
+    nodeId: text("node_id")
+      .notNull()
+      .references(() => skillTreeNodes.id, { onDelete: "cascade" }),
+    profileId: text("profile_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    treeId: text("tree_id")
+      .notNull()
+      .references(() => skillTrees.id, { onDelete: "cascade" }),
+    status: text("status", {
+      enum: ["locked", "available", "in_progress", "complete", "mastery"],
+    })
+      .notNull()
+      .default("locked"),
+    xpEarned: integer("xp_earned").notNull().default(0),
+    completedAt: text("completed_at"),
+    masteryAt: text("mastery_at"),
+    updatedAt: text("updated_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+  },
+  (table) => [
+    uniqueIndex("skill_tree_node_progress_node_profile_unique").on(
+      table.nodeId,
+      table.profileId,
+    ),
+    index("skill_tree_node_progress_tree_profile_idx").on(
+      table.treeId,
+      table.profileId,
+    ),
+  ],
+);
