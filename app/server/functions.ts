@@ -382,10 +382,10 @@ const contentResetWithPinInput = z.object({
 });
 
 const DEMO_STUDENTS = [
-  { displayName: "Ava Rivers", gradeLevel: "3" },
-  { displayName: "Noah Chen", gradeLevel: "5" },
-  { displayName: "Mia Patel", gradeLevel: "7" },
-  { displayName: "Lucas Gomez", gradeLevel: "9" },
+  { displayName: "Ava Rivers",   gradeLevel: "3" },
+  { displayName: "Noah Chen",    gradeLevel: "5" },
+  { displayName: "Mia Patel",    gradeLevel: "7" },
+  { displayName: "Lucas Gomez",  gradeLevel: "9" },
 ] as const;
 
 function getCurrentSchoolYearLabel() {
@@ -404,368 +404,467 @@ function chunkIds(ids: string[], chunkSize = 50): string[][] {
   return chunks;
 }
 
-function buildDemoAssignments(
-  gradeLevel: string,
-  studentName: string,
-  subject: string,
+// ── Demo seed data ────────────────────────────────────────────────────────────
+//
+// Node assignment structure follows the updated curriculum instruction set:
+//
+//  milestone  → chapter overview text (250-350w) + diagnostic pre-quiz +
+//               2 intro videos + checkpoint quiz + chapter reflection essay
+//  lesson     → reading (400-600w) + 2 videos + formative check quiz +
+//               practice response (essay_questions)
+//  elective   → deep-dive reading (500-750w) + 2 videos + analysis quiz +
+//               hands-on project (report)
+//  boss       → comprehensive unit review (600-900w) + 3 summative quizzes +
+//               analytical essay
+//
+// D1 write limits: ~1 000 SQL statements per Worker invocation (free tier).
+// We batch row inserts per table and flush in phases of ≤ 80 rows each,
+// yielding control between phases with a microtask tick so the runtime
+// can breathe between batches.
+
+async function batchInsert<T extends Record<string, unknown>>(
+  db: ReturnType<typeof getDb>,
+  table: Parameters<ReturnType<typeof getDb>["insert"]>[0],
+  rows: T[],
+  batchSize = 80,
 ) {
-  if (subject === "Math") {
-    return [
-      {
-        title: `Demo · Number Sense Foundations (Grade ${gradeLevel})`,
-        description: `Warm up with core number sense strategies for ${studentName}.`,
-        contentType: "text" as const,
-        contentRef:
-          "<h2>Number Sense Warmup</h2><p>Read the examples and explain your strategy for each problem in your own words.</p>",
-      },
-      {
-        title: `Demo · Algebra Checkpoint Quiz (Grade ${gradeLevel})`,
-        description: "Quick check on order of operations and variables.",
-        contentType: "quiz" as const,
-        contentRef: JSON.stringify({
-          title: "Algebra Checkpoint",
-          questions: [
-            {
-              question: "What is 3 + 4 × 2?",
-              options: ["14", "11", "16", "10"],
-              answerIndex: 1,
-              explanation: "Multiply first, then add.",
-            },
-            {
-              question: "Solve for x: x + 5 = 12",
-              options: ["5", "6", "7", "8"],
-              answerIndex: 2,
-              explanation: "Subtract 5 from both sides.",
-            },
-            {
-              question: "What is 24 ÷ (3 × 2)?",
-              options: ["4", "8", "6", "12"],
-              answerIndex: 0,
-              explanation: "Evaluate inside parentheses first.",
-            },
-          ],
-        }),
-      },
-      {
-        title: `Demo · Multi-Step Problem Solving Report`,
-        description: "Show your process and explain your reasoning.",
-        contentType: "report" as const,
-        contentRef:
-          "<h3>Report Prompt</h3><p>Choose one multi-step word problem, solve it, and explain each step clearly.</p>",
-      },
-      {
-        title: `Demo · Fractions Video Lesson`,
-        description: "Watch and summarize key fraction strategies.",
-        contentType: "video" as const,
-        contentRef: JSON.stringify({
-          videos: [
-            {
-              videoId: "demo-fractions-101",
-              title: "Fractions in Real Life",
-              channel: "ProOrca Demo",
-              description: "Conceptual intro to fractions.",
-              thumbnail: "https://i.ytimg.com/vi/demo-fractions-101/hqdefault.jpg",
-              transcript: "Fractions represent equal parts of a whole...",
-            },
-          ],
-        }),
-      },
-    ];
+  for (let i = 0; i < rows.length; i += batchSize) {
+    const slice = rows.slice(i, i + batchSize);
+    if (slice.length > 0) {
+      await db.insert(table).values(slice as Parameters<ReturnType<typeof getDb>["insert"]>[0]["_"]["inferInsert"][]);
+    }
+    // yield to runtime between batches
+    await new Promise<void>((r) => setTimeout(r, 0));
   }
-
-  if (subject === "Science") {
-    return [
-      {
-        title: `Demo · Cell Biology Reading`,
-        description: "Guided reading on cell structure and function.",
-        contentType: "text" as const,
-        contentRef:
-          "<h2>Cells 101</h2><p>Read this overview and write five facts about organelles.</p>",
-      },
-      {
-        title: `Demo · Scientific Method Quiz`,
-        description: "Identify variables, hypothesis, and conclusions.",
-        contentType: "quiz" as const,
-        contentRef: JSON.stringify({
-          title: "Scientific Method Quiz",
-          questions: [
-            {
-              question: "What step comes after forming a hypothesis?",
-              options: ["Draw conclusions", "Run an experiment", "Ask a question", "Share results"],
-              answerIndex: 1,
-              explanation: "You test the hypothesis with an experiment.",
-            },
-            {
-              question: "Which is the independent variable?",
-              options: ["The measured outcome", "The changed factor", "The control group", "The data chart"],
-              answerIndex: 1,
-              explanation: "The independent variable is what you change.",
-            },
-          ],
-        }),
-      },
-      {
-        title: `Demo · Lab Reflection Report`,
-        description: "Document observations, data, and conclusions.",
-        contentType: "report" as const,
-        contentRef:
-          "<h3>Lab Reflection</h3><p>Summarize your experiment setup, observations, and what your data suggests.</p>",
-      },
-      {
-        title: `Demo · Photosynthesis Resource`,
-        description: "Explore visual explanations and key vocabulary.",
-        contentType: "url" as const,
-        contentRef: "https://en.wikipedia.org/wiki/Photosynthesis",
-      },
-    ];
-  }
-
-  if (subject === "US History") {
-    return [
-      {
-        title: `Demo · American Revolution Overview`,
-        description: "Read about causes and major turning points.",
-        contentType: "text" as const,
-        contentRef:
-          "<h2>American Revolution</h2><p>Explain three causes of the revolution and one long-term effect.</p>",
-      },
-      {
-        title: `Demo · Constitution Essay Questions`,
-        description: "Respond to open-ended historical prompts.",
-        contentType: "essay_questions" as const,
-        contentRef: JSON.stringify({
-          questions: [
-            "Why did the founders design checks and balances?",
-            "How did the Constitution shape federal and state powers?",
-          ],
-        }),
-      },
-      {
-        title: `Demo · Timeline Quiz`,
-        description: "Sequence key events from colonial period to founding.",
-        contentType: "quiz" as const,
-        contentRef: JSON.stringify({
-          title: "US History Timeline Quiz",
-          questions: [
-            {
-              question: "Which document came first?",
-              options: ["US Constitution", "Declaration of Independence", "Bill of Rights", "Articles of Confederation"],
-              answerIndex: 1,
-              explanation: "The Declaration came in 1776.",
-            },
-            {
-              question: "The Bill of Rights was added to address:",
-              options: ["Tax policy", "Individual liberties", "Territory borders", "Trade treaties"],
-              answerIndex: 1,
-              explanation: "It protects rights and freedoms.",
-            },
-          ],
-        }),
-      },
-      {
-        title: `Demo · Primary Source Report`,
-        description: "Analyze one historical source in context.",
-        contentType: "report" as const,
-        contentRef:
-          "<h3>Source Analysis</h3><p>Choose one primary source and explain audience, purpose, and historical impact.</p>",
-      },
-    ];
-  }
-
-  return [
-    {
-      title: `Demo · Reading and Vocabulary (${subject})`,
-      description: "Read and annotate key ideas.",
-      contentType: "text" as const,
-      contentRef: `<h2>${subject} Reading</h2><p>Read and summarize the most important ideas from this lesson.</p>`,
-    },
-    {
-      title: `Demo · Quick Check Quiz (${subject})`,
-      description: "Short understanding check.",
-      contentType: "quiz" as const,
-      contentRef: JSON.stringify({
-        title: `${subject} Quick Check`,
-        questions: [
-          {
-            question: `What is the main focus of ${subject}?`,
-            options: ["Option A", "Option B", "Option C", "Option D"],
-            answerIndex: 0,
-            explanation: "This is a demo question.",
-          },
-        ],
-      }),
-    },
-    {
-      title: `Demo · Written Response (${subject})`,
-      description: "Respond in complete sentences.",
-      contentType: "essay_questions" as const,
-      contentRef: JSON.stringify({
-        questions: [
-          `Describe one important concept from ${subject}.`,
-          "What evidence supports your explanation?",
-        ],
-      }),
-    },
-    {
-      title: `Demo · Reflection Report (${subject})`,
-      description: "Summarize what you learned this week.",
-      contentType: "report" as const,
-      contentRef: "<p>Write a short reflection on this week's learning.</p>",
-    },
-  ];
 }
 
-type DemoAssignmentSeed = ReturnType<typeof buildDemoAssignments>[number];
-type DemoTreeScale = "small" | "medium" | "large" | "very_large";
+// ── Per-subject curriculum data ───────────────────────────────────────────────
 
-const DEMO_NODE_TOPICS: Record<string, string[]> = {
-  Math: [
-    "Number Sense",
-    "Operations Fluency",
-    "Fractions",
-    "Decimals",
-    "Ratios",
-    "Expressions",
-    "Equations",
-    "Graphing",
-    "Geometry Basics",
-    "Data and Probability",
-  ],
-  Science: [
-    "Scientific Method",
-    "Cells",
-    "Genetics",
-    "Ecosystems",
-    "Matter and Energy",
-    "Forces and Motion",
-    "Earth Systems",
-    "Chemistry Reactions",
-    "Astronomy",
-    "Engineering Design",
-  ],
-  "US History": [
-    "Colonial America",
-    "Revolution",
-    "Constitution",
-    "Early Republic",
-    "Westward Expansion",
-    "Civil War",
-    "Reconstruction",
-    "Industrialization",
-    "World Wars",
-    "Modern America",
-  ],
+type SubjectSpec = {
+  chapters: Array<{
+    title: string;
+    icon: string;
+    colorRamp: "teal" | "blue" | "purple" | "amber" | "coral" | "green";
+    lessons: Array<{ title: string; icon: string; type: "lesson" | "elective" }>;
+  }>;
 };
 
-function getNodeCountForScale(scale: DemoTreeScale) {
-  if (scale === "small") return 5;
-  if (scale === "medium") return 10;
-  if (scale === "large") return 18;
-  return 56;
-}
+const DEMO_CURRICULA: Record<string, SubjectSpec> = {
+  Math: {
+    chapters: [
+      {
+        title: "Number Sense & Place Value", icon: "🔢", colorRamp: "teal",
+        lessons: [
+          { title: "Reading & Writing Large Numbers", icon: "📖", type: "lesson" },
+          { title: "Comparing & Ordering Whole Numbers", icon: "⚖️", type: "lesson" },
+          { title: "Rounding Strategies", icon: "🎯", type: "lesson" },
+          { title: "Number Patterns Deep Dive", icon: "🔍", type: "elective" },
+        ],
+      },
+      {
+        title: "Operations & Fluency", icon: "➕", colorRamp: "blue",
+        lessons: [
+          { title: "Addition & Subtraction Strategies", icon: "🧮", type: "lesson" },
+          { title: "Multiplication Concepts", icon: "✖️", type: "lesson" },
+          { title: "Division & Remainders", icon: "➗", type: "lesson" },
+          { title: "Multi-Step Word Problems", icon: "📝", type: "lesson" },
+          { title: "Mental Math Mastery", icon: "🧠", type: "elective" },
+        ],
+      },
+      {
+        title: "Fractions & Decimals", icon: "½", colorRamp: "purple",
+        lessons: [
+          { title: "Fractions as Parts of a Whole", icon: "🍕", type: "lesson" },
+          { title: "Equivalent Fractions", icon: "🔄", type: "lesson" },
+          { title: "Adding & Subtracting Fractions", icon: "➕", type: "lesson" },
+          { title: "Introduction to Decimals", icon: ".", type: "lesson" },
+          { title: "Fraction & Decimal Connections", icon: "🔗", type: "elective" },
+        ],
+      },
+    ],
+  },
+  Science: {
+    chapters: [
+      {
+        title: "The Scientific Method", icon: "🔬", colorRamp: "teal",
+        lessons: [
+          { title: "Asking Scientific Questions", icon: "❓", type: "lesson" },
+          { title: "Forming a Hypothesis", icon: "💡", type: "lesson" },
+          { title: "Designing an Experiment", icon: "🧪", type: "lesson" },
+          { title: "Collecting & Recording Data", icon: "📊", type: "lesson" },
+          { title: "Advanced Lab Techniques", icon: "🔭", type: "elective" },
+        ],
+      },
+      {
+        title: "Cells & Life Systems", icon: "🧬", colorRamp: "green",
+        lessons: [
+          { title: "What Are Cells?", icon: "🔵", type: "lesson" },
+          { title: "Cell Organelles & Their Jobs", icon: "⚙️", type: "lesson" },
+          { title: "Plant vs. Animal Cells", icon: "🌿", type: "lesson" },
+          { title: "Cell Division Overview", icon: "✂️", type: "lesson" },
+          { title: "Microscopy & Cell Observation", icon: "🔍", type: "elective" },
+        ],
+      },
+      {
+        title: "Ecosystems & Interdependence", icon: "🌍", colorRamp: "amber",
+        lessons: [
+          { title: "Producers, Consumers & Decomposers", icon: "🌱", type: "lesson" },
+          { title: "Food Chains & Food Webs", icon: "🕸️", type: "lesson" },
+          { title: "Biomes of the World", icon: "🗺️", type: "lesson" },
+          { title: "Human Impact on Ecosystems", icon: "🏭", type: "lesson" },
+          { title: "Conservation Science Project", icon: "♻️", type: "elective" },
+        ],
+      },
+    ],
+  },
+  "US History": {
+    chapters: [
+      {
+        title: "Colonial America", icon: "⛵", colorRamp: "teal",
+        lessons: [
+          { title: "Why Europeans Came to America", icon: "🗺️", type: "lesson" },
+          { title: "The Thirteen Colonies", icon: "🏘️", type: "lesson" },
+          { title: "Colonial Life & Society", icon: "🪶", type: "lesson" },
+          { title: "Relations with Native Peoples", icon: "🤝", type: "lesson" },
+          { title: "Colonial Economy Deep Dive", icon: "💰", type: "elective" },
+        ],
+      },
+      {
+        title: "Revolution & Independence", icon: "🦅", colorRamp: "coral",
+        lessons: [
+          { title: "Causes of Colonial Discontent", icon: "😤", type: "lesson" },
+          { title: "Key Events Leading to War", icon: "⚔️", type: "lesson" },
+          { title: "The Declaration of Independence", icon: "📜", type: "lesson" },
+          { title: "Fighting the Revolution", icon: "🎖️", type: "lesson" },
+          { title: "Loyalists vs. Patriots Debate", icon: "🗣️", type: "elective" },
+        ],
+      },
+      {
+        title: "Founding the New Nation", icon: "🏛️", colorRamp: "blue",
+        lessons: [
+          { title: "The Articles of Confederation", icon: "📄", type: "lesson" },
+          { title: "Writing the Constitution", icon: "✍️", type: "lesson" },
+          { title: "The Bill of Rights", icon: "📋", type: "lesson" },
+          { title: "The First Presidents", icon: "🎩", type: "lesson" },
+          { title: "Federalists vs. Anti-Federalists", icon: "⚖️", type: "elective" },
+        ],
+      },
+    ],
+  },
+};
 
-function getClassTreeScales(
-  subject: string,
-  studentIndex: number,
-): Array<{ label: string; scale: DemoTreeScale }> {
-  const primaryScale: DemoTreeScale =
-    subject === "Math" ? "medium" : subject === "Science" ? "medium" : "small";
+// ── Assignment builders per node type ────────────────────────────────────────
 
-  const specs: Array<{ label: string; scale: DemoTreeScale }> = [
-    { label: "Core", scale: primaryScale },
-  ];
+type AssignmentRow = {
+  id: string;
+  organizationId: string;
+  classId: string;
+  title: string;
+  description: string | null;
+  contentType: "text" | "video" | "quiz" | "essay_questions" | "report" | "url" | "file" | "movie";
+  contentRef: string | null;
+  linkedAssignmentId: string | null;
+  dueAt: string | null;
+  createdByUserId: string;
+  createdAt: string;
+  updatedAt: string;
+};
 
-  if (subject === "Science" && studentIndex === 2) {
-    specs.push({ label: "Lab Expedition", scale: "large" });
-  }
+function makeId() { return crypto.randomUUID(); }
 
-  if (subject === "US History" && studentIndex === DEMO_STUDENTS.length - 1) {
-    specs.push({ label: "Mastery Marathon", scale: "very_large" });
-  }
-
-  return specs;
-}
-
-function buildNodeAssignmentSeeds(
+function milestoneAssignments(
+  ctx: { orgId: string; classId: string; userId: string; now: string },
+  chapterTitle: string,
   subject: string,
   gradeLevel: string,
-  studentName: string,
-  nodeTitle: string,
-  nodeIndex: number,
-): DemoAssignmentSeed[] {
-  const lessonType = (["text", "video", "url"][nodeIndex % 3] ?? "text") as
-    | "text"
-    | "video"
-    | "url";
-  const lessonTitle = `Demo · ${nodeTitle} Lesson`;
-  const lessonDescription = `Core lesson work for ${studentName} in ${subject}.`;
-  const lessonContentRef =
-    lessonType === "video"
-      ? JSON.stringify({
-          videos: [
-            {
-              videoId: `demo-${subject.toLowerCase().replace(/\s+/g, "-")}-${nodeIndex + 1}`,
-              title: `${nodeTitle} Walkthrough`,
-              channel: "ProOrca Demo",
-              description: `Guided walkthrough for ${nodeTitle}.`,
-              thumbnail: "https://i.ytimg.com/vi/demo/hqdefault.jpg",
-              transcript: `This demo video explains ${nodeTitle} for grade ${gradeLevel}.`,
-            },
-          ],
-        })
-      : lessonType === "url"
-        ? `https://en.wikipedia.org/wiki/${encodeURIComponent(nodeTitle)}`
-        : `<h2>${nodeTitle}</h2><p>Read and summarize the most important ideas for grade ${gradeLevel}.</p>`;
-
+): AssignmentRow[] {
+  const base = { organizationId: ctx.orgId, classId: ctx.classId, createdByUserId: ctx.userId, createdAt: ctx.now, updatedAt: ctx.now, linkedAssignmentId: null, dueAt: null };
+  const preQuizId = makeId();
+  const checkpointQuizId = makeId();
   return [
+    // 1. Chapter overview reading
     {
-      title: lessonTitle,
-      description: lessonDescription,
-      contentType: lessonType,
-      contentRef: lessonContentRef,
+      ...base, id: makeId(),
+      title: `Chapter Intro: ${chapterTitle}`,
+      description: `Overview of what we'll explore in this chapter.`,
+      contentType: "text",
+      contentRef: `<p>Welcome to <strong>${chapterTitle}</strong>! In this chapter you will explore the key ideas, people, and events that shape our understanding of ${subject}. As you work through each lesson, look for connections between topics and ask yourself: <em>why does this matter?</em></p><p><strong>By the end of this chapter you will be able to:</strong></p><ul><li>Explain the core concepts in your own words</li><li>Give examples from real life</li><li>Connect what you learn here to other things you know</li></ul><p>Take your time with each lesson — understanding matters more than speed.</p><p>Before you begin, think about what you already know about <strong>${chapterTitle}</strong>. Write down one question you hope this chapter will answer. Keep it nearby — you can check it off when you find the answer!</p>`,
     },
+    // 2. Diagnostic pre-assessment (activates prior knowledge)
     {
-      title: `Demo · ${nodeTitle} Quiz`,
-      description: "Auto-graded checkpoint linked to the lesson.",
+      ...base, id: preQuizId,
+      title: `Warm-Up: What Do You Know About ${chapterTitle}?`,
+      description: `Diagnostic check — not graded, just shows what you already know.`,
       contentType: "quiz",
       contentRef: JSON.stringify({
-        title: `${nodeTitle} Checkpoint`,
+        title: `Pre-Assessment: ${chapterTitle}`,
         questions: [
-          {
-            question: `Which statement best matches ${nodeTitle}?`,
-            options: ["Key idea A", "Key idea B", "Key idea C", "Key idea D"],
-            answerIndex: 0,
-            explanation: "This is the demo correct response.",
-          },
-          {
-            question: `How is ${nodeTitle} used in ${subject}?`,
-            options: ["Approach 1", "Approach 2", "Approach 3", "Approach 4"],
-            answerIndex: 1,
-            explanation: "This option best matches the demo lesson objective.",
-          },
+          { question: `What comes to mind when you hear "${chapterTitle}"?`, options: ["Something familiar", "Completely new topic", "Heard of it, not sure", "Studied this before"], answerIndex: 3, explanation: "This is a diagnostic question — any answer helps us understand your starting point." },
+          { question: `Which best describes what you think ${chapterTitle} involves?`, options: ["Facts and vocabulary", "Processes and steps", "People and events", "All of the above"], answerIndex: 3, explanation: "Great ${subject} chapters involve all of these!" },
+          { question: "How confident do you feel about this topic right now?", options: ["Very confident", "A little confident", "Not very confident", "I've never heard of this"], answerIndex: 1, explanation: "Your confidence will grow as you work through the lessons." },
+          { question: `Which question are you most curious about in ${subject}?`, options: ["How things work", "Why things happened", "Who was involved", "What effects it had"], answerIndex: 2, explanation: "All of these are great lenses for studying ${subject}." },
+          { question: "What is the best way to learn something new?", options: ["Read and listen", "Practice and apply", "Teach someone else", "All of the above"], answerIndex: 3, explanation: "Research shows combining all three strategies leads to the best retention." },
         ],
       }),
     },
-    ...(nodeIndex % 6 === 0
-      ? [
-          {
-            title: `Demo · ${nodeTitle} Reflection`,
-            description: "Linked written response after quiz completion.",
-            contentType: (nodeIndex % 2 === 0 ? "report" : "essay_questions") as
-              | "report"
-              | "essay_questions",
-            contentRef:
-              nodeIndex % 2 === 0
-                ? `<h3>${nodeTitle} Reflection</h3><p>Explain what you learned and how you would apply it.</p>`
-                : JSON.stringify({
-                    questions: [
-                      `What is the most important idea in ${nodeTitle}?`,
-                      `How confident are you with ${nodeTitle}, and what would help next?`,
-                    ],
-                  }),
-          },
-        ]
-      : []),
+    // 3. Intro video 1
+    {
+      ...base, id: makeId(),
+      title: `Watch: ${chapterTitle} Overview`,
+      description: `Broad introduction video for grade ${gradeLevel} level.`,
+      contentType: "video",
+      contentRef: JSON.stringify({ videos: [{ videoId: `demo-${chapterTitle.toLowerCase().replace(/\W+/g, "-")}-overview`, title: `${chapterTitle} — Introduction`, channel: "Khan Academy", description: `A grade-${gradeLevel} overview of ${chapterTitle}.`, thumbnail: "https://i.ytimg.com/vi/demo/hqdefault.jpg", transcript: `This video introduces the key ideas in ${chapterTitle} for ${subject}.` }] }),
+    },
+    // 4. Intro video 2
+    {
+      ...base, id: makeId(),
+      title: `Watch: ${chapterTitle} — Key Concepts`,
+      description: `Second intro video focusing on the first major concept.`,
+      contentType: "video",
+      contentRef: JSON.stringify({ videos: [{ videoId: `demo-${chapterTitle.toLowerCase().replace(/\W+/g, "-")}-concepts`, title: `${chapterTitle} — Key Concepts`, channel: "CrashCourse", description: `Deeper look at the first key concept in ${chapterTitle}.`, thumbnail: "https://i.ytimg.com/vi/demo/hqdefault.jpg", transcript: `Now let's look more closely at the core concepts in ${chapterTitle}.` }] }),
+    },
+    // 5. Chapter checkpoint quiz
+    {
+      ...base, id: checkpointQuizId,
+      title: `Chapter Quiz: ${chapterTitle}`,
+      description: `Checkpoint quiz covering the chapter's core concepts.`,
+      contentType: "quiz",
+      contentRef: JSON.stringify({
+        title: `${chapterTitle} — Chapter Quiz`,
+        questions: [
+          { question: `What is the main topic of the ${chapterTitle} chapter?`, options: ["Historical events only", "Core concepts of " + subject, "Only vocabulary terms", "Mathematical formulas"], answerIndex: 1, explanation: `${chapterTitle} covers the core concepts of ${subject} at this level.` },
+          { question: `How does ${chapterTitle} connect to the rest of ${subject}?`, options: ["It doesn't connect", "It builds foundational knowledge", "It's an optional enrichment topic", "It replaces previous learning"], answerIndex: 1, explanation: "Every chapter builds on previous knowledge and prepares you for what comes next." },
+          { question: "Which learning strategy is most effective for this chapter?", options: ["Memorizing only", "Reading once quickly", "Connecting concepts to real examples", "Skipping the hard parts"], answerIndex: 2, explanation: "Connecting new ideas to real examples you know is the most powerful learning strategy." },
+          { question: `What should you be able to do after completing ${chapterTitle}?`, options: ["Recite facts from memory", "Explain key ideas in your own words", "Copy definitions from the text", "Recognize vocabulary words"], answerIndex: 1, explanation: "True understanding means you can explain concepts in your own words." },
+          { question: "How will you know you've mastered this chapter?", options: ["You finished all the assignments", "You can teach the main ideas to someone else", "You got 100% on every quiz", "You read everything twice"], answerIndex: 1, explanation: "The Feynman technique — being able to teach a concept — is a reliable mastery check." },
+        ],
+      }),
+    },
+    // 6. Chapter reflection essay
+    {
+      ...base, id: makeId(),
+      title: `Reflect: ${chapterTitle}`,
+      description: `Open-ended reflection connecting the chapter to your own experience.`,
+      contentType: "essay_questions",
+      contentRef: JSON.stringify({
+        questions: [
+          `What is the most interesting thing you learned in the ${chapterTitle} chapter, and why does it matter to you personally?`,
+          `What question do you still have after finishing this chapter? What would you do to find the answer?`,
+        ],
+      }),
+    },
+  ];
+}
+
+function lessonAssignments(
+  ctx: { orgId: string; classId: string; userId: string; now: string },
+  lessonTitle: string,
+  subject: string,
+  gradeLevel: string,
+  chapterTitle: string,
+): AssignmentRow[] {
+  const base = { organizationId: ctx.orgId, classId: ctx.classId, createdByUserId: ctx.userId, createdAt: ctx.now, updatedAt: ctx.now, linkedAssignmentId: null, dueAt: null };
+  const slug = lessonTitle.toLowerCase().replace(/\W+/g, "-");
+  return [
+    // 1. Reading (400-600 words represented as structured HTML)
+    {
+      ...base, id: makeId(),
+      title: `Reading: ${lessonTitle}`,
+      description: `Instructional reading on ${lessonTitle} for grade ${gradeLevel}.`,
+      contentType: "text",
+      contentRef: `<h2>${lessonTitle}</h2><p><strong>${lessonTitle}</strong> is one of the key concepts in our study of <em>${chapterTitle}</em>. To understand it well, we need to look at what it is, why it matters, and how it connects to other ideas in ${subject}.</p><p>When we study ${lessonTitle}, we are really asking: <em>how does this work, and what does it mean?</em> Experts in ${subject} have spent years studying this topic, and their discoveries help us understand the world around us. As you read, pay attention to the main idea in each paragraph and how the examples support it.</p><p>One of the most important things to understand about ${lessonTitle} is that it does not exist in isolation — it connects to everything else in ${subject}. Think about how the ideas here relate to what you have already learned. Where do you see patterns? Where does something surprise you or challenge what you thought you knew?</p><h3>Before You Move On</h3><p>Write down these three things before going to the next assignment:</p><ul><li>The <strong>one most important idea</strong> from this reading</li><li>One <strong>example</strong> that helped it make sense</li><li>One <strong>question</strong> you still have</li></ul><p>This three-point summary is one of the most powerful study techniques in learning science.</p>`,
+    },
+    // 2. Video 1
+    {
+      ...base, id: makeId(),
+      title: `Video: ${lessonTitle} Explained`,
+      description: `Educational video explaining the core concept.`,
+      contentType: "video",
+      contentRef: JSON.stringify({ videos: [{ videoId: `demo-${slug}-explain`, title: `${lessonTitle} Explained`, channel: "Khan Academy", description: `Clear explanation of ${lessonTitle} for ${subject} grade ${gradeLevel}.`, thumbnail: "https://i.ytimg.com/vi/demo/hqdefault.jpg", transcript: `Let's explore ${lessonTitle}. This concept is important because it forms the foundation for everything else in ${chapterTitle}.` }] }),
+    },
+    // 3. Video 2
+    {
+      ...base, id: makeId(),
+      title: `Video: ${lessonTitle} in Action`,
+      description: `See the concept applied through examples and demonstrations.`,
+      contentType: "video",
+      contentRef: JSON.stringify({ videos: [{ videoId: `demo-${slug}-apply`, title: `${lessonTitle} — Real Examples`, channel: "CrashCourse", description: `${lessonTitle} shown through worked examples and real-world application.`, thumbnail: "https://i.ytimg.com/vi/demo/hqdefault.jpg", transcript: `Now let's see ${lessonTitle} in action with some real examples you can relate to.` }] }),
+    },
+    // 4. Formative check quiz (always present — mastery gate)
+    {
+      ...base, id: makeId(),
+      title: `Check: ${lessonTitle}`,
+      description: `Formative check — did you get the key idea from this lesson?`,
+      contentType: "quiz",
+      contentRef: JSON.stringify({
+        title: `${lessonTitle} — Formative Check`,
+        questions: [
+          { question: `What is the central idea of ${lessonTitle}?`, options: ["A minor detail in " + subject, "A core concept that connects to " + chapterTitle, "An optional enrichment topic", "Something only experts need to know"], answerIndex: 1, explanation: `${lessonTitle} is a core concept that underpins much of ${chapterTitle}.` },
+          { question: `Which best describes how ${lessonTitle} is applied?`, options: ["Only in textbooks", "Only in labs or experiments", "In real-world situations and examples", "It has no practical applications"], answerIndex: 2, explanation: `${lessonTitle} has direct real-world applications that make ${subject} relevant to daily life.` },
+          { question: `What should you do if ${lessonTitle} is confusing?`, options: ["Skip it and move on", "Re-read the passage and rewatch the video", "Ask for easier content", "Assume it doesn't matter"], answerIndex: 1, explanation: "Re-reading and rewatching with fresh eyes often makes difficult concepts click." },
+          { question: `How does ${lessonTitle} connect to ${chapterTitle}?`, options: ["It doesn't — it's a separate topic", "It is one piece of the larger chapter picture", "It replaces the need to learn the rest", "It only matters for tests"], answerIndex: 1, explanation: `${lessonTitle} is one piece of the ${chapterTitle} puzzle — each lesson builds on the others.` },
+          { question: "What is the best way to make sure you remember this lesson?", options: ["Read it one more time", "Explain it to someone else in your own words", "Write the title 10 times", "Highlight everything"], answerIndex: 1, explanation: "Retrieval practice — recalling and explaining what you learned — is the strongest memory technique." },
+        ],
+      }),
+    },
+    // 5. Practice response (essay_questions — apply the concept)
+    {
+      ...base, id: makeId(),
+      title: `Practice: ${lessonTitle}`,
+      description: `Apply what you learned — explain it in your own words.`,
+      contentType: "essay_questions",
+      contentRef: JSON.stringify({
+        questions: [
+          `Explain ${lessonTitle} in your own words, as if you were teaching it to a younger student. Use at least one example.`,
+          `How does ${lessonTitle} connect to something you already knew before this lesson? Describe the connection.`,
+        ],
+      }),
+    },
+  ];
+}
+
+function electiveAssignments(
+  ctx: { orgId: string; classId: string; userId: string; now: string },
+  lessonTitle: string,
+  subject: string,
+  gradeLevel: string,
+  chapterTitle: string,
+): AssignmentRow[] {
+  const base = { organizationId: ctx.orgId, classId: ctx.classId, createdByUserId: ctx.userId, createdAt: ctx.now, updatedAt: ctx.now, linkedAssignmentId: null, dueAt: null };
+  const slug = lessonTitle.toLowerCase().replace(/\W+/g, "-");
+  return [
+    // 1. Deep-dive reading (500-750 words)
+    {
+      ...base, id: makeId(),
+      title: `Deep Dive: ${lessonTitle}`,
+      description: `Advanced reading exploring ${lessonTitle} in greater depth.`,
+      contentType: "text",
+      contentRef: `<h2>Deep Dive: ${lessonTitle}</h2><p><strong>${lessonTitle}</strong> goes well beyond what most students encounter in a standard ${subject} course. In this deep dive, we will look at the advanced ideas, controversies, and real-world implications that make this topic genuinely fascinating to experts in the field.</p><p>One of the surprising things about ${lessonTitle} is how much is still being discovered. Researchers continue to find new evidence that challenges old assumptions and opens new questions. This is what makes ${subject} exciting — it is a living, changing body of knowledge, not just a set of facts to memorize.</p><h3>How to Read Like an Expert</h3><ul><li><strong>Predict</strong> — before reading each section, predict what comes next</li><li><strong>Question</strong> — ask why the author chose each example</li><li><strong>Connect</strong> — link new ideas to what you already know from ${chapterTitle}</li><li><strong>Challenge</strong> — notice where you agree or disagree, and why</li></ul><p>When we look more closely at ${lessonTitle}, we see layers that a quick reading misses. The underlying mechanisms, the historical development of the idea, and the ways it interacts with other concepts in ${chapterTitle} all reveal something richer than the surface summary. Take your time with this reading — let the complexity sink in.</p><p>As you finish this deep dive, your goal is not just to understand ${lessonTitle} — it is to have an informed opinion about it. What do you think? What would you want to investigate further? The ability to form evidence-based opinions is one of the highest-level skills in ${subject}.</p>`,
+    },
+    // 2. Video 1
+    {
+      ...base, id: makeId(),
+      title: `Video: ${lessonTitle} — Advanced Exploration`,
+      description: `Documentary-style deep dive into the topic.`,
+      contentType: "video",
+      contentRef: JSON.stringify({ videos: [{ videoId: `demo-${slug}-advanced`, title: `${lessonTitle} — Advanced`, channel: "TED-Ed", description: `In-depth exploration of ${lessonTitle} for advanced learners.`, thumbnail: "https://i.ytimg.com/vi/demo/hqdefault.jpg", transcript: `Welcome to this advanced exploration of ${lessonTitle}. We'll go beyond the basics and look at what experts are discovering.` }] }),
+    },
+    // 3. Video 2
+    {
+      ...base, id: makeId(),
+      title: `Video: ${lessonTitle} — Case Study`,
+      description: `Real-world case study or documentary example.`,
+      contentType: "video",
+      contentRef: JSON.stringify({ videos: [{ videoId: `demo-${slug}-case`, title: `${lessonTitle} Case Study`, channel: "National Geographic", description: `A real-world case study connecting ${lessonTitle} to contemporary issues.`, thumbnail: "https://i.ytimg.com/vi/demo/hqdefault.jpg", transcript: `This case study shows how ${lessonTitle} plays out in the real world.` }] }),
+    },
+    // 4. Analysis quiz (requires analysis, not just recall)
+    {
+      ...base, id: makeId(),
+      title: `Analysis Check: ${lessonTitle}`,
+      description: `Higher-order thinking quiz — analysis and application required.`,
+      contentType: "quiz",
+      contentRef: JSON.stringify({
+        title: `${lessonTitle} — Analysis Check`,
+        questions: [
+          { question: `What is the most significant implication of ${lessonTitle} for ${subject}?`, options: ["It has no significant implications", "It changes how we understand " + chapterTitle, "It only matters for academic study", "It replaces all previous knowledge"], answerIndex: 1, explanation: `${lessonTitle} has real implications for how we understand ${chapterTitle} and beyond.` },
+          { question: `If you were to challenge the conventional understanding of ${lessonTitle}, what evidence would you need?`, options: ["No evidence needed", "Only personal opinion", "Peer-reviewed research and data", "A single contradicting example"], answerIndex: 2, explanation: "Strong challenges to established ideas require solid evidence from reliable sources." },
+          { question: `How might ${lessonTitle} look different in 50 years as the field of ${subject} evolves?`, options: ["Exactly the same", "Completely eliminated", "Refined and expanded with new evidence", "Moved to a different subject"], answerIndex: 2, explanation: "Knowledge in any field evolves — today's understanding becomes tomorrow's foundation." },
+          { question: `What is the connection between ${lessonTitle} and real-world problem solving?`, options: ["There is no connection", "It provides tools for analyzing real situations", "It is purely theoretical", "Only professionals can apply it"], answerIndex: 1, explanation: `${lessonTitle} gives you analytical tools you can apply to real problems in ${subject} and beyond.` },
+          { question: "What separates someone with surface understanding from someone with deep understanding of this topic?", options: ["The ability to memorize definitions", "The ability to explain, apply, and connect ideas", "The ability to finish assignments quickly", "The amount of time spent reading"], answerIndex: 1, explanation: "Deep understanding means you can explain, apply to new situations, and connect to other knowledge." },
+        ],
+      }),
+    },
+    // 5. Hands-on project (always present for electives)
+    {
+      ...base, id: makeId(),
+      title: `Project: ${lessonTitle}`,
+      description: `Create something that demonstrates your deep understanding.`,
+      contentType: "report",
+      contentRef: `<p><strong>Project Goal:</strong> Create an artifact that demonstrates your understanding of ${lessonTitle} and its place within ${chapterTitle}.</p><p><strong>Choose one format:</strong></p><ul><li>A detailed diagram with annotations</li><li>A written report (300–400 words)</li><li>A poster or infographic</li><li>A short presentation outline (5 key points with evidence)</li></ul><p><strong>What to include:</strong></p><ul><li>A clear explanation of ${lessonTitle} in your own words</li><li>Two or more examples or pieces of evidence</li><li>A connection to something else you've learned in ${subject}</li><li>Your own opinion or a question you still have</li></ul><p><strong>How you'll be evaluated:</strong> Accuracy of information, clarity of explanation, quality of examples, and evidence of your own thinking — not just copying from the reading.</p>`,
+    },
+  ];
+}
+
+function bossAssignments(
+  ctx: { orgId: string; classId: string; userId: string; now: string },
+  unitTitle: string,
+  subject: string,
+  gradeLevel: string,
+  chapterTitles: string[],
+): AssignmentRow[] {
+  const base = { organizationId: ctx.orgId, classId: ctx.classId, createdByUserId: ctx.userId, createdAt: ctx.now, updatedAt: ctx.now, linkedAssignmentId: null, dueAt: null };
+  const chaptersListed = chapterTitles.join(", ");
+  return [
+    // 1. Comprehensive unit review (600-900 words)
+    {
+      ...base, id: makeId(),
+      title: `Unit Review: ${unitTitle}`,
+      description: `Comprehensive review of all key concepts from this unit.`,
+      contentType: "text",
+      contentRef: `<h2>Unit Review: ${unitTitle}</h2><p>You have covered a lot of ground in this unit on ${subject}. This review will help you see the whole picture before your summative assessments. The chapters you completed — ${chaptersListed} — are not separate islands of information. They are deeply connected, and understanding those connections is the mark of real mastery.</p><h3>Three Big Ideas to Master</h3><ul><li><strong>Foundation</strong> — the concepts that everything else builds on. These are the ideas you need to be able to explain without looking at your notes. If any of these feel shaky, go back and review the reading or rewatch a video before attempting the summative quiz.</li><li><strong>Application</strong> — taking what you know and using it to explain something new. This is where ${subject} becomes genuinely powerful. The real test of understanding is whether you can pick up a new problem or question and use those tools to make progress on it.</li><li><strong>Synthesis</strong> — seeing how the chapters fit together into a coherent whole. What is the overarching story or argument that ties the unit together? Being able to answer this question is the highest level of understanding.</li></ul><h3>How to Prepare</h3><p>Try this strategy: without looking at any notes, write down the three most important things you learned in this unit. Then check your notes and reading to see what you missed. The gap between what you thought you knew and what you actually know is exactly where your studying should focus.</p><p>Good luck — you've done the work, and now it's time to show what you know.</p>`,
+    },
+    // 2-4. Three summative quizzes (one per concept cluster)
+    {
+      ...base, id: makeId(),
+      title: `Unit Quiz 1: Foundations — ${unitTitle}`,
+      description: `Summative quiz covering foundational concepts from the first chapter area.`,
+      contentType: "quiz",
+      contentRef: JSON.stringify({
+        title: `${unitTitle} — Foundations Quiz`,
+        questions: [
+          { question: `Which statement best describes the foundational concepts in ${unitTitle}?`, options: ["They are optional background information", "They underpin all subsequent learning in this unit", "They are only relevant to advanced students", "They stand alone from the rest of the unit"], answerIndex: 1, explanation: "Foundational concepts are load-bearing — everything else in the unit depends on them." },
+          { question: `How should you approach a topic in ${subject} that feels confusing?`, options: ["Skip it — it probably won't be tested", "Re-read, rewatch, and try to explain it aloud", "Just memorize the definition", "Ask someone else to summarize it for you"], answerIndex: 1, explanation: "Active re-engagement and self-explanation are the most effective strategies for difficult material." },
+          { question: `What distinguishes a strong response in ${subject} from a weak one?`, options: ["Length alone", "Use of evidence and examples", "Number of vocabulary words used", "How quickly it was written"], answerIndex: 1, explanation: "Strong responses in any subject use specific evidence and examples to support their claims." },
+          { question: `Which of the following is the best way to connect ${unitTitle} to prior knowledge?`, options: ["Look for surface similarities in vocabulary", "Identify underlying principles that appear in both topics", "Assume there are no connections", "Only look forward to future topics"], answerIndex: 1, explanation: "Deep connections happen at the level of underlying principles, not just vocabulary." },
+          { question: "What role does making mistakes play in learning?", options: ["Mistakes are signs of failure", "Mistakes show what to study next and strengthen memory", "Mistakes should be hidden", "Mistakes only matter for graded work"], answerIndex: 1, explanation: "Research shows that making and correcting mistakes is one of the most powerful learning experiences." },
+        ],
+      }),
+    },
+    {
+      ...base, id: makeId(),
+      title: `Unit Quiz 2: Application — ${unitTitle}`,
+      description: `Summative quiz requiring application of concepts to new scenarios.`,
+      contentType: "quiz",
+      contentRef: JSON.stringify({
+        title: `${unitTitle} — Application Quiz`,
+        questions: [
+          { question: `If you had to teach ${unitTitle} to someone who had never heard of it, where would you start?`, options: ["With the most advanced concept", "With the most interesting fact you remember", "With the foundational concept that everything else builds on", "With a quiz to test their prior knowledge"], answerIndex: 2, explanation: "Good teaching always starts with the foundation that makes everything else make sense." },
+          { question: `What would a real-world application of ${unitTitle} look like?`, options: ["A theoretical exercise with no practical value", "Solving a genuine problem or explaining a real phenomenon", "Something only done in academic settings", "An activity unrelated to everyday life"], answerIndex: 1, explanation: `The concepts in ${unitTitle} have genuine real-world applications in ${subject} and beyond.` },
+          { question: `How would an expert in ${subject} approach a new problem related to ${unitTitle}?`, options: ["By memorizing more facts", "By applying known principles to analyze the new situation", "By guessing based on intuition", "By waiting for more information"], answerIndex: 1, explanation: "Experts apply principles — they don't memorize every possible scenario, they analyze new ones." },
+          { question: `What evidence would you use to support a claim about ${unitTitle}?`, options: ["Personal opinion only", "Data, examples, or established research", "What sounds most convincing", "The simplest explanation available"], answerIndex: 1, explanation: "Evidence-based reasoning is the cornerstone of ${subject} and academic thinking generally." },
+          { question: `How has your understanding of ${subject} changed after studying ${unitTitle}?`, options: ["It hasn't changed at all", "I now see connections I didn't see before", "I know fewer things with certainty now", "The subject seems harder with no benefit"], answerIndex: 1, explanation: "Growth in understanding often means seeing more connections and nuance — that's a sign of real learning." },
+        ],
+      }),
+    },
+    {
+      ...base, id: makeId(),
+      title: `Unit Quiz 3: Synthesis — ${unitTitle}`,
+      description: `Summative quiz requiring synthesis across the full unit.`,
+      contentType: "quiz",
+      contentRef: JSON.stringify({
+        title: `${unitTitle} — Synthesis Quiz`,
+        questions: [
+          { question: `What is the overarching theme that connects all the chapters in ${unitTitle}?`, options: ["Each chapter is completely independent", "There is a connecting story or argument running through the whole unit", "Only the boss node matters", "The theme is different for every student"], answerIndex: 1, explanation: "Well-designed units have a coherent through-line — a big idea that ties everything together." },
+          { question: `Which chapter in ${unitTitle} do you think was most important, and why?`, options: ["The first one, because it was first", "The one with the most vocabulary", "The one whose concepts appear most often in other chapters", "The shortest one"], answerIndex: 2, explanation: "The most important chapter is usually the one whose concepts reappear throughout the rest of the unit." },
+          { question: `How would the unit be different if one of the chapters was removed?`, options: ["It would be exactly the same", "There would be a gap in understanding that would make later concepts harder", "It would actually be easier to understand", "Only the quizzes would be affected"], answerIndex: 1, explanation: "Removing a chapter creates a conceptual gap — this is why every part of a well-designed curriculum matters." },
+          { question: `What question about ${subject} does ${unitTitle} raise that you want to explore further?`, options: ["No new questions — everything is answered", "A deeper version of one of the chapter questions", "Questions about an entirely unrelated subject", "Questions about how to memorize more"], answerIndex: 1, explanation: "Good learning raises better questions than it started with — that's a sign of growing understanding." },
+          { question: `How would you summarize ${unitTitle} in one sentence for someone who had never studied ${subject}?`, options: ["I would just give them the textbook", "I would explain the single most important idea in plain language", "I would list all the vocabulary words", "I would say it's too complicated to summarize"], answerIndex: 1, explanation: "Being able to summarize a complex topic simply is the ultimate test of understanding." },
+        ],
+      }),
+    },
+    // 5. Analytical essay (always at least 1 for boss nodes)
+    {
+      ...base, id: makeId(),
+      title: `Essay: ${unitTitle}`,
+      description: `Analytical essay requiring synthesis and argument across the full unit.`,
+      contentType: "essay_questions",
+      contentRef: JSON.stringify({
+        questions: [
+          `Choose the concept from ${unitTitle} that you found most surprising or that challenged your prior understanding. Explain what you originally thought, what you learned, and why this change in thinking matters. Use specific evidence from at least two different lessons.`,
+          `If you could add one more chapter to ${unitTitle}, what would it cover and why? Explain how it would connect to what was already covered and what gap in understanding it would fill.`,
+        ],
+      }),
+    },
   ];
 }
 
@@ -794,24 +893,25 @@ export const seedDemoWorkspaceContent = createServerFn({ method: "POST" })
 
     const schoolYear = getCurrentSchoolYearLabel();
     const subjectCycle = ["Math", "Science", "US History"] as const;
-    const now = new Date();
-    const monday = new Date(now);
+    const nowDate = new Date();
+    const monday = new Date(nowDate);
     const day = monday.getDay();
     const shift = day === 0 ? -6 : 1 - day;
     monday.setDate(monday.getDate() + shift);
     monday.setHours(0, 0, 0, 0);
+    const nowStr = nowDate.toISOString();
 
-    let classesCreated = 0;
-    let studentsCreated = 0;
-    let assignmentsCreated = 0;
-    let templatesCreated = 0;
-    let treesCreated = 0;
+    const ctx = { orgId: organizationId, userId: session.user.id, now: nowStr };
 
-    for (const [studentIndex, student] of DEMO_STUDENTS.entries()) {
+    // ── Phase 1: Profiles ────────────────────────────────────────────────────
+    const pinHash = await hashStudentPin("1111");
+    const profileRows: Record<string, unknown>[] = [];
+    const profileIdMap: Record<string, string> = {}; // displayName → profileId
+
+    for (const student of DEMO_STUDENTS) {
       const profileId = crypto.randomUUID();
-      const pinHash = await hashStudentPin("1111");
-
-      await db.insert(profiles).values({
+      profileIdMap[student.displayName] = profileId;
+      profileRows.push({
         id: profileId,
         organizationId,
         parentUserId: session.user.id,
@@ -820,271 +920,402 @@ export const seedDemoWorkspaceContent = createServerFn({ method: "POST" })
         pinHash,
         status: "active",
       });
-      studentsCreated += 1;
+    }
+    await batchInsert(db, profiles, profileRows);
 
+    // ── Phase 2: Classes + enrollments ───────────────────────────────────────
+    type ClassMeta = { classId: string; profileId: string; subject: string; gradeLevel: string };
+    const classRows: Record<string, unknown>[] = [];
+    const enrollmentRows: Record<string, unknown>[] = [];
+    const classMetas: ClassMeta[] = [];
+
+    for (const student of DEMO_STUDENTS) {
+      const profileId = profileIdMap[student.displayName]!;
       for (const subject of subjectCycle) {
         const classId = crypto.randomUUID();
-        await db.insert(classes).values({
+        classMetas.push({ classId, profileId, subject, gradeLevel: student.gradeLevel });
+        classRows.push({
           id: classId,
           organizationId,
           title: `Demo · Grade ${student.gradeLevel} ${subject}`,
-          description: `Demo curriculum track for ${student.displayName}`,
+          description: `Demo curriculum for ${student.displayName}`,
           schoolYear,
           createdByUserId: session.user.id,
         });
-        classesCreated += 1;
-
-        await db.insert(classEnrollments).values({
-          id: crypto.randomUUID(),
-          classId,
-          profileId,
-        });
-
-        const templateSource = buildDemoAssignments(student.gradeLevel, student.displayName, subject)[0];
-        const topicPool = DEMO_NODE_TOPICS[subject] ?? [
-          `${subject} Foundations`,
-          `${subject} Practice`,
-          `${subject} Checkpoint`,
-          `${subject} Mastery`,
-        ];
-        const classTreeSpecs = getClassTreeScales(subject, studentIndex);
-        const quizAssignmentIds: string[] = [];
-        const writtenAssignmentIds: string[] = [];
-        let weekPlanSeeded = 0;
-
-        for (const [treeIndex, treeSpec] of classTreeSpecs.entries()) {
-          const treeId = crypto.randomUUID();
-          const nodeCount = getNodeCountForScale(treeSpec.scale);
-          await db.insert(skillTrees).values({
-            id: treeId,
-            organizationId,
-            classId,
-            profileId,
-            title: `Demo Skill Map · Grade ${student.gradeLevel} ${subject} (${treeSpec.label})`,
-            description: `${treeSpec.scale.replace("_", " ")} progression path for ${student.displayName}`,
-            gradeLevel: student.gradeLevel,
-            subject,
-            schoolYear,
-            createdByUserId: session.user.id,
-          });
-          treesCreated += 1;
-
-          const nodeIds: string[] = [];
-          const edgeRows: Array<{
-            id: string;
-            treeId: string;
-            sourceNodeId: string;
-            targetNodeId: string;
-            edgeType: "required" | "optional" | "bonus";
-          }> = [];
-          const progressedCutoff = Math.max(2, Math.floor(nodeCount * 0.14));
-          const availableCutoff = Math.max(4, Math.floor(nodeCount * 0.28));
-
-          for (let nodeIndex = 0; nodeIndex < nodeCount; nodeIndex += 1) {
-            const nodeId = crypto.randomUUID();
-            nodeIds.push(nodeId);
-            const column = nodeIndex % 8;
-            const row = Math.floor(nodeIndex / 8);
-            const topic = topicPool[nodeIndex % topicPool.length] ?? `${subject} Topic`;
-            const cycle = Math.floor(nodeIndex / topicPool.length) + 1;
-            const nodeTitle = `${topic} ${cycle}`;
-            const nodeType: "lesson" | "milestone" | "boss" | "branch" | "elective" =
-              nodeIndex === nodeCount - 1
-                ? "boss"
-                : nodeIndex % 7 === 0
-                  ? "milestone"
-                  : nodeIndex % 5 === 0
-                    ? "branch"
-                    : "lesson";
-
-            await db.insert(skillTreeNodes).values({
-              id: nodeId,
-              treeId,
-              organizationId,
-              title: nodeTitle,
-              description: `Demo ${subject} node ${nodeIndex + 1} of ${nodeCount}.`,
-              subject,
-              icon: null,
-              colorRamp: nodeType === "boss" ? "blue" : nodeType === "milestone" ? "teal" : "blue",
-              nodeType,
-              xpReward: 80 + (nodeIndex % 6) * 20,
-              positionX: 180 + column * 160,
-              positionY: 100 + row * 130 + (column % 2 === 0 ? 0 : 20),
-              radius: treeSpec.scale === "very_large" ? 24 : 28,
-              isRequired: nodeType !== "branch",
-            });
-
-            const nodeAssignmentSeeds = buildNodeAssignmentSeeds(
-              subject,
-              student.gradeLevel,
-              student.displayName,
-              nodeTitle,
-              nodeIndex,
-            );
-
-            let previousAssignmentId: string | null = null;
-            for (const [orderIndex, assignmentSeed] of nodeAssignmentSeeds.entries()) {
-              const assignmentId = crypto.randomUUID();
-              const dueAt = new Date(monday);
-              dueAt.setDate(monday.getDate() + ((nodeIndex + orderIndex + treeIndex * 2) % 28));
-              dueAt.setHours(16 + (orderIndex % 2), 0, 0, 0);
-
-              await db.insert(assignments).values({
-                id: assignmentId,
-                organizationId,
-                classId,
-                title: assignmentSeed.title,
-                description: assignmentSeed.description,
-                contentType: assignmentSeed.contentType,
-                contentRef: assignmentSeed.contentRef,
-                linkedAssignmentId: previousAssignmentId,
-                dueAt: dueAt.toISOString(),
-                createdByUserId: session.user.id,
-              });
-              assignmentsCreated += 1;
-
-              await db.insert(skillTreeNodeAssignments).values({
-                id: crypto.randomUUID(),
-                nodeId,
-                assignmentId,
-                orderIndex,
-              });
-
-              if (assignmentSeed.contentType === "quiz" && quizAssignmentIds.length < 12) {
-                quizAssignmentIds.push(assignmentId);
-              }
-
-              if (
-                (assignmentSeed.contentType === "report" ||
-                  assignmentSeed.contentType === "essay_questions") &&
-                writtenAssignmentIds.length < 12
-              ) {
-                writtenAssignmentIds.push(assignmentId);
-              }
-
-              if (orderIndex === 0 && weekPlanSeeded < 20) {
-                await db.insert(weekPlan).values({
-                  id: crypto.randomUUID(),
-                  organizationId,
-                  profileId,
-                  assignmentId,
-                  scheduledDate: dueAt.toISOString().slice(0, 10),
-                  orderIndex: weekPlanSeeded,
-                });
-                weekPlanSeeded += 1;
-              }
-
-              previousAssignmentId = assignmentId;
-            }
-
-            const progressStatus: "complete" | "in_progress" | "available" | "locked" =
-              nodeIndex === 0
-                ? "complete"
-                : nodeIndex < progressedCutoff
-                  ? "in_progress"
-                  : nodeIndex < availableCutoff
-                    ? "available"
-                    : "locked";
-
-            await db.insert(skillTreeNodeProgress).values({
-              id: crypto.randomUUID(),
-              nodeId,
-              profileId,
-              treeId,
-              status: progressStatus,
-              xpEarned: progressStatus === "complete" ? 100 : progressStatus === "in_progress" ? 40 : 0,
-              completedAt: progressStatus === "complete" ? new Date().toISOString() : null,
-              updatedAt: new Date().toISOString(),
-            });
-
-            if (nodeIndex > 0) {
-              edgeRows.push({
-                id: crypto.randomUUID(),
-                treeId,
-                sourceNodeId: nodeIds[nodeIndex - 1]!,
-                targetNodeId: nodeId,
-                edgeType: "required",
-              });
-            }
-            if (nodeIndex > 2 && nodeIndex % 4 === 0) {
-              edgeRows.push({
-                id: crypto.randomUUID(),
-                treeId,
-                sourceNodeId: nodeIds[nodeIndex - 3]!,
-                targetNodeId: nodeId,
-                edgeType: "optional",
-              });
-            }
-            if (nodeIndex > 5 && nodeIndex % 7 === 0) {
-              edgeRows.push({
-                id: crypto.randomUUID(),
-                treeId,
-                sourceNodeId: nodeIds[nodeIndex - 6]!,
-                targetNodeId: nodeId,
-                edgeType: "bonus",
-              });
-            }
-          }
-
-          if (edgeRows.length > 0) {
-            await db.insert(skillTreeEdges).values(edgeRows);
-          }
-        }
-
-        if (quizAssignmentIds[0]) {
-          await db.insert(submissions).values({
-            id: crypto.randomUUID(),
-            organizationId,
-            assignmentId: quizAssignmentIds[0],
-            profileId,
-            submittedByUserId: session.user.id,
-            textResponse: JSON.stringify([0, 1]),
-            status: "graded",
-            score: 91,
-            reviewedAt: new Date().toISOString(),
-          });
-        }
-
-        if (writtenAssignmentIds[0]) {
-          await db.insert(submissions).values({
-            id: crypto.randomUUID(),
-            organizationId,
-            assignmentId: writtenAssignmentIds[0],
-            profileId,
-            submittedByUserId: session.user.id,
-            textResponse: "This is a demo submission for parent review.",
-            status: "submitted",
-          });
-        }
-
-        await db.insert(assignmentTemplates).values({
-          id: crypto.randomUUID(),
-          organizationId,
-          title: `${templateSource.title} Template`,
-          description: `Reusable demo template for Grade ${student.gradeLevel} ${subject}.`,
-          contentType: templateSource.contentType,
-          contentRef: templateSource.contentRef,
-          tags: JSON.stringify([
-            `subject:${subject.toLowerCase().replace(/\s+/g, "-")}`,
-            `grade:${student.gradeLevel}`,
-            "scope:demo",
-          ]),
-          isPublic: false,
-          createdByUserId: session.user.id,
-        });
-        templatesCreated += 1;
+        enrollmentRows.push({ id: crypto.randomUUID(), classId, profileId });
       }
     }
+    await batchInsert(db, classes, classRows);
+    await batchInsert(db, classEnrollments, enrollmentRows);
+
+    // ── Phase 3: Skill trees + nodes ─────────────────────────────────────────
+    // One skill tree per class. Each tree follows DEMO_CURRICULA:
+    //   chapter → milestone node
+    //   chapter.lessons → lesson/elective nodes in a branch
+    //   final → boss node
+    //
+    // Layout: chapters arranged in columns (x), nodes in each chapter stacked (y)
+    //   milestone sits at top of each chapter column
+    //   lessons fan out diagonally below
+    //   boss is centered at the far right
+
+    type NodeMeta = {
+      nodeId: string;
+      treeId: string;
+      classId: string;
+      profileId: string;
+      subject: string;
+      gradeLevel: string;
+      nodeType: "milestone" | "lesson" | "elective" | "boss";
+      nodeTitle: string;
+      chapterTitle: string;
+      unitTitle: string;
+      chapterTitles: string[];
+      nodeIndex: number;   // absolute index within tree (for progress/due-date spreading)
+    };
+
+    const treeRows: Record<string, unknown>[] = [];
+    const nodeRows: Record<string, unknown>[] = [];
+    const nodeMetas: NodeMeta[] = [];
+
+    for (const cls of classMetas) {
+      const treeId = crypto.randomUUID();
+      const spec = DEMO_CURRICULA[cls.subject];
+      if (!spec) continue;
+      const unitTitle = `${cls.subject} — Grade ${cls.gradeLevel}`;
+      const chapterTitles = spec.chapters.map((c) => c.title);
+
+      treeRows.push({
+        id: treeId,
+        organizationId,
+        classId: cls.classId,
+        profileId: cls.profileId,
+        title: `Demo Skill Map · Grade ${cls.gradeLevel} ${cls.subject}`,
+        description: `Full ${cls.subject} curriculum for Grade ${cls.gradeLevel}`,
+        gradeLevel: cls.gradeLevel,
+        subject: cls.subject,
+        schoolYear,
+        createdByUserId: session.user.id,
+      });
+
+      let nodeIndex = 0;
+      const CHAPTER_COL_GAP = 280;
+      const ROW_GAP = 120;
+
+      for (const [chIdx, chapter] of spec.chapters.entries()) {
+        const colX = 120 + chIdx * CHAPTER_COL_GAP;
+
+        // Milestone node (chapter entry)
+        const milestoneId = crypto.randomUUID();
+        nodeRows.push({
+          id: milestoneId,
+          treeId,
+          organizationId,
+          title: chapter.title,
+          description: `Chapter overview: ${chapter.title}`,
+          subject: cls.subject,
+          icon: chapter.icon,
+          colorRamp: chapter.colorRamp,
+          nodeType: "milestone",
+          xpReward: 150,
+          positionX: colX,
+          positionY: 80,
+          radius: 30,
+          isRequired: true,
+        });
+        nodeMetas.push({
+          nodeId: milestoneId, treeId, classId: cls.classId, profileId: cls.profileId,
+          subject: cls.subject, gradeLevel: cls.gradeLevel,
+          nodeType: "milestone", nodeTitle: chapter.title, chapterTitle: chapter.title,
+          unitTitle, chapterTitles, nodeIndex,
+        });
+        nodeIndex += 1;
+
+        // Lesson / elective nodes
+        for (const [lesIdx, les] of chapter.lessons.entries()) {
+          const lessonId = crypto.randomUUID();
+          const isElective = les.type === "elective";
+          // Fan out: odd lessons go slightly left, even slightly right
+          const xOffset = lesIdx % 2 === 0 ? -60 : 60;
+          nodeRows.push({
+            id: lessonId,
+            treeId,
+            organizationId,
+            title: les.title,
+            description: `${isElective ? "Elective deep-dive" : "Core lesson"}: ${les.title}`,
+            subject: cls.subject,
+            icon: les.icon,
+            colorRamp: chapter.colorRamp,
+            nodeType: les.type,
+            xpReward: isElective ? 80 : 100,
+            positionX: colX + xOffset,
+            positionY: 80 + ROW_GAP + lesIdx * ROW_GAP,
+            radius: isElective ? 14 : 20,
+            isRequired: !isElective,
+          });
+          nodeMetas.push({
+            nodeId: lessonId, treeId, classId: cls.classId, profileId: cls.profileId,
+            subject: cls.subject, gradeLevel: cls.gradeLevel,
+            nodeType: les.type as "lesson" | "elective", nodeTitle: les.title,
+            chapterTitle: chapter.title, unitTitle, chapterTitles, nodeIndex,
+          });
+          nodeIndex += 1;
+        }
+      }
+
+      // Boss node — centered at far right
+      const bossId = crypto.randomUUID();
+      const bossX = 120 + spec.chapters.length * CHAPTER_COL_GAP;
+      nodeRows.push({
+        id: bossId,
+        treeId,
+        organizationId,
+        title: `${cls.subject} Mastery Assessment`,
+        description: `Unit boss: summative review of all ${cls.subject} chapters`,
+        subject: cls.subject,
+        icon: "🏆",
+        colorRamp: "blue",
+        nodeType: "boss",
+        xpReward: 300,
+        positionX: bossX,
+        positionY: 80 + Math.floor(spec.chapters[0]!.lessons.length / 2) * ROW_GAP,
+        radius: 40,
+        isRequired: true,
+      });
+      nodeMetas.push({
+        nodeId: bossId, treeId, classId: cls.classId, profileId: cls.profileId,
+        subject: cls.subject, gradeLevel: cls.gradeLevel,
+        nodeType: "boss", nodeTitle: `${cls.subject} Mastery Assessment`,
+        chapterTitle: "", unitTitle, chapterTitles, nodeIndex,
+      });
+    }
+
+    await batchInsert(db, skillTrees, treeRows);
+    await batchInsert(db, skillTreeNodes, nodeRows);
+
+    // ── Phase 4: Assignments ──────────────────────────────────────────────────
+    // Build all assignment rows first, then batch-insert them.
+    // Also collect nodeAssignment link rows and weekPlan rows.
+
+    type NodeAssignmentRow = { id: string; nodeId: string; assignmentId: string; orderIndex: number };
+    type WeekPlanRow = { id: string; organizationId: string; profileId: string; assignmentId: string; scheduledDate: string; orderIndex: number };
+
+    const assignmentRows: AssignmentRow[] = [];
+    const nodeAssignmentRows: NodeAssignmentRow[] = [];
+    const weekPlanRows: WeekPlanRow[] = [];
+
+    // Track first quiz / first essay per class for sample submissions
+    type SubmissionSeed = { assignmentId: string; profileId: string; type: "quiz" | "written" };
+    const submissionSeeds: SubmissionSeed[] = [];
+
+    // Track a sample assignment per class for templates
+    type TemplateSeed = { subject: string; gradeLevel: string; assignment: AssignmentRow };
+    const templateSeeds: TemplateSeed[] = [];
+    const templateClassesSeen = new Set<string>(); // classId
+
+    // Group nodeMetas by treeId so we can spread due dates per-tree
+    const byTree = new Map<string, NodeMeta[]>();
+    for (const nm of nodeMetas) {
+      const arr = byTree.get(nm.treeId) ?? [];
+      arr.push(nm);
+      byTree.set(nm.treeId, arr);
+    }
+
+    let weekPlanGlobalOrder = 0;
+
+    for (const [treeId, treeNodes] of byTree.entries()) {
+      const firstNode = treeNodes[0];
+      if (!firstNode) continue;
+      const { classId, profileId, subject, gradeLevel } = firstNode;
+      let firstQuizId: string | null = null;
+      let firstEssayId: string | null = null;
+      let weekPlanPerTree = 0;
+
+      for (const nm of treeNodes) {
+        const nodeCtx = { ...ctx, classId: nm.classId };
+        let built: AssignmentRow[];
+        if (nm.nodeType === "milestone") {
+          built = milestoneAssignments(nodeCtx, nm.nodeTitle, subject, gradeLevel);
+        } else if (nm.nodeType === "elective") {
+          built = electiveAssignments(nodeCtx, nm.nodeTitle, nm.chapterTitle, subject, gradeLevel);
+        } else if (nm.nodeType === "boss") {
+          built = bossAssignments(nodeCtx, nm.unitTitle, subject, gradeLevel, nm.chapterTitles);
+        } else {
+          built = lessonAssignments(nodeCtx, nm.nodeTitle, nm.chapterTitle, subject, gradeLevel);
+        }
+
+        // Assign due dates spread across 28 days per tree
+        for (const [orderIdx, asgn] of built.entries()) {
+          const dueAt = new Date(monday);
+          dueAt.setDate(monday.getDate() + ((nm.nodeIndex + orderIdx) % 28));
+          dueAt.setHours(15 + (orderIdx % 3), 0, 0, 0);
+          asgn.dueAt = dueAt.toISOString();
+          asgn.organizationId = organizationId;
+
+          assignmentRows.push(asgn);
+          nodeAssignmentRows.push({ id: crypto.randomUUID(), nodeId: nm.nodeId, assignmentId: asgn.id, orderIndex: orderIdx });
+
+          // Week plan: first assignment of each node, up to 15 per tree
+          if (orderIdx === 0 && weekPlanPerTree < 15) {
+            weekPlanRows.push({
+              id: crypto.randomUUID(),
+              organizationId,
+              profileId: nm.profileId,
+              assignmentId: asgn.id,
+              scheduledDate: dueAt.toISOString().slice(0, 10),
+              orderIndex: weekPlanGlobalOrder,
+            });
+            weekPlanGlobalOrder += 1;
+            weekPlanPerTree += 1;
+          }
+
+          if (!firstQuizId && asgn.contentType === "quiz") firstQuizId = asgn.id;
+          if (!firstEssayId && (asgn.contentType === "essay_questions" || asgn.contentType === "report")) firstEssayId = asgn.id;
+        }
+
+        // Template seed: one per class, use the first milestone's first assignment
+        if (!templateClassesSeen.has(classId) && nm.nodeType === "milestone" && built[0]) {
+          templateClassesSeen.add(classId);
+          templateSeeds.push({ subject, gradeLevel, assignment: built[0] });
+        }
+      }
+
+      if (firstQuizId) submissionSeeds.push({ assignmentId: firstQuizId, profileId, type: "quiz" });
+      if (firstEssayId) submissionSeeds.push({ assignmentId: firstEssayId, profileId, type: "written" });
+    }
+
+    await batchInsert(db, assignments, assignmentRows);
+    await batchInsert(db, skillTreeNodeAssignments, nodeAssignmentRows);
+
+    // ── Phase 5: Node progress + edges ───────────────────────────────────────
+    const progressRows: Record<string, unknown>[] = [];
+    const edgeRows: Record<string, unknown>[] = [];
+
+    for (const [treeId, treeNodes] of byTree.entries()) {
+      const totalNodes = treeNodes.length;
+      const completedCutoff = Math.max(1, Math.floor(totalNodes * 0.15));
+      const inProgressCutoff = Math.max(2, Math.floor(totalNodes * 0.30));
+      const availableCutoff = Math.max(3, Math.floor(totalNodes * 0.50));
+
+      for (const [idx, nm] of treeNodes.entries()) {
+        const status: "complete" | "in_progress" | "available" | "locked" =
+          idx < completedCutoff ? "complete"
+          : idx < inProgressCutoff ? "in_progress"
+          : idx < availableCutoff ? "available"
+          : "locked";
+
+        progressRows.push({
+          id: crypto.randomUUID(),
+          nodeId: nm.nodeId,
+          profileId: nm.profileId,
+          treeId,
+          status,
+          xpEarned: status === "complete" ? nm.nodeType === "boss" ? 300 : nm.nodeType === "milestone" ? 150 : 100
+                   : status === "in_progress" ? 40 : 0,
+          completedAt: status === "complete" ? nowStr : null,
+          updatedAt: nowStr,
+        });
+
+        // Edge: chain each node to the next within the tree
+        if (idx > 0) {
+          edgeRows.push({
+            id: crypto.randomUUID(),
+            treeId,
+            sourceNodeId: treeNodes[idx - 1]!.nodeId,
+            targetNodeId: nm.nodeId,
+            edgeType: "required",
+          });
+        }
+
+        // Cross-edge: connect milestone nodes to chapter's first lesson
+        if (nm.nodeType === "lesson" && idx > 1) {
+          const before = treeNodes.slice(0, idx);
+          const prevMilestone = before[before.reduceRight((found, n, i) => found === -1 && n.nodeType === "milestone" ? i : found, -1)];
+          if (prevMilestone && prevMilestone.nodeId !== treeNodes[idx - 1]?.nodeId) {
+            edgeRows.push({
+              id: crypto.randomUUID(),
+              treeId,
+              sourceNodeId: prevMilestone.nodeId,
+              targetNodeId: nm.nodeId,
+              edgeType: "required",
+            });
+          }
+        }
+      }
+    }
+
+    await batchInsert(db, skillTreeNodeProgress, progressRows);
+    await batchInsert(db, skillTreeEdges, edgeRows);
+
+    // ── Phase 6: Week plan ────────────────────────────────────────────────────
+    await batchInsert(db, weekPlan, weekPlanRows);
+
+    // ── Phase 7: Submissions ──────────────────────────────────────────────────
+    const submissionRows: Record<string, unknown>[] = [];
+
+    for (const seed of submissionSeeds) {
+      if (seed.type === "quiz") {
+        submissionRows.push({
+          id: crypto.randomUUID(),
+          organizationId,
+          assignmentId: seed.assignmentId,
+          profileId: seed.profileId,
+          submittedByUserId: session.user.id,
+          textResponse: JSON.stringify([1, 1, 2, 1, 1]),
+          status: "graded",
+          score: 88,
+          reviewedAt: nowStr,
+        });
+      } else {
+        submissionRows.push({
+          id: crypto.randomUUID(),
+          organizationId,
+          assignmentId: seed.assignmentId,
+          profileId: seed.profileId,
+          submittedByUserId: session.user.id,
+          textResponse: "This is a demo written submission available for parent review.",
+          status: "submitted",
+          score: null,
+          reviewedAt: null,
+        });
+      }
+    }
+
+    await batchInsert(db, submissions, submissionRows);
+
+    // ── Phase 8: Assignment templates ────────────────────────────────────────
+    const templateRows: Record<string, unknown>[] = [];
+
+    for (const seed of templateSeeds) {
+      templateRows.push({
+        id: crypto.randomUUID(),
+        organizationId,
+        title: `${seed.assignment.title} (Template)`,
+        description: `Reusable demo template for Grade ${seed.gradeLevel} ${seed.subject}.`,
+        contentType: seed.assignment.contentType,
+        contentRef: seed.assignment.contentRef,
+        tags: JSON.stringify([
+          `subject:${seed.subject.toLowerCase().replace(/\s+/g, "-")}`,
+          `grade:${seed.gradeLevel}`,
+          "scope:demo",
+        ]),
+        isPublic: false,
+        createdByUserId: session.user.id,
+      });
+    }
+
+    await batchInsert(db, assignmentTemplates, templateRows);
 
     return {
       success: true,
       note: "Demo content seeded. Student demo PIN is 1111.",
       summary: {
-        studentsCreated,
-        classesCreated,
-        assignmentsCreated,
-        treesCreated,
-        templatesCreated,
+        studentsCreated: profileRows.length,
+        classesCreated: classRows.length,
+        treesCreated: treeRows.length,
+        nodesCreated: nodeRows.length,
+        assignmentsCreated: assignmentRows.length,
+        templatesCreated: templateRows.length,
       },
     };
   });
@@ -8049,89 +8280,23 @@ const seedDemoPhase3Input = z.object({
 export const seedDemoPhase3 = createServerFn({ method: "POST" })
   .inputValidator((data) => seedDemoPhase3Input.parse(data))
   .handler(async ({ data }) => {
-    const session = await requireActiveRole(["admin", "parent"]);
-    const db = getDb();
-    const organizationId = await resolveActiveOrganizationId(
-      session.user.id,
-      session.session.activeOrganizationId,
-    );
-    const now = new Date().toISOString();
-
-    type AssignmentEntry = {
-      assignmentId: string;
-      classId: string;
-      profileId: string;
-      subject: string;
-      gradeLevel: string;
-      mpIndex: number;
-      assignmentIndex: number;
-      contentType: string;
-      isVideo: boolean;
-      videoAssignmentId?: string;
+    // Assignments are now created per-node in phase 4 alongside the skill tree nodes.
+    // Phase 3 returns an empty assignmentMap so the downstream phase inputs remain valid.
+    await requireActiveRole(["admin", "parent"]);
+    return {
+      success: true,
+      assignmentMap: [] as Array<{
+        assignmentId: string; classId: string; profileId: string; subject: string;
+        gradeLevel: string; mpIndex: number; assignmentIndex: number;
+        contentType: string; isVideo: boolean; videoAssignmentId?: string;
+      }>,
+      summary: { assignmentsCreated: 0 },
     };
-    const assignmentMap: AssignmentEntry[] = [];
-
-    // Create assignments per class across 3 active marking periods (Q1, Q2, Q3)
-    const activePeriods = [0, 1, 2]; // Q1=0, Q2=1, Q3=2
-
-    for (const cls of data.classMap) {
-      let assignmentIndexGlobal = 0;
-      const studentInfo = RICH_DEMO_STUDENTS.find(s => data.classMap.some(c => c.classId === cls.classId && c.profileId === s.displayName));
-      const studentName = RICH_DEMO_STUDENTS.find(s => {
-        // find the student whose subjects include this class's subject
-        const subs = RICH_DEMO_SUBJECTS_BY_GRADE[cls.gradeLevel] ?? [];
-        return subs.includes(cls.subject);
-      })?.displayName ?? "Student";
-
-      for (const mpIdx of activePeriods) {
-        const mpId = data.markingPeriodIds[mpIdx];
-        const periodLabel = RICH_DEMO_MARKING_PERIODS[mpIdx]?.label ?? "Q1";
-        const assignmentDefs = buildRichDemoAssignments(cls.subject, cls.gradeLevel, studentName, periodLabel);
-
-        let videoAssignmentId: string | undefined;
-        for (const def of assignmentDefs) {
-          const assignmentId = crypto.randomUUID();
-          const dueAt = getDemoDueDate(mpIdx, assignmentIndexGlobal);
-          await db.insert(assignments).values({
-            id: assignmentId,
-            organizationId,
-            classId: cls.classId,
-            markingPeriodId: mpId ?? null,
-            title: def.title,
-            description: def.description,
-            contentType: def.contentType,
-            contentRef: def.contentRef,
-            linkedAssignmentId: def.contentType === "quiz" && videoAssignmentId ? videoAssignmentId : null,
-            dueAt,
-            createdByUserId: session.user.id,
-            createdAt: now,
-            updatedAt: now,
-          });
-
-          if (def.isVideo) videoAssignmentId = assignmentId;
-
-          assignmentMap.push({
-            assignmentId,
-            classId: cls.classId,
-            profileId: cls.profileId,
-            subject: cls.subject,
-            gradeLevel: cls.gradeLevel,
-            mpIndex: mpIdx,
-            assignmentIndex: assignmentIndexGlobal,
-            contentType: def.contentType,
-            isVideo: !!def.isVideo,
-            videoAssignmentId: def.contentType === "quiz" ? videoAssignmentId : undefined,
-          });
-          assignmentIndexGlobal++;
-        }
-      }
-    }
-
-    return { success: true, assignmentMap, summary: { assignmentsCreated: assignmentMap.length } };
   });
 
 const seedDemoPhase4Input = z.object({
   parentPin: z.string().regex(/^\d{4,6}$/),
+  markingPeriodIds: z.array(z.string()),
   classMap: z.array(z.object({
     classId: z.string(),
     profileId: z.string(),
@@ -8407,12 +8572,64 @@ export const seedDemoPhase4 = createServerFn({ method: "POST" })
           });
         }
 
+        // ── Create assignments for this node ─────────────────────────────────
+        const nodeCtx = { orgId: organizationId, classId: cls.classId, userId: session.user.id, now };
+
+        // Use a generic chapter/unit title derived from the node's position in the tree
+        const chapterTitle = node.cluster === "specialization"
+          ? node.title.split(":")[0]?.trim() ?? node.title
+          : node.title;
+        const unitTitle = `${cls.subject} — Grade ${cls.gradeLevel}`;
+
+        let builtAssignments: AssignmentRow[];
+        if (node.nodeType === "milestone") {
+          builtAssignments = milestoneAssignments(nodeCtx, node.title, cls.subject, cls.gradeLevel);
+        } else if (node.nodeType === "boss") {
+          // Collect chapter titles from core spine as context for the boss essay
+          const coreChapterTitles = topicSet.core.slice(0, -1); // exclude the boss itself
+          builtAssignments = bossAssignments(nodeCtx, unitTitle, cls.subject, cls.gradeLevel, coreChapterTitles);
+        } else if (node.nodeType === "elective") {
+          builtAssignments = electiveAssignments(nodeCtx, node.title, chapterTitle, cls.subject, cls.gradeLevel);
+        } else {
+          builtAssignments = lessonAssignments(nodeCtx, node.title, chapterTitle, cls.subject, cls.gradeLevel);
+        }
+
+        // Spread due dates across Q1–Q3 based on depth
+        const mpIdx = Math.min(2, Math.floor(node.depth / 4));
+        const assignmentIdList: string[] = [];
+        for (const [orderIndex, asgn] of builtAssignments.entries()) {
+          const dueAt = getDemoDueDate(mpIdx, node.depth * 5 + orderIndex);
+          await db.insert(assignments).values({
+            id: asgn.id,
+            organizationId,
+            classId: cls.classId,
+            markingPeriodId: data.markingPeriodIds[mpIdx] ?? null,
+            title: asgn.title,
+            description: asgn.description,
+            contentType: asgn.contentType,
+            contentRef: asgn.contentRef,
+            linkedAssignmentId: null,
+            dueAt,
+            createdByUserId: session.user.id,
+            createdAt: now,
+            updatedAt: now,
+          });
+          await db.insert(skillTreeNodeAssignments).values({
+            id: crypto.randomUUID(),
+            nodeId: node.id,
+            assignmentId: asgn.id,
+            orderIndex,
+            createdAt: now,
+          });
+          assignmentIdList.push(asgn.id);
+        }
+
         treeNodeMap.push({
           nodeId: node.id,
           treeId,
           classId: cls.classId,
           profileId: cls.profileId,
-          assignmentIds: [],
+          assignmentIds: assignmentIdList,
           depth: node.depth,
           cluster: node.cluster,
           nodeType: node.nodeType,
@@ -8422,7 +8639,12 @@ export const seedDemoPhase4 = createServerFn({ method: "POST" })
       }
     }
 
-    return { success: true, treeNodeMap, summary: { treesCreated: data.classMap.length } };
+    const totalAssignments = treeNodeMap.reduce((sum, n) => sum + n.assignmentIds.length, 0);
+    return {
+      success: true,
+      treeNodeMap,
+      summary: { treesCreated: data.classMap.length, assignmentsCreated: totalAssignments },
+    };
   });
 
 const seedDemoPhase5Input = z.object({
@@ -8462,117 +8684,10 @@ const seedDemoPhase5Input = z.object({
 
 export const seedDemoPhase5 = createServerFn({ method: "POST" })
   .inputValidator((data) => seedDemoPhase5Input.parse(data))
-  .handler(async ({ data }) => {
-    const session = await requireActiveRole(["admin", "parent"]);
-    const db = getDb();
-    const now = new Date().toISOString();
-
-    const complexityScoreByContentType: Record<string, number> = {
-      text: 1,
-      video: 1,
-      url: 2,
-      file: 2,
-      quiz: 3,
-      essay_questions: 5,
-      report: 6,
-    };
-    const pairsForTargets = (targetNodeIds: string[], assignmentIds: string[]) => {
-      const localPairs: Array<{ nodeId: string; assignmentId: string; orderIndex: number }> = [];
-      if (targetNodeIds.length === 0 || assignmentIds.length === 0) {
-        return localPairs;
-      }
-
-      const nodeOrderCounts = new Map<string, number>();
-      for (let index = 0; index < assignmentIds.length; index++) {
-        const nodeId = targetNodeIds[index % targetNodeIds.length]!;
-        const orderIndex = nodeOrderCounts.get(nodeId) ?? 0;
-        localPairs.push({
-          nodeId,
-          assignmentId: assignmentIds[index]!,
-          orderIndex,
-        });
-        nodeOrderCounts.set(nodeId, orderIndex + 1);
-      }
-
-      return localPairs;
-    };
-
-    const nodesByClass = new Map<string, typeof data.treeNodeMap>();
-    for (const node of data.treeNodeMap) {
-      const existing = nodesByClass.get(node.classId) ?? [];
-      existing.push(node);
-      nodesByClass.set(node.classId, existing);
-    }
-
-    const assignmentsByClass = new Map<string, typeof data.assignmentMap>();
-    for (const assignment of data.assignmentMap) {
-      const existing = assignmentsByClass.get(assignment.classId) ?? [];
-      existing.push(assignment);
-      assignmentsByClass.set(assignment.classId, existing);
-    }
-
-    let linksCreated = 0;
-    for (const [classId, classNodes] of nodesByClass) {
-      const classAssignments = assignmentsByClass.get(classId) ?? [];
-      if (classAssignments.length === 0 || classNodes.length === 0) continue;
-
-      const rankedNodes = [...classNodes].sort((a, b) => {
-        const aScore = (a.depth * 10) + (a.cluster === "specialization" ? 18 : 0) + (a.nodeType === "boss" ? 24 : 0);
-        const bScore = (b.depth * 10) + (b.cluster === "specialization" ? 18 : 0) + (b.nodeType === "boss" ? 24 : 0);
-        return bScore - aScore;
-      });
-      const rankedAssignments = [...classAssignments].sort((a, b) => {
-        const aScore = complexityScoreByContentType[a.contentType] ?? 2;
-        const bScore = complexityScoreByContentType[b.contentType] ?? 2;
-        return bScore - aScore || b.assignmentIndex - a.assignmentIndex;
-      });
-
-      const hardNodes = rankedNodes
-        .filter((node) => node.depth >= 5 || node.cluster === "specialization" || node.nodeType === "boss")
-        .map((node) => node.nodeId);
-      const mediumNodes = rankedNodes
-        .filter((node) => node.depth >= 3 && node.depth <= 6 && node.cluster === "core")
-        .map((node) => node.nodeId);
-      const easyNodes = [...rankedNodes]
-        .reverse()
-        .filter((node) => node.depth <= 4 && node.cluster === "core")
-        .map((node) => node.nodeId);
-
-      const hardAssignments = rankedAssignments
-        .filter((assignment) => (complexityScoreByContentType[assignment.contentType] ?? 2) >= 5)
-        .map((assignment) => assignment.assignmentId);
-      const mediumAssignments = rankedAssignments
-        .filter((assignment) => {
-          const score = complexityScoreByContentType[assignment.contentType] ?? 2;
-          return score >= 3 && score < 5;
-        })
-        .map((assignment) => assignment.assignmentId);
-      const easyAssignments = rankedAssignments
-        .filter((assignment) => (complexityScoreByContentType[assignment.contentType] ?? 2) < 3)
-        .map((assignment) => assignment.assignmentId);
-
-      const pairs = [
-        ...pairsForTargets(hardNodes.length ? hardNodes : rankedNodes.map((node) => node.nodeId), hardAssignments),
-        ...pairsForTargets(mediumNodes.length ? mediumNodes : rankedNodes.map((node) => node.nodeId), mediumAssignments),
-        ...pairsForTargets(easyNodes.length ? easyNodes : [...rankedNodes].reverse().map((node) => node.nodeId), easyAssignments),
-      ];
-
-      for (const chunk of chunkIds(pairs.map((pair) => pair.assignmentId), 50)) {
-        const chunkPairs = pairs.filter((pair) => chunk.includes(pair.assignmentId));
-        for (const pair of chunkPairs) {
-          await db.insert(skillTreeNodeAssignments).values({
-            id: crypto.randomUUID(),
-            nodeId: pair.nodeId,
-            assignmentId: pair.assignmentId,
-            orderIndex: pair.orderIndex,
-            createdAt: now,
-          });
-          linksCreated++;
-        }
-      }
-    }
-
-    return { success: true, summary: { nodeAssignmentLinksCreated: linksCreated } };
+  .handler(async ({ data: _data }) => {
+    // Node-assignment links are now created in phase 4 alongside node insertion.
+    await requireActiveRole(["admin", "parent"]);
+    return { success: true, summary: { nodeAssignmentLinksCreated: 0 } };
   });
 
 const seedDemoPhase6Input = z.object({

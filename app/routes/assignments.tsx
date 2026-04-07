@@ -1,5 +1,6 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
+import { AssignmentModal, type ModalAssignment } from "../components/assignment-modal";
 import { DeleteConfirmModal } from "../components/delete-confirm-modal";
 import { QuizBuilder, type QuizQuestion } from "../components/quiz-builder";
 import { RichContent } from "../components/rich-content";
@@ -1007,11 +1008,20 @@ function CurriculumBuilderPage() {
   const [gradingErrors, setGradingErrors] = useState<Map<string, string>>(new Map());
   const [releasingSubmissionIds, setReleasingSubmissionIds] = useState<Set<string>>(new Set());
 
+  // Assignment view modal (shared AssignmentModal)
+  const [viewingAssignment, setViewingAssignment] = useState<AssignmentRow | null>(null);
+
   // Class filter — initialised from URL search param
   const [filterClassId, setFilterClassId] = useState<string>(initialClassId ?? "all");
 
   // Marking period filter
   const [filterMarkingPeriodId, setFilterMarkingPeriodId] = useState<string>("all");
+
+  // School year filter
+  const [filterSchoolYear, setFilterSchoolYear] = useState<string>("all");
+
+  // Content type filter
+  const [filterContentType, setFilterContentType] = useState<string>("all");
 
   const handleGradeSubmission = async (
     submissionId: string,
@@ -1471,10 +1481,21 @@ function CurriculumBuilderPage() {
 
   // Build grouped view: video assignments with their linked children
   // Filter out optimistically deleted assignments and apply marking period filter
+  // Derive available school years from classes
+  const schoolYears = [...new Set(data.classes.map((c) => c.schoolYear).filter(Boolean))].sort().reverse() as string[];
+
+  // Class → school year lookup
+  const classSchoolYear = new Map(data.classes.map((c) => [c.id, c.schoolYear]));
+
   const visibleAssignments = data.assignments.filter((a) => {
     if (optimisticallyDeletedAssignmentIds.has(a.id)) return false;
     if (filterClassId !== "all" && a.classId !== filterClassId) return false;
     if (filterMarkingPeriodId !== "all" && a.markingPeriodId !== filterMarkingPeriodId) return false;
+    if (filterSchoolYear !== "all") {
+      const cls = a.classId ? classSchoolYear.get(a.classId) : null;
+      if (cls !== filterSchoolYear) return false;
+    }
+    if (filterContentType !== "all" && a.contentType !== filterContentType) return false;
     return true;
   });
   const videoAssignments = visibleAssignments.filter((a) => a.contentType === "video");
@@ -2372,52 +2393,61 @@ function CurriculumBuilderPage() {
       <section className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <h2 className="text-xl font-semibold text-slate-900">Published Assignments</h2>
-          <div className="flex flex-wrap items-center gap-4">
-            {/* Course filter */}
+          <div className="flex flex-wrap items-center gap-2">
             {data.classes.length > 0 && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-500 shrink-0">Course:</span>
-                <div className="flex flex-wrap gap-1.5">
-                  <button
-                    onClick={() => setFilterClassId("all")}
-                    className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${filterClassId === "all" ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
-                  >
-                    All
-                  </button>
-                  {data.classes.map((c) => (
-                    <button
-                      key={c.id}
-                      onClick={() => setFilterClassId(c.id)}
-                      className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${filterClassId === c.id ? "bg-cyan-700 text-white" : "bg-cyan-50 text-cyan-700 hover:bg-cyan-100"}`}
-                    >
-                      {c.title}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <select
+                value={filterClassId}
+                onChange={(e) => setFilterClassId(e.target.value)}
+                className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-700 shadow-sm"
+              >
+                <option value="all">All Classes</option>
+                {data.classes.map((c) => (
+                  <option key={c.id} value={c.id}>{c.title}</option>
+                ))}
+              </select>
             )}
-            {/* Marking period filter */}
             {data.markingPeriods.length > 0 && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-500 shrink-0">Period:</span>
-                <div className="flex flex-wrap gap-1.5">
-                  <button
-                    onClick={() => setFilterMarkingPeriodId("all")}
-                    className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${filterMarkingPeriodId === "all" ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
-                  >
-                    All
-                  </button>
-                  {data.markingPeriods.map(p => (
-                    <button
-                      key={p.id}
-                      onClick={() => setFilterMarkingPeriodId(p.id)}
-                      className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${filterMarkingPeriodId === p.id ? "bg-violet-700 text-white" : "bg-violet-50 text-violet-700 hover:bg-violet-100"}`}
-                    >
-                      {p.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <select
+                value={filterMarkingPeriodId}
+                onChange={(e) => setFilterMarkingPeriodId(e.target.value)}
+                className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-700 shadow-sm"
+              >
+                <option value="all">All Periods</option>
+                {data.markingPeriods.map(p => (
+                  <option key={p.id} value={p.id}>{p.label}</option>
+                ))}
+              </select>
+            )}
+            {schoolYears.length > 0 && (
+              <select
+                value={filterSchoolYear}
+                onChange={(e) => setFilterSchoolYear(e.target.value)}
+                className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-700 shadow-sm"
+              >
+                <option value="all">All Years</option>
+                {schoolYears.map(y => (
+                  <option key={y} value={y}>{y}</option>
+                ))}
+              </select>
+            )}
+            <select
+              value={filterContentType}
+              onChange={(e) => setFilterContentType(e.target.value)}
+              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-700 shadow-sm"
+            >
+              <option value="all">All Types</option>
+              {(["text","file","url","video","quiz","essay_questions","report","movie"] as AssignmentType[]).map(t => (
+                <option key={t} value={t}>{TYPE_LABELS[t]}</option>
+              ))}
+            </select>
+            {(filterClassId !== "all" || filterMarkingPeriodId !== "all" || filterSchoolYear !== "all" || filterContentType !== "all") && (
+              <button
+                type="button"
+                onClick={() => { setFilterClassId("all"); setFilterMarkingPeriodId("all"); setFilterSchoolYear("all"); setFilterContentType("all"); }}
+                className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-500 hover:bg-slate-50"
+              >
+                Clear
+              </button>
             )}
           </div>
         </div>
@@ -2469,9 +2499,13 @@ function CurriculumBuilderPage() {
                         </select>
                       )}
                     </div>
-                    <h3 className="mt-0.5 text-lg font-semibold text-slate-900 truncate">
+                    <button
+                      type="button"
+                      onClick={() => setViewingAssignment(video)}
+                      className="mt-0.5 text-left text-lg font-semibold text-slate-900 hover:text-cyan-700 hover:underline truncate"
+                    >
                       {video.title}
-                    </h3>
+                    </button>
                     {video.description ? (
                       <p className="mt-1 text-sm text-slate-600 line-clamp-2">{video.description}</p>
                     ) : null}
@@ -2505,31 +2539,6 @@ function CurriculumBuilderPage() {
                       className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       View Transcript
-                    </button>
-                    <button
-                      type="button"
-                      disabled={savingTemplateAssignmentId === video.id}
-                      onClick={() => void handleSaveAsTemplate(video.id, video.title)}
-                      className="rounded-lg border border-emerald-200 bg-white px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {savingTemplateAssignmentId === video.id ? "Saving…" : "Save as Template"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setEditingAssignment(video)}
-                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDeleteError(null);
-                        setDeleteTarget(video);
-                      }}
-                      className="rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50"
-                    >
-                      Delete
                     </button>
                   </div>
                 </div>
@@ -2616,7 +2625,13 @@ function CurriculumBuilderPage() {
                         </select>
                       )}
                     </div>
-                    <h3 className="mt-0.5 text-lg font-semibold text-slate-900 truncate">{row.title}</h3>
+                    <button
+                      type="button"
+                      onClick={() => setViewingAssignment(row)}
+                      className="mt-0.5 text-left text-lg font-semibold text-slate-900 hover:text-cyan-700 hover:underline truncate"
+                    >
+                      {row.title}
+                    </button>
                     {row.description ? (
                       <p className="mt-1 text-sm text-slate-600 line-clamp-2">{row.description}</p>
                     ) : null}
@@ -2657,33 +2672,7 @@ function CurriculumBuilderPage() {
                     ) : null}
                   </div>
 
-                  <div className="flex shrink-0 items-start gap-2">
-                    <button
-                      type="button"
-                      disabled={savingTemplateAssignmentId === row.id}
-                      onClick={() => void handleSaveAsTemplate(row.id, row.title)}
-                      className="rounded-lg border border-emerald-200 bg-white px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {savingTemplateAssignmentId === row.id ? "Saving…" : "Save as Template"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setEditingAssignment(row)}
-                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDeleteError(null);
-                        setDeleteTarget(row);
-                      }}
-                      className="rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50"
-                    >
-                      Delete
-                    </button>
-                  </div>
+                  {null /* actions moved to AssignmentModal */}
                 </article>
 
                 {/* Submission rows for essay/report assignments */}
@@ -2787,6 +2776,25 @@ function CurriculumBuilderPage() {
           ) : null}
         </div>
       </section>
+
+      {/* View/edit modal (shared) */}
+      {viewingAssignment ? (
+        <AssignmentModal
+          assignment={viewingAssignment as ModalAssignment}
+          allAssignments={data.assignments as ModalAssignment[]}
+          canEdit={true}
+          onClose={() => setViewingAssignment(null)}
+          onSaved={async () => {
+            setViewingAssignment(null);
+            await router.invalidate();
+          }}
+          onRequestDelete={(a) => {
+            setViewingAssignment(null);
+            setDeleteError(null);
+            setDeleteTarget(data.assignments.find(x => x.id === a.id) ?? null);
+          }}
+        />
+      ) : null}
 
       {/* Edit modal */}
       {editingAssignment ? (

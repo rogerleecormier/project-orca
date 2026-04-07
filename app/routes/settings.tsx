@@ -100,19 +100,28 @@ function DemoSeedWizard({ onClose }: { onClose: () => void }) {
       const p3 = await seedDemoPhase3({
         data: { parentPin: pin, classMap: p2.classMap, markingPeriodIds: p1.markingPeriodIds },
       });
-      setPhase("phase3", "done", `${p3.summary.assignmentsCreated} assignments`);
+      setPhase("phase3", "done", `ready`);
 
-      // Phase 4
+      // Phase 4 — one class per call to stay within D1 write limits
       setPhase("phase4", "running");
-      const p4 = await seedDemoPhase4({ data: { parentPin: pin, classMap: p2.classMap } });
-      setPhase("phase4", "done", `${p4.summary.treesCreated} skill trees`);
+      const allTreeNodeMap: Awaited<ReturnType<typeof seedDemoPhase4>>["treeNodeMap"] = [];
+      let totalAssignmentsCreated = 0;
+      for (const cls of p2.classMap) {
+        const p4batch = await seedDemoPhase4({
+          data: { parentPin: pin, classMap: [cls], markingPeriodIds: p1.markingPeriodIds },
+        });
+        allTreeNodeMap.push(...p4batch.treeNodeMap);
+        totalAssignmentsCreated += p4batch.summary.assignmentsCreated;
+      }
+      const p4 = { treeNodeMap: allTreeNodeMap, summary: { treesCreated: p2.classMap.length, assignmentsCreated: totalAssignmentsCreated } };
+      setPhase("phase4", "done", `${p4.summary.treesCreated} skill trees, ${p4.summary.assignmentsCreated} assignments`);
 
       // Phase 5
       setPhase("phase5", "running");
       const p5 = await seedDemoPhase5({
         data: { parentPin: pin, treeNodeMap: p4.treeNodeMap, assignmentMap: p3.assignmentMap, classMap: p2.classMap },
       });
-      setPhase("phase5", "done", `${p5.summary.nodeAssignmentLinksCreated} links`);
+      setPhase("phase5", "done", `linked`);
 
       // Phase 6
       setPhase("phase6", "running");
@@ -129,7 +138,7 @@ function DemoSeedWizard({ onClose }: { onClose: () => void }) {
       setPhase("phase7", "done", `${p7.summary.rewardTracksCreated} tracks, ${p7.summary.weekPlanCreated} plan entries`);
 
       setFinalSummary(
-        `${p1.summary.studentsCreated} students · ${p2.summary.classesCreated} classes · ${p3.summary.assignmentsCreated} assignments · ${p4.summary.treesCreated} skill trees · ${p7.summary.rewardTracksCreated} reward tracks`
+        `${p1.summary.studentsCreated} students · ${p2.summary.classesCreated} classes · ${p4.summary.treesCreated} skill trees · ${p4.summary.assignmentsCreated} assignments · ${p7.summary.rewardTracksCreated} reward tracks`
       );
       setDone(true);
     } catch (err) {

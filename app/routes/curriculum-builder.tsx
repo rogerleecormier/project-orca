@@ -159,7 +159,21 @@ function StepIndicator({ step }: { step: WizardStep }) {
 
 // ── Step 1: Intake ────────────────────────────────────────────────────────────
 
-const COURSE_LENGTHS = ["1 Semester", "1 Year", "6 Weeks", "12 Weeks"];
+const COURSE_LENGTHS = [
+  "6 Weeks",
+  "9 Weeks",
+  "12 Weeks",
+  "1 Semester",
+  "1 Year",
+];
+
+const COURSE_LENGTH_HINTS: Record<string, string> = {
+  "6 Weeks":    "~2 chapters · ~4 lessons per chapter · ~30 total nodes — focused unit or short elective.",
+  "9 Weeks":    "~3 chapters · ~4 lessons per chapter · ~45 total nodes — quarter course.",
+  "12 Weeks":   "~4 chapters · ~5 lessons per chapter · ~65 total nodes — trimester or short semester.",
+  "1 Semester": "~6 chapters · ~5 lessons per chapter · ~100 total nodes — full half-year course.",
+  "1 Year":     "~10 chapters · ~6 lessons per chapter · ~170 total nodes — complete full-year curriculum.",
+};
 
 function StepIntake({
   profiles,
@@ -270,6 +284,9 @@ function StepIntake({
               </button>
             ))}
           </div>
+          <p className="mt-2 text-xs text-slate-400">
+            {COURSE_LENGTH_HINTS[courseLength] ?? ""}
+          </p>
         </div>
 
         {/* Interests */}
@@ -367,11 +384,11 @@ function Toggle({ value, onChange }: { value: boolean; onChange: (v: boolean) =>
 
 const DEFAULT_PREFS: AssignmentPrefs = {
   readingPerNode: true,
-  videosPerLesson: 1,
+  videosPerLesson: 2,       // explain + demonstrate is standard instructional design
   chapterIntroVideo: true,
   quizzesPerChapter: 1,
-  essaysPerChapter: 0,
-  quizzesPerBoss: 2,
+  essaysPerChapter: 1,      // chapter reflection is best practice (Charlotte Mason, classical)
+  quizzesPerBoss: 3,        // one quiz per major concept cluster in the unit
   essaysPerBoss: 1,
   papersPerBoss: 0,
   includeProjects: false,
@@ -417,12 +434,14 @@ function StepAssignments({
           <span className="inline-block w-3 h-3 rounded-full bg-blue-400" />
           Lesson &amp; Elective Nodes
         </h3>
-        <p className="text-xs text-slate-500 -mt-2">Targeted content for each specific topic.</p>
+        <p className="text-xs text-slate-500 -mt-2">
+          Every lesson always includes a formative check quiz and a short practice response — these are non-negotiable for mastery-based learning.
+        </p>
 
         <div className="flex items-center justify-between">
           <div>
             <p className="text-sm font-medium text-slate-800">Reading passage</p>
-            <p className="text-xs text-slate-500">A focused reading on the topic (200–300 words)</p>
+            <p className="text-xs text-slate-500">Instructional reading (400–600 words) with hook, explanation, and takeaways</p>
           </div>
           <Toggle value={prefs.readingPerNode} onChange={(v) => set("readingPerNode", v)} />
         </div>
@@ -430,7 +449,7 @@ function StepAssignments({
         <div className="flex items-center justify-between">
           <div>
             <p className="text-sm font-medium text-slate-800">Videos per lesson</p>
-            <p className="text-xs text-slate-500">Targeted educational videos for the specific topic</p>
+            <p className="text-xs text-slate-500">2 recommended — one to explain, one to demonstrate or extend</p>
           </div>
           <Counter value={prefs.videosPerLesson} min={0} max={3} onChange={(v) => set("videosPerLesson", v)} />
         </div>
@@ -442,28 +461,30 @@ function StepAssignments({
           <span className="inline-block w-3 h-3 rounded-full bg-teal-500" />
           Chapter Nodes (Milestones)
         </h3>
-        <p className="text-xs text-teal-600 -mt-2">Entry points to topic clusters — overview content + chapter checkpoints.</p>
+        <p className="text-xs text-teal-600 -mt-2">
+          Chapter openers always include an overview reading and a diagnostic pre-assessment to activate prior knowledge.
+        </p>
 
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-sm font-medium text-slate-800">Intro overview video</p>
-            <p className="text-xs text-slate-500">A broad introductory video for the chapter</p>
+            <p className="text-sm font-medium text-slate-800">Intro videos</p>
+            <p className="text-xs text-slate-500">2 videos — broad overview + first concept introduction</p>
           </div>
           <Toggle value={prefs.chapterIntroVideo} onChange={(v) => set("chapterIntroVideo", v)} />
         </div>
 
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-sm font-medium text-slate-800">Chapter quizzes</p>
-            <p className="text-xs text-slate-500">Multiple-choice checkpoint quizzes (5 questions each)</p>
+            <p className="text-sm font-medium text-slate-800">Chapter checkpoint quizzes</p>
+            <p className="text-xs text-slate-500">Summative quizzes covering the chapter's core concepts (5 questions each)</p>
           </div>
           <Counter value={prefs.quizzesPerChapter} min={0} max={3} onChange={(v) => set("quizzesPerChapter", v)} />
         </div>
 
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-sm font-medium text-slate-800">Chapter essay prompts</p>
-            <p className="text-xs text-slate-500">Short reflective or analytical essay questions</p>
+            <p className="text-sm font-medium text-slate-800">Chapter reflections</p>
+            <p className="text-xs text-slate-500">Open-ended prompts connecting the chapter theme to the student's life or prior learning</p>
           </div>
           <Counter value={prefs.essaysPerChapter} min={0} max={2} onChange={(v) => set("essaysPerChapter", v)} />
         </div>
@@ -475,20 +496,22 @@ function StepAssignments({
           <span className="inline-block w-3 h-3 rounded-full bg-amber-500" />
           Boss Nodes (Capstones)
         </h3>
-        <p className="text-xs text-amber-700 -mt-2">End-of-unit assessments — always include a unit review plus these.</p>
+        <p className="text-xs text-amber-700 -mt-2">
+          Capstones always include a comprehensive unit review (600–900 words) and at least one essay — writing is essential for long-term retention.
+        </p>
 
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-sm font-medium text-slate-800">Capstone quizzes</p>
-            <p className="text-xs text-slate-500">Comprehensive quizzes covering the full unit</p>
+            <p className="text-sm font-medium text-slate-800">Summative quizzes</p>
+            <p className="text-xs text-slate-500">One per major concept cluster — 3 recommended for full unit coverage</p>
           </div>
           <Counter value={prefs.quizzesPerBoss} min={0} max={5} onChange={(v) => set("quizzesPerBoss", v)} />
         </div>
 
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-sm font-medium text-slate-800">Essay prompts</p>
-            <p className="text-xs text-slate-500">Synthesis essays drawing on the whole unit</p>
+            <p className="text-sm font-medium text-slate-800">Analytical essays</p>
+            <p className="text-xs text-slate-500">Synthesis prompts requiring argument or evidence — at least 1 is always generated</p>
           </div>
           <Counter value={prefs.essaysPerBoss} min={0} max={3} onChange={(v) => set("essaysPerBoss", v)} />
         </div>
@@ -552,22 +575,34 @@ function StepAssignments({
       {/* Summary preview */}
       <div className="rounded-xl border border-cyan-100 bg-cyan-50 px-4 py-3 text-xs text-cyan-800 space-y-0.5">
         <p className="font-semibold mb-1">What gets generated:</p>
-        <p className="text-cyan-700 font-medium">Lessons &amp; Electives:</p>
-        {prefs.readingPerNode && <p>• Reading passage per lesson</p>}
-        {prefs.videosPerLesson > 0 && <p>• {prefs.videosPerLesson} targeted video{prefs.videosPerLesson > 1 ? "s" : ""} per lesson</p>}
-        {prefs.quizzesPerChapter > 0 && <p>• 1 quiz per lesson (from chapter quiz setting)</p>}
-        <p className="text-cyan-700 font-medium mt-1">Chapter nodes:</p>
-        <p>• Chapter overview introduction text</p>
-        {prefs.chapterIntroVideo && <p>• Intro overview video</p>}
-        {prefs.quizzesPerChapter > 0 && <p>• {prefs.quizzesPerChapter} chapter quiz{prefs.quizzesPerChapter > 1 ? "zes" : ""}</p>}
-        {prefs.essaysPerChapter > 0 && <p>• {prefs.essaysPerChapter} essay prompt{prefs.essaysPerChapter > 1 ? "s" : ""}</p>}
+
+        <p className="text-cyan-700 font-medium">Every lesson node (always):</p>
+        <p>• Formative check quiz (5 questions, mastery check)</p>
+        <p>• Short practice response (apply the concept in writing)</p>
+        {prefs.readingPerNode && <p>• Reading passage (400–600 words)</p>}
+        {prefs.videosPerLesson > 0 && <p>• {prefs.videosPerLesson} video{prefs.videosPerLesson > 1 ? "s" : ""} (explain + demonstrate)</p>}
+
+        <p className="text-cyan-700 font-medium mt-1">Every elective node (always):</p>
+        <p>• Analysis quiz + hands-on project</p>
+        {prefs.readingPerNode && <p>• Deep-dive reading (500–750 words)</p>}
+        {prefs.videosPerLesson > 0 && <p>• {Math.min(prefs.videosPerLesson + 1, 3)} video{prefs.videosPerLesson + 1 > 1 ? "s" : ""}</p>}
         {prefs.includeMovies && <p>• Movie assignment + follow-up</p>}
-        <p className="text-cyan-700 font-medium mt-1">Boss nodes:</p>
-        <p>• Unit review summary text</p>
-        {prefs.quizzesPerBoss > 0 && <p>• {prefs.quizzesPerBoss} capstone quiz{prefs.quizzesPerBoss > 1 ? "zes" : ""}</p>}
-        {prefs.essaysPerBoss > 0 && <p>• {prefs.essaysPerBoss} essay prompt{prefs.essaysPerBoss > 1 ? "s" : ""}</p>}
+
+        <p className="text-cyan-700 font-medium mt-1">Every chapter node (always):</p>
+        <p>• Chapter overview reading (250–350 words)</p>
+        <p>• Diagnostic pre-assessment (activates prior knowledge)</p>
+        {prefs.chapterIntroVideo && <p>• 2 intro videos (overview + concept intro)</p>}
+        {prefs.quizzesPerChapter > 0 && <p>• {prefs.quizzesPerChapter} chapter checkpoint quiz{prefs.quizzesPerChapter > 1 ? "zes" : ""}</p>}
+        {prefs.essaysPerChapter > 0 && <p>• {prefs.essaysPerChapter} chapter reflection{prefs.essaysPerChapter > 1 ? "s" : ""}</p>}
+        {prefs.includeMovies && <p>• Movie assignment + follow-up</p>}
+
+        <p className="text-cyan-700 font-medium mt-1">Every boss node (always):</p>
+        <p>• Comprehensive unit review (600–900 words)</p>
+        <p>• At least 1 analytical essay (synthesis required)</p>
+        {prefs.quizzesPerBoss > 0 && <p>• {prefs.quizzesPerBoss} summative quiz{prefs.quizzesPerBoss > 1 ? "zes" : ""} (one per concept cluster)</p>}
         {prefs.papersPerBoss > 0 && <p>• {prefs.papersPerBoss} research paper{prefs.papersPerBoss > 1 ? "s" : ""}</p>}
-        {prefs.includeProjects && <p>• Capstone project</p>}
+        {prefs.includeProjects && <p>• Performance task / capstone project</p>}
+
         {!anyContent && (
           <p className="text-slate-500 italic">No assignments selected — nodes will be created without content.</p>
         )}

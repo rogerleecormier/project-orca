@@ -1741,12 +1741,82 @@ export async function reweaveCurriculumTree(input: {
   throw new Error("AI_REWEAVE_PARSE_FAILED");
 }
 
+// ── Course duration → structural scale ───────────────────────────────────────
+
+/**
+ * Parse any courseLength string into an approximate week count.
+ * Used to scale chapter count, connector density, and zone sizes.
+ */
+function courseLengthToWeeks(courseLength: string): number {
+  const s = courseLength.toLowerCase().trim();
+
+  // Explicit "N weeks" / "N week"
+  const weeksMatch = s.match(/(\d+)\s*weeks?/);
+  if (weeksMatch) return parseInt(weeksMatch[1], 10);
+
+  // Explicit "N months"
+  const monthsMatch = s.match(/(\d+)\s*months?/);
+  if (monthsMatch) return parseInt(monthsMatch[1], 10) * 4;
+
+  // Named durations
+  if (/semester/.test(s)) return 18;
+  if (/trimester/.test(s)) return 12;
+  if (/quarter/.test(s))   return 9;
+  if (/year|annual/.test(s)) return 36;
+
+  // Fallback
+  return 18;
+}
+
+/**
+ * Derive spine structure from week count:
+ *
+ *  ≤6 weeks  → 2 chapters, 1 mid boss, 1 final boss  (mini-unit)
+ *  7–10 wks  → 3 chapters                             (quarter)
+ *  11–14 wks → 4 chapters                             (trimester / short semester)
+ *  15–22 wks → 6 chapters                             (full semester)
+ *  23–30 wks → 8 chapters                             (long semester / 3-quarter year)
+ *  31+ wks   → 10 chapters                            (full year)
+ *
+ * Returns: { chapterCount, connectorsPerGap, choiceCount, deepCount }
+ */
+/**
+ * Derive spine structure from week count.
+ *
+ * connectorsPerGap: lesson nodes between each pair of chapter milestones.
+ *   Best practice (UbD / Understanding by Design): a 2-3 week chapter needs
+ *   8-12 instructional activities. Zone A connectors fill ~half of that; Zone B
+ *   clusters fill the rest. connectorsPerGap targets ~4-6 so total lessons per
+ *   chapter (connectors + cluster satellites) reaches 8-10.
+ *
+ * clusterSatellites: spoke nodes per branch hub in Zone B (was hardcoded 3).
+ *   4 satellites per hub gives richer topic exploration.
+ *
+ * choiceCount / deepCount scale with course length so longer courses have
+ * proportionally more optional enrichment paths.
+ */
+function spineScale(weeks: number): {
+  chapterCount: number;
+  connectorsPerGap: number;
+  clusterSatellites: number;
+  choiceCount: number;
+  deepCount: number;
+} {
+  //                                      chap  conn  sat  choice  deep
+  if (weeks <= 6)  return { chapterCount: 2,  connectorsPerGap: 4, clusterSatellites: 3, choiceCount: 6,  deepCount: 4  };
+  if (weeks <= 10) return { chapterCount: 3,  connectorsPerGap: 4, clusterSatellites: 4, choiceCount: 9,  deepCount: 6  };
+  if (weeks <= 14) return { chapterCount: 4,  connectorsPerGap: 5, clusterSatellites: 4, choiceCount: 12, deepCount: 8  };
+  if (weeks <= 22) return { chapterCount: 6,  connectorsPerGap: 5, clusterSatellites: 4, choiceCount: 18, deepCount: 12 };
+  if (weeks <= 30) return { chapterCount: 8,  connectorsPerGap: 6, clusterSatellites: 4, choiceCount: 24, deepCount: 16 };
+  return              { chapterCount: 10, connectorsPerGap: 6, clusterSatellites: 5, choiceCount: 30, deepCount: 20 };
+}
+
 // ── Curriculum Wizard: Spine generation ──────────────────────────────────────
 
 /**
  * Generates ONLY the structural backbone — milestones and bosses.
- * Kept intentionally small so the parent can review and edit before
- * the full web is woven around it.
+ * Chapter count and density are derived from courseLength so a 6-week
+ * unit gets 2 chapters while a full year gets 10.
  */
 export async function generateCurriculumSpine(input: {
   subject: string;
@@ -1754,8 +1824,8 @@ export async function generateCurriculumSpine(input: {
   courseLength: string;
   interests: string;
 }): Promise<CurriculumNodeSuggestion[]> {
-  const isSemester = /semester/i.test(input.courseLength);
-  const chapterCount = isSemester ? 4 : 6;
+  const weeks = courseLengthToWeeks(input.courseLength);
+  const { chapterCount } = spineScale(weeks);
 
   const prompt = [
     `You are building a curriculum spine for ${input.subject}, grade ${input.gradeLevel}, ${input.courseLength}.`,
@@ -1842,21 +1912,22 @@ export async function generateCurriculumWebFromSpine(input: {
     prerequisites: string[];
   }>;
 }): Promise<CurriculumNodeSuggestion[]> {
-  const isSemester = /semester/i.test(input.courseLength);
+  const weeks = courseLengthToWeeks(input.courseLength);
+  const scale = spineScale(weeks);
 
   // Count spine milestones (non-boss nodes) to size zones proportionally
   const milestoneSpine = input.spineNodes.filter((n) => n.nodeType !== "boss");
   const milestoneCount = Math.max(1, milestoneSpine.length);
 
-  // Zone A: 2-3 required connectors per consecutive milestone pair
-  const connectorCount = (milestoneCount - 1) * (isSemester ? 2 : 3);
-  // Zone B: hub + 3 satellites for ~60% of milestones (rounded down)
-  const clusterMilestoneCount = Math.max(1, Math.floor(milestoneCount * 0.6));
-  const clusterCount = clusterMilestoneCount * 4; // 1 hub + 3 satellites each
-  // Zone C: 2 parallel choice branches × 2 paths × 3 nodes
-  const choiceCount = isSemester ? 6 : 12; // 2–4 choice sets, 3 nodes per path
-  // Zone D: deep specialist chains
-  const deepCount = isSemester ? 6 : 9; // 2–3 chains of 3–4 nodes
+  // Zone A: required connectors per consecutive milestone gap
+  const connectorCount = (milestoneCount - 1) * scale.connectorsPerGap;
+  // Zone B: hub + N satellites for ~70% of milestones (was 60%)
+  const clusterMilestoneCount = Math.max(1, Math.floor(milestoneCount * 0.7));
+  const clusterCount = clusterMilestoneCount * (1 + scale.clusterSatellites); // 1 hub + satellites
+  // Zone C: student choice branches — scales with course length
+  const choiceCount = scale.choiceCount;
+  // Zone D: deep specialist chains — scales with course length
+  const deepCount = scale.deepCount;
   const totalNew = connectorCount + clusterCount + choiceCount + deepCount;
 
   const spineContext = input.spineNodes
@@ -1893,13 +1964,13 @@ export async function generateCurriculumWebFromSpine(input: {
     "  cluster='specialization', isRequired=false, colorRamp cycles through 'purple'/'amber'/'coral'/'green', nodeType='lesson' or 'elective'",
     `  For ${clusterMilestoneCount} of the spine milestone nodes, create a HUB-AND-SPOKE cluster:`,
     "    • 1 'branch' hub node (nodeType='branch') whose prerequisite is the milestone. It is a gateway topic — the title names the sub-topic cluster.",
-    "    • 3 satellite lesson/elective nodes each with prerequisite=hub. They explore specific aspects of the cluster topic.",
+    `    • ${scale.clusterSatellites} satellite lesson/elective nodes each with prerequisite=hub. They explore distinct aspects of the cluster topic — each should cover a different facet (e.g., cause, effect, process, application, comparison).`,
     "  Each cluster uses ONE consistent colorRamp (different cluster = different ramp).",
-    "  XP: hub 200–350, satellites 150–400.",
+    "  XP: hub 200–350, satellites 150–450.",
     "",
     `━━━ ZONE C — STUDENT CHOICE BRANCHES (~${choiceCount} nodes) ━━━`,
     "  cluster='core', isRequired=false, nodeType='lesson', colorRamp='blue' or 'teal'",
-    `  At ${isSemester ? 1 : 2} spine milestone(s), offer TWO alternate approach paths:`,
+    `  At ${Math.max(1, Math.floor(scale.choiceCount / 6))} spine milestone(s), offer TWO alternate approach paths:`,
     "    Path A: 3 lesson nodes (chain), prerequisite starts from the milestone.",
     "    Path B: 3 lesson nodes (chain), also starting from the same milestone.",
     "  The two paths cover the same content unit from different angles (e.g., visual vs. analytical, historical vs. applied).",
@@ -2152,60 +2223,73 @@ export async function generateAssignmentsForNode(input: {
   const isElective = node.nodeType === "elective";
 
   if (isMilestone) {
-    // Chapter nodes: overview intro + curated video + chapter assessments
-    tasks.push('1 chapter overview: contentType="text", contentRef=a 2-paragraph HTML chapter introduction using <p> tags (100-180 words) that previews what will be learned, title like "Chapter Intro: <topic>"');
+    // Chapter entry nodes — overview, activation, and chapter-level assessment.
+    // Best practice: chapter openers include a "hook" to activate prior knowledge,
+    // an overview of learning objectives, and 1-2 intro media before the first lesson.
+    tasks.push('1 chapter overview: contentType="text", contentRef=a well-structured 3-paragraph HTML chapter introduction using <p> tags (250-350 words): paragraph 1 hooks the student with a compelling question or real-world connection, paragraph 2 previews the key concepts and learning goals, paragraph 3 explains how this chapter connects to prior and upcoming learning. Title like "Chapter Intro: <topic>"');
     if (prefs.chapterIntroVideo) {
-      tasks.push('1 intro video: contentType="video", contentRef=a YouTube search query for a high-quality overview video on this topic, title like "Watch: <topic> Overview"');
+      tasks.push('2 intro videos: contentType="video" — (1) a broad overview video (YouTube search query), title like "Watch: <topic> Overview"; (2) a more specific video connecting to the first key concept, title like "Watch: <topic> Introduction"');
     }
+    // Pre-assessment: activates prior knowledge, identifies gaps before chapter begins
+    tasks.push('1 pre-assessment warm-up: contentType="quiz", contentRef=a JSON array of exactly 5 question objects [{"question":"...","options":["A","B","C","D"],"answer":"B"},...] that checks what the student already knows about this topic (diagnostic, not graded for mastery), title like "Warm-Up: What Do You Know About <topic>?"');
     if (prefs.quizzesPerChapter > 0) {
-      tasks.push(`${prefs.quizzesPerChapter} chapter quiz(zes): contentType="quiz", contentRef=a JSON array of exactly 5 question objects [{"question":"...","options":["A","B","C","D"],"answer":"B"},...], title like "Quiz: <topic>"`);
+      tasks.push(`${prefs.quizzesPerChapter} chapter checkpoint quiz(zes): contentType="quiz", contentRef=a JSON array of exactly 5 question objects [{"question":"...","options":["A","B","C","D"],"answer":"B"},...] covering the chapter's core concepts, title like "Chapter Quiz: <topic>"`);
     }
     if (prefs.essaysPerChapter > 0) {
-      tasks.push(`${prefs.essaysPerChapter} essay prompt(s): contentType="essay_questions", contentRef=the essay question (2-3 sentences), title like "Essay: <topic>"`);
+      tasks.push(`${prefs.essaysPerChapter} chapter reflection essay(s): contentType="essay_questions", contentRef=a thoughtful open-ended question (2-3 sentences) asking the student to connect the chapter theme to their own life or prior knowledge, title like "Reflect: <topic>"`);
     }
     if (prefs.includeMovies) {
       tasks.push('1 movie assignment: contentType="movie", contentRef=a JSON object {"title":"Exact Movie Title","synopsis":"1-2 sentence description of the film and why it is relevant to this topic","whereToWatch":["Netflix","Disney+","Amazon Prime Video"]} — list ONLY the streaming platforms where this specific movie is actually available; use your knowledge of streaming libraries. Title like "Watch: <Movie Title>"');
     }
   } else if (isLesson) {
-    // Lesson/branch nodes: targeted reading + videos + optional quiz
+    // Lesson/branch nodes — the core instructional units of a chapter.
+    // Best practice (UbD, Bloom's Taxonomy): each lesson should include input (reading/video),
+    // guided practice, and a formative check. 4-5 assignments per lesson is standard.
     if (prefs.readingPerNode) {
-      tasks.push('1 reading lesson: contentType="text", contentRef=a focused 3-paragraph HTML reading passage using <p> tags (200-300 words) on the specific topic, title like "Reading: <topic>"');
+      tasks.push('1 reading lesson: contentType="text", contentRef=a thorough 4-paragraph HTML reading passage using <p> tags (400-600 words): paragraph 1 introduces the concept with a relatable hook, paragraphs 2-3 explain the content clearly with examples appropriate to the grade level, paragraph 4 summarizes key takeaways and poses a thinking question. Title like "Reading: <topic>"');
     }
     if (prefs.videosPerLesson > 0) {
-      tasks.push(`${prefs.videosPerLesson} targeted video(s): contentType="video", contentRef=a specific YouTube search query for an educational video on this exact topic, title like "Video: <topic>"`);
+      tasks.push(`${prefs.videosPerLesson} targeted video(s): contentType="video", contentRef=a specific YouTube search query for an educational video on this exact concept (not just the general topic), title like "Video: <topic>"`);
     }
-    if (prefs.quizzesPerChapter > 0) {
-      // Lessons get 1 quiz max (smaller topic)
-      tasks.push('1 short quiz: contentType="quiz", contentRef=a JSON array of exactly 5 question objects [{"question":"...","options":["A","B","C","D"],"answer":"B"},...] focused on this specific lesson, title like "Quiz: <topic>"');
-    }
+    // Formative check — every lesson gets one regardless of chapter quiz setting;
+    // this is the "exit ticket" equivalent that drives mastery-based progression
+    tasks.push('1 formative check quiz: contentType="quiz", contentRef=a JSON array of exactly 5 question objects [{"question":"...","options":["A","B","C","D"],"answer":"B"},...] that directly assesses understanding of THIS lesson\'s specific content — questions should test comprehension and application, not just recall. Title like "Check: <topic>"');
+    // Practice activity — writing response to deepen understanding
+    tasks.push('1 practice activity: contentType="essay_questions", contentRef=a short-answer question (1-2 sentences) asking the student to explain, apply, or connect the concept in their own words — e.g., "Explain in your own words..." or "Give an example of...". Title like "Practice: <topic>"');
   } else if (isElective) {
-    // Elective nodes: deep dive — reading + video + project
+    // Elective/deep-dive nodes — optional enrichment and specialization.
+    // Best practice: electives should go beyond recall into analysis, synthesis, creation (Bloom's upper levels).
+    // These are the "stretch" nodes for motivated or advanced students.
     if (prefs.readingPerNode) {
-      tasks.push('1 deep-dive reading: contentType="text", contentRef=a rich 4-paragraph HTML reading passage using <p> tags (300-450 words) exploring the topic in depth, title like "Deep Dive: <topic>"');
+      tasks.push('1 deep-dive reading: contentType="text", contentRef=a rich 5-paragraph HTML reading passage using <p> tags (500-750 words) that goes beyond the textbook — includes primary source excerpts, real-world applications, or advanced analysis. Paragraph 1: hook and context. Paragraphs 2-4: in-depth exploration with examples and evidence. Paragraph 5: synthesis and open questions for further thought. Title like "Deep Dive: <topic>"');
     }
     if (prefs.videosPerLesson > 0) {
-      tasks.push(`${Math.min(prefs.videosPerLesson + 1, 3)} video(s): contentType="video", contentRef=a YouTube search query for an in-depth exploration video, title like "Video: <topic>"`);
+      tasks.push(`${Math.min(prefs.videosPerLesson + 1, 3)} video(s): contentType="video" — mix of a documentary-style video and a how-it-works or case-study video on this advanced topic, title like "Video: <topic>"`);
     }
-    if (prefs.includeProjects) {
-      tasks.push('1 hands-on project: contentType="report", contentRef=project description with goal, materials, and step-by-step instructions (4-6 sentences), title like "Project: <topic>"');
-    }
+    // Electives always include a synthesis quiz to confirm depth of understanding
+    tasks.push('1 analysis quiz: contentType="quiz", contentRef=a JSON array of exactly 5 question objects [{"question":"...","options":["A","B","C","D"],"answer":"B"},...] — questions should require analysis and application, not simple recall. Title like "Analysis Check: <topic>"');
+    // Always include a project for electives — this is their defining characteristic
+    tasks.push('1 hands-on project or creative response: contentType="report", contentRef=a detailed project prompt (5-7 sentences) that asks the student to CREATE something — a model, diagram, experiment, written piece, or presentation. Include: the goal, the process steps, what to submit, and how it connects to the topic. Title like "Project: <topic>"');
     if (prefs.includeMovies) {
       tasks.push('1 movie assignment: contentType="movie", contentRef=a JSON object {"title":"Exact Movie Title","synopsis":"1-2 sentence description of the film and why it is relevant","whereToWatch":["Netflix","Disney+"]} — list ONLY streaming platforms where this specific film is actually known to be available. Title like "Watch: <Movie Title>"');
     }
   } else if (isBoss) {
-    // Boss/capstone nodes: comprehensive review — always meaty
-    tasks.push('1 review summary: contentType="text", contentRef=a 3-paragraph HTML review summary using <p> tags covering all key concepts from this unit, title like "Unit Review: <topic>"');
+    // Boss/capstone nodes — summative assessment for the full unit.
+    // Best practice (Understanding by Design Stage 2): capstones include review,
+    // multiple assessment formats, and a performance task that requires transfer of learning.
+    // These should feel substantial — a student might spend 2-3 days on a boss node.
+    tasks.push('1 comprehensive unit review: contentType="text", contentRef=a thorough 5-paragraph HTML review using <p> tags (600-900 words) that synthesizes ALL key concepts from the unit: paragraph 1 frames the big ideas, paragraphs 2-4 review each major concept cluster with examples and connections between them, paragraph 5 connects to the next unit and poses an essential question for further learning. Title like "Unit Review: <topic>"');
+    // Boss nodes always get at least one essay — writing is essential for retention (Roediger & Karpicke)
+    const essayCount = Math.max(1, prefs.essaysPerBoss);
+    tasks.push(`${essayCount} analytical essay prompt(s): contentType="essay_questions", contentRef=a substantive essay question (3-4 sentences) that requires the student to synthesize evidence, make an argument, or evaluate a claim — not just summarize. Title like "Essay: <topic>"`);
     if (prefs.quizzesPerBoss > 0) {
-      tasks.push(`${prefs.quizzesPerBoss} comprehensive quiz(zes): contentType="quiz", contentRef=a JSON array of exactly 5 question objects [{"question":"...","options":["A","B","C","D"],"answer":"B"},...] covering the full unit, title like "Final Quiz: <topic>"`);
-    }
-    if (prefs.essaysPerBoss > 0) {
-      tasks.push(`${prefs.essaysPerBoss} essay prompt(s): contentType="essay_questions", contentRef=a substantive essay question (3-4 sentences) requiring synthesis across the unit, title like "Essay: <topic>"`);
+      tasks.push(`${prefs.quizzesPerBoss} summative quiz(zes): contentType="quiz", contentRef=a JSON array of exactly 5 question objects [{"question":"...","options":["A","B","C","D"],"answer":"B"},...] — each quiz covers a different concept cluster from the unit, so together they provide comprehensive coverage. Title like "Unit Quiz: <topic>"`);
     }
     if (prefs.papersPerBoss > 0) {
-      tasks.push(`${prefs.papersPerBoss} research paper prompt(s): contentType="report", contentRef=the research question and instructions (4-5 sentences), title like "Research: <topic>"`);
+      tasks.push(`${prefs.papersPerBoss} research paper prompt(s): contentType="report", contentRef=a detailed research prompt (5-6 sentences) with: the research question, required sources or evidence types, length expectations, and evaluation criteria. Title like "Research Paper: <topic>"`);
     }
     if (prefs.includeProjects) {
-      tasks.push('1 capstone project: contentType="report", contentRef=detailed project description with goal, deliverables, and steps (5-7 sentences), title like "Capstone Project: <topic>"');
+      tasks.push('1 performance task / capstone project: contentType="report", contentRef=a rich performance task description (6-8 sentences) — this is the "transfer task" of UbD where the student applies learning to a new, authentic situation. Include: the scenario or challenge, the deliverable, the audience (who they are presenting/writing for), required components, and success criteria. Title like "Capstone: <topic>"');
     }
   }
 
@@ -2244,7 +2328,7 @@ export async function generateAssignmentsForNode(input: {
             : `${prompt}\n\nCRITICAL: output ONLY the raw JSON array. nodeId must be exactly "${nodeId}".`,
         },
       ],
-      max_tokens: 1800,
+      max_tokens: 2800,
     });
 
     const responseText = toModelText(result);

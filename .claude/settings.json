@@ -27,7 +27,14 @@
       "Bash(pnpm db:migrate:remote)",
       "Bash(echo \"EXIT:$?\")",
       "Bash(echo \"exit:$?\")",
-      "Bash(ls -la /run/media/rogerleecormier/Storage/dev/project-orca/app/routes/skill-tree*)"
+      "Bash(ls -la /run/media/rogerleecormier/Storage/dev/project-orca/app/routes/skill-tree*)",
+      "Bash(grep -E \"NodeSidePanel|skill-tree\\\\.\\\\$|student\\\\.tsx\")",
+      "Bash(grep -E 'NodeSidePanel|skill-tree\\\\.$treeId|student\\\\.tsx')",
+      "Read(//tmp/**)",
+      "Bash(grep -v \"^$\")"
+    ],
+    "additionalDirectories": [
+      "/tmp"
     ]
   }
 }

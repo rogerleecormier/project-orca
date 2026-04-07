@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { RAMP_COLORS } from "./EdgeLayer";
+import { AssignmentModal, type ModalAssignment } from "../assignment-modal";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -43,7 +44,9 @@ export type PanelAssignment = {
   title: string;
   contentType: string;
   description: string | null;
-  [key: string]: unknown;
+  contentRef: string | null;
+  dueAt: string | null;
+  linkedAssignmentId: string | null;
 };
 
 type Props = {
@@ -148,19 +151,29 @@ function AssignmentRow({
   assignment,
   editMode,
   onUnlink,
+  onClick,
 }: {
   assignment: PanelAssignment;
   editMode: boolean;
   onUnlink: () => void;
+  onClick?: () => void;
 }) {
   const colorCls = TYPE_COLORS[assignment.contentType] ?? "bg-slate-100 text-slate-600";
   const typeLbl = TYPE_LABELS[assignment.contentType] ?? assignment.contentType;
   return (
-    <div className="flex items-center gap-2 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+    <div className="flex items-center gap-2 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 group">
       <span className={`shrink-0 rounded-lg px-1.5 py-0.5 text-[10px] font-semibold ${colorCls}`}>
         {typeLbl}
       </span>
-      <span className="flex-1 truncate text-xs text-slate-700">{assignment.title}</span>
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={!onClick}
+        className="flex-1 truncate text-left text-xs text-slate-700 hover:text-cyan-700 hover:underline disabled:no-underline disabled:cursor-default transition-colors"
+        title={onClick ? `Open: ${assignment.title}` : undefined}
+      >
+        {assignment.title}
+      </button>
       {editMode ? (
         <button
           type="button"
@@ -221,6 +234,7 @@ export function NodeSidePanel({
     "assignments",
   );
   const [aiGenerating, setAiGenerating] = useState(false);
+  const [viewingAssignment, setViewingAssignment] = useState<PanelAssignment | null>(null);
 
   // Edit tab state
   const [draftTitle, setDraftTitle] = useState(node?.title ?? "");
@@ -305,6 +319,7 @@ export function NodeSidePanel({
   }
 
   return (
+    <>
     <div
       key={node.id}
       className="absolute bottom-0 right-0 top-0 z-20 flex w-[380px] max-w-full flex-col border-l border-slate-200 bg-white shadow-xl transition-transform duration-200"
@@ -450,6 +465,7 @@ export function NodeSidePanel({
                         assignment={a}
                         editMode={editMode}
                         onUnlink={() => onAssignmentUnlinked(a.id)}
+                        onClick={() => setViewingAssignment(a)}
                       />
                     ))}
                   </div>
@@ -840,5 +856,20 @@ export function NodeSidePanel({
         ) : null}
       </div>
     </div>
+
+    {/* Assignment view/edit modal */}
+    {viewingAssignment ? (
+      <AssignmentModal
+        assignment={viewingAssignment as ModalAssignment}
+        allAssignments={allClassAssignments as ModalAssignment[]}
+        canEdit={!isStudent}
+        onClose={() => setViewingAssignment(null)}
+        onSaved={(updated) => {
+          setViewingAssignment(updated as PanelAssignment);
+        }}
+      />
+    ) : null}
+    </>
   );
 }
+
