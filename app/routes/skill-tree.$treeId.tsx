@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, createFileRoute, redirect } from "@tanstack/react-router";
 import {
+  autoLayoutSkillTree,
   aiExpandSkillTree,
   aiGenerateNodeAssignments,
   deleteSkillTreeEdge,
@@ -9,6 +10,8 @@ import {
   getViewerContext,
   linkAssignmentToNode,
   markNodeComplete,
+  populateWebNodeContent,
+  reweaveSkillTree,
   saveTreeViewport,
   unlinkAssignmentFromNode,
   updateNodePositions,
@@ -72,6 +75,23 @@ const STATUS_LABELS: Record<string, string> = {
   complete:    "Complete",
   mastery:     "Mastery",
 };
+
+const TOOLBAR_TOOLTIPS = {
+  deleteEdge: "Delete the selected dependency road between two nodes.",
+  savePositions: "Save the node positions after dragging them into place.",
+  autoLayout: "Clean up spacing and reposition the current map without changing its core meaning.",
+  reweave:
+    "Rebuild the dependency roads into a more guided branching structure with alternate local routes.",
+  addNode: "Add a new node at the center of the current view.",
+  connect: "Turn on connection mode, then click one node and another to create a dependency road.",
+  connectActive: "Exit connection mode.",
+  expand: "Use AI to grow a small related branch from an existing node.",
+  autoPopulate: "Fill empty nodes with AI-generated assignments and learning content.",
+  autoPopulateDone: "All nodes already have linked content.",
+  editMode: "Turn on builder controls so you can move nodes, connect them, and add new ones.",
+  editModeActive: "Leave builder mode and return to normal viewing.",
+  addFirstNode: "Create the first node in this empty skill map.",
+} as const;
 
 // ── Zoom controls ─────────────────────────────────────────────────────────────
 
@@ -226,6 +246,90 @@ function AiExpandPanel({
   );
 }
 
+// ── Auto-Populate Progress Panel ──────────────────────────────────────────────
+
+type PopulatePhase = "running" | "done" | "cancelled";
+
+type PopulateState = {
+  phase: PopulatePhase;
+  total: number;
+  completed: number;
+  failed: number;
+  currentTitle: string;
+};
+
+function PopulateProgressPanel({
+  state,
+  onCancel,
+  onDismiss,
+}: {
+  state: PopulateState;
+  onCancel: () => void;
+  onDismiss: () => void;
+}) {
+  const pct = state.total > 0 ? Math.round((state.completed / state.total) * 100) : 0;
+  const succeeded = state.completed - state.failed;
+
+  return (
+    <div className="absolute left-3 right-3 top-3 z-20 rounded-2xl border border-slate-200 bg-white p-4 shadow-xl">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          {state.phase === "running" && (
+            <span className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-cyan-500 border-t-transparent" />
+          )}
+          <p className="text-sm font-semibold text-slate-800">
+            {state.phase === "running"
+              ? "Auto-populating nodes…"
+              : state.phase === "done"
+                ? `Done — ${succeeded} node${succeeded !== 1 ? "s" : ""} populated`
+                : `Cancelled — ${succeeded} node${succeeded !== 1 ? "s" : ""} populated`}
+          </p>
+        </div>
+        {state.phase !== "running" ? (
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="text-xs text-slate-400 hover:text-slate-700"
+          >
+            ✕ Dismiss
+          </button>
+        ) : null}
+      </div>
+
+      {/* Progress bar */}
+      <div className="mb-2 h-2 w-full overflow-hidden rounded-full bg-slate-100">
+        <div
+          className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-cyan-600 transition-all duration-300"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+
+      <div className="flex items-center justify-between gap-2 text-xs text-slate-500">
+        <span>
+          {state.completed} / {state.total} nodes
+          {state.failed > 0 ? (
+            <span className="ml-1.5 text-amber-600">({state.failed} skipped)</span>
+          ) : null}
+        </span>
+        {state.phase === "running" ? (
+          <span className="max-w-[55%] truncate italic">
+            {state.currentTitle ? `Processing: ${state.currentTitle}` : "Starting…"}
+          </span>
+        ) : null}
+        {state.phase === "running" ? (
+          <button
+            type="button"
+            onClick={onCancel}
+            className="shrink-0 rounded-lg border border-rose-200 px-2.5 py-1 text-xs font-medium text-rose-600 hover:bg-rose-50"
+          >
+            Cancel
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 function SkillTreePage() {
@@ -264,6 +368,10 @@ function SkillTreePage() {
   const [xpToast, setXpToast] = useState<{ x: number; y: number; xp: number } | null>(null);
   const [unlockToast, setUnlockToast] = useState<string | null>(null);
   const [rewardUnlockBanner, setRewardUnlockBanner] = useState<{ tierTitle: string } | null>(null);
+  const [autoLayouting, setAutoLayouting] = useState(false);
+  const [reweaving, setReweaving] = useState(false);
+
+  const [populateState, setPopulateState] = useState<PopulateState | null>(null);
 
   // ── Refs ─────────────────────────────────────────────────────────────────────
   const [canvasSize, setCanvasSize] = useState({ w: 900, h: 600 });
@@ -273,6 +381,7 @@ function SkillTreePage() {
   const lastPanPos = useRef({ x: 0, y: 0 });
   const viewportRef = useRef(viewport);
   viewportRef.current = viewport;
+  const cancelPopulateRef = useRef(false);
 
   // ── Measure canvas ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -518,6 +627,42 @@ function SkillTreePage() {
     setHasUnsavedPositions(false);
   }
 
+  async function handleAutoLayout() {
+    setAutoLayouting(true);
+    try {
+      const result = await autoLayoutSkillTree({
+        data: { treeId: treeData.tree.id },
+      });
+      setNodes(result.nodes as TreeNode[]);
+      setEdges(result.edges as TreeEdge[]);
+      if (Array.isArray(result.nodeProgress)) {
+        setProgressMap(new Map((result.nodeProgress as NodeProgress[]).map((p) => [p.nodeId, p])));
+      }
+      setHasUnsavedPositions(false);
+      setSelectedEdgeId(null);
+    } finally {
+      setAutoLayouting(false);
+    }
+  }
+
+  async function handleReweave() {
+    setReweaving(true);
+    try {
+      const result = await reweaveSkillTree({
+        data: { treeId: treeData.tree.id },
+      });
+      setNodes(result.nodes as TreeNode[]);
+      setEdges(result.edges as TreeEdge[]);
+      if (Array.isArray(result.nodeProgress)) {
+        setProgressMap(new Map((result.nodeProgress as NodeProgress[]).map((p) => [p.nodeId, p])));
+      }
+      setHasUnsavedPositions(false);
+      setSelectedEdgeId(null);
+    } finally {
+      setReweaving(false);
+    }
+  }
+
   // ── Add node ─────────────────────────────────────────────────────────────────
   async function handleAddNode() {
     const newNode = await upsertSkillTreeNode({
@@ -673,10 +818,98 @@ function SkillTreePage() {
     });
   }
 
+  // ── Auto-populate batch handler ──────────────────────────────────────────────
+  async function handleAutoPopulate() {
+    const classId = treeData.tree.classId;
+    if (!classId) return;
+
+    // Only process nodes that currently have 0 assignments, prioritise core path
+    const unpopulated = [...nodes]
+      .filter((n) => (nodeAssignmentsMap.get(n.id) ?? []).length === 0)
+      .sort((a, b) => {
+        // milestones + lessons first so the spine gets content first
+        const order: Record<string, number> = { milestone: 0, lesson: 1, boss: 2, elective: 3, branch: 4 };
+        return (order[a.nodeType] ?? 5) - (order[b.nodeType] ?? 5);
+      });
+
+    if (unpopulated.length === 0) return;
+
+    cancelPopulateRef.current = false;
+    setPopulateState({
+      phase: "running",
+      total: unpopulated.length,
+      completed: 0,
+      failed: 0,
+      currentTitle: "",
+    });
+
+    for (const node of unpopulated) {
+      if (cancelPopulateRef.current) {
+        setPopulateState((prev) =>
+          prev ? { ...prev, phase: "cancelled" } : null,
+        );
+        return;
+      }
+
+      setPopulateState((prev) =>
+        prev ? { ...prev, currentTitle: node.title } : null,
+      );
+
+      try {
+        const result = await populateWebNodeContent({
+          data: { nodeId: node.id, classId },
+        });
+        setNodeAssignmentsMap((prev) => {
+          const next = new Map(prev);
+          const existing = next.get(node.id) ?? [];
+          next.set(node.id, [...existing, ...(result.assignments as Assignment[])]);
+          return next;
+        });
+        setPopulateState((prev) =>
+          prev ? { ...prev, completed: prev.completed + 1 } : null,
+        );
+      } catch {
+        setPopulateState((prev) =>
+          prev
+            ? { ...prev, completed: prev.completed + 1, failed: prev.failed + 1 }
+            : null,
+        );
+      }
+    }
+
+    setPopulateState((prev) => (prev ? { ...prev, phase: "done" } : null));
+  }
+
   // ── Derived values ────────────────────────────────────────────────────────────
   const selectedNode = selectedNodeId
     ? (nodes.find((n) => n.id === selectedNodeId) ?? null)
     : null;
+
+  // BFS backwards from selectedNodeId to find all ancestor nodes + edges (for path highlighting)
+  const { highlightedNodeIds, highlightedEdgeIds } = useMemo(() => {
+    if (!selectedNodeId) {
+      return { highlightedNodeIds: new Set<string>(), highlightedEdgeIds: new Set<string>() };
+    }
+    const nodeSet = new Set<string>([selectedNodeId]);
+    const edgeSet = new Set<string>();
+    const queue = [selectedNodeId];
+    while (queue.length > 0) {
+      const curr = queue.shift()!;
+      for (const edge of edges) {
+        if (edge.targetNodeId === curr && !nodeSet.has(edge.sourceNodeId)) {
+          nodeSet.add(edge.sourceNodeId);
+          edgeSet.add(edge.id);
+          queue.push(edge.sourceNodeId);
+        }
+      }
+    }
+    return { highlightedNodeIds: nodeSet, highlightedEdgeIds: edgeSet };
+  }, [selectedNodeId, edges]);
+
+  const dimmedNodeIds = useMemo(() => {
+    if (highlightedNodeIds.size === 0) return new Set<string>();
+    return new Set(nodes.filter((n) => !highlightedNodeIds.has(n.id)).map((n) => n.id));
+  }, [highlightedNodeIds, nodes]);
 
   const selectedNodeProgress = selectedNodeId ? (progressMap.get(selectedNodeId) ?? null) : null;
   const selectedNodeAssignments = selectedNodeId
@@ -732,6 +965,7 @@ function SkillTreePage() {
               <button
                 type="button"
                 onClick={() => void handleDeleteEdge(selectedEdgeId)}
+                title={TOOLBAR_TOOLTIPS.deleteEdge}
                 className="rounded-xl border border-rose-200 bg-white px-3 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50"
               >
                 Delete edge
@@ -742,17 +976,39 @@ function SkillTreePage() {
               <button
                 type="button"
                 onClick={() => void handleSavePositions()}
+                title={TOOLBAR_TOOLTIPS.savePositions}
                 className="rounded-xl bg-amber-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-600"
               >
                 Save
               </button>
             ) : null}
 
+            <button
+              type="button"
+              disabled={autoLayouting || reweaving || nodes.length === 0}
+              onClick={() => void handleAutoLayout()}
+              title={TOOLBAR_TOOLTIPS.autoLayout}
+              className="rounded-xl border border-cyan-200 bg-cyan-50 px-3 py-1.5 text-xs font-medium text-cyan-700 hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {autoLayouting ? "Reflowing…" : "Auto-Layout"}
+            </button>
+
+            <button
+              type="button"
+              disabled={reweaving || autoLayouting || nodes.length < 3}
+              onClick={() => void handleReweave()}
+              title={TOOLBAR_TOOLTIPS.reweave}
+              className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {reweaving ? "Reweaving…" : "Reweave Tree"}
+            </button>
+
             {editMode ? (
               <>
                 <button
                   type="button"
                   onClick={() => void handleAddNode()}
+                  title={TOOLBAR_TOOLTIPS.addNode}
                   className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
                 >
                   + Node
@@ -764,6 +1020,7 @@ function SkillTreePage() {
                     setConnectingFromId(null);
                     setRubberBandEnd(null);
                   }}
+                  title={connectMode ? TOOLBAR_TOOLTIPS.connectActive : TOOLBAR_TOOLTIPS.connect}
                   className={`rounded-xl px-3 py-1.5 text-xs font-medium transition ${
                     connectMode
                       ? "bg-cyan-600 text-white"
@@ -775,6 +1032,7 @@ function SkillTreePage() {
                 <button
                   type="button"
                   onClick={() => setAiExpandOpen((v) => !v)}
+                  title={TOOLBAR_TOOLTIPS.expand}
                   className={`rounded-xl px-3 py-1.5 text-xs font-medium transition ${
                     aiExpandOpen
                       ? "bg-cyan-600 text-white"
@@ -786,6 +1044,40 @@ function SkillTreePage() {
               </>
             ) : null}
 
+            {/* Auto-populate — visible whenever there's a classId, not just edit mode */}
+            {treeData.tree.classId ? (() => {
+              const emptyCount = nodes.filter((n) => (nodeAssignmentsMap.get(n.id) ?? []).length === 0).length;
+              const allDone = emptyCount === 0;
+              return (
+                <button
+                  type="button"
+                  disabled={populateState?.phase === "running" || allDone}
+                  onClick={() => void handleAutoPopulate()}
+                  title={allDone ? TOOLBAR_TOOLTIPS.autoPopulateDone : TOOLBAR_TOOLTIPS.autoPopulate}
+                  className={[
+                    "rounded-xl border px-3 py-1.5 text-xs font-medium transition",
+                    allDone
+                      ? "border-slate-200 bg-slate-50 text-slate-400 cursor-default"
+                      : "border-violet-400 bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm",
+                  ].join(" ")}
+                >
+                  {populateState?.phase === "running" ? (
+                    <span className="flex items-center gap-1.5">
+                      <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                      Generating content…
+                    </span>
+                  ) : allDone ? (
+                    "✓ Content filled"
+                  ) : (
+                    <span className="flex items-center gap-1">
+                      ✦ Generate Assignments
+                      <span className="ml-1 rounded-full bg-violet-500 px-1.5 py-0.5 text-[10px] font-bold">{emptyCount}</span>
+                    </span>
+                  )}
+                </button>
+              );
+            })() : null}
+
             <button
               type="button"
               onClick={() => {
@@ -796,6 +1088,7 @@ function SkillTreePage() {
                 setAiExpandOpen(false);
                 setSelectedEdgeId(null);
               }}
+              title={editMode ? TOOLBAR_TOOLTIPS.editModeActive : TOOLBAR_TOOLTIPS.editMode}
               className={`rounded-xl px-3 py-1.5 text-xs font-medium transition ${
                 editMode
                   ? "bg-cyan-600 text-white"
@@ -860,6 +1153,7 @@ function SkillTreePage() {
               selectedEdgeId={selectedEdgeId}
               connectingFromId={connectMode ? connectingFromId : null}
               rubberBandEnd={rubberBandEnd}
+              highlightedEdgeIds={highlightedEdgeIds}
               onEdgeClick={handleEdgeClick}
               onDeleteEdge={handleDeleteEdge}
             />
@@ -872,6 +1166,7 @@ function SkillTreePage() {
               draggingNodeId={draggingNodeId}
               selectedNodeId={selectedNodeId}
               newlyAddedNodeIds={newlyAddedNodeIds}
+              dimmedNodeIds={dimmedNodeIds}
               onNodeClick={handleNodeClick}
               onNodeDragStart={handleNodeDragStart}
             />
@@ -886,6 +1181,7 @@ function SkillTreePage() {
               <button
                 type="button"
                 onClick={() => void handleAddNode()}
+                title={TOOLBAR_TOOLTIPS.addFirstNode}
                 className="rounded-xl bg-cyan-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-cyan-700 transition"
               >
                 + Add your first node
@@ -940,6 +1236,15 @@ function SkillTreePage() {
               setTimeout(() => setNewlyAddedNodeIds(new Set()), 2000);
             }}
             onClose={() => setAiExpandOpen(false)}
+          />
+        ) : null}
+
+        {/* Auto-populate progress panel */}
+        {populateState && !aiExpandOpen ? (
+          <PopulateProgressPanel
+            state={populateState}
+            onCancel={() => { cancelPopulateRef.current = true; }}
+            onDismiss={() => setPopulateState(null)}
           />
         ) : null}
 

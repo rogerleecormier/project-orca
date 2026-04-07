@@ -14,16 +14,17 @@ const CONFETTI_COLORS = [
   "#3b82f6", "#f97316", "#a78bfa", "#22d3ee",
 ];
 
-const CONFETTI_ELEMENTS = Array.from({ length: 20 }, (_, i) => ({
+const CONFETTI_ELEMENTS = Array.from({ length: 28 }, (_, i) => ({
   id: i,
   color: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
-  size: 6 + (i % 4) * 3,
+  size: 6 + (i % 5) * 3,
   isRect: i % 3 === 0,
-  delay: (i * 0.07).toFixed(2),
-  duration: (0.9 + (i % 5) * 0.15).toFixed(2),
-  tx: ((i % 10) - 5) * 36,
-  ty: -(80 + (i % 7) * 30),
-  rotate: (i % 3 === 0 ? 1 : -1) * (20 + (i % 6) * 25),
+  isStar: i % 7 === 0,
+  delay: (i * 0.055).toFixed(2),
+  duration: (0.85 + (i % 5) * 0.18).toFixed(2),
+  tx: ((i % 10) - 4.5) * 40,
+  ty: -(70 + (i % 8) * 32),
+  rotate: (i % 3 === 0 ? 1 : -1) * (25 + (i % 6) * 30),
 }));
 
 function Confetti() {
@@ -32,13 +33,18 @@ function Confetti() {
       <style>{`
         @keyframes confetti-burst {
           0%   { transform: translate(0, 0) rotate(0deg) scale(1); opacity: 1; }
-          80%  { opacity: 0.8; }
-          100% { transform: translate(var(--tx), var(--ty)) rotate(var(--rot)) scale(0.4); opacity: 0; }
+          80%  { opacity: 0.7; }
+          100% { transform: translate(var(--tx), var(--ty)) rotate(var(--rot)) scale(0.3); opacity: 0; }
         }
         @keyframes tier-pop {
-          0%   { transform: scale(0.5); opacity: 0; }
-          60%  { transform: scale(1.15); opacity: 1; }
-          100% { transform: scale(1); opacity: 1; }
+          0%   { transform: scale(0.3) rotate(-15deg); opacity: 0; }
+          50%  { transform: scale(1.2) rotate(8deg); opacity: 1; }
+          75%  { transform: scale(0.95) rotate(-3deg); }
+          100% { transform: scale(1) rotate(0deg); opacity: 1; }
+        }
+        @keyframes tier-glow {
+          0%, 100% { box-shadow: 0 0 20px 4px rgba(251,191,36,0.3); }
+          50%       { box-shadow: 0 0 40px 10px rgba(251,191,36,0.55); }
         }
         .confetti-piece {
           position: absolute;
@@ -47,29 +53,49 @@ function Confetti() {
           animation: confetti-burst var(--dur) ease-out var(--delay) both;
         }
         .tier-icon-pop {
-          animation: tier-pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) 0.1s both;
+          animation: tier-pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 0.15s both,
+                     tier-glow 2s ease-in-out 0.65s infinite;
         }
       `}</style>
 
       <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
         {CONFETTI_ELEMENTS.map((el) => (
-          <div
-            key={el.id}
-            className="confetti-piece"
-            style={{
-              "--tx": `${el.tx}px`,
-              "--ty": `${el.ty}px`,
-              "--rot": `${el.rotate}deg`,
-              "--dur": `${el.duration}s`,
-              "--delay": `${el.delay}s`,
-              width: el.size,
-              height: el.isRect ? el.size * 1.6 : el.size,
-              borderRadius: el.isRect ? 2 : "50%",
-              background: el.color,
-              marginLeft: -el.size / 2,
-              marginTop: -el.size / 2,
-            } as React.CSSProperties}
-          />
+          el.isStar ? (
+            <span
+              key={el.id}
+              className="confetti-piece"
+              style={{
+                "--tx": `${el.tx}px`,
+                "--ty": `${el.ty}px`,
+                "--rot": `${el.rotate}deg`,
+                "--dur": `${el.duration}s`,
+                "--delay": `${el.delay}s`,
+                fontSize: el.size + 4,
+                color: el.color,
+                marginLeft: -(el.size + 4) / 2,
+                marginTop: -(el.size + 4) / 2,
+                lineHeight: 1,
+              } as React.CSSProperties}
+            >★</span>
+          ) : (
+            <div
+              key={el.id}
+              className="confetti-piece"
+              style={{
+                "--tx": `${el.tx}px`,
+                "--ty": `${el.ty}px`,
+                "--rot": `${el.rotate}deg`,
+                "--dur": `${el.duration}s`,
+                "--delay": `${el.delay}s`,
+                width: el.size,
+                height: el.isRect ? el.size * 1.6 : el.size,
+                borderRadius: el.isRect ? 2 : "50%",
+                background: el.color,
+                marginLeft: -el.size / 2,
+                marginTop: -el.size / 2,
+              } as React.CSSProperties}
+            />
+          )
         ))}
       </div>
     </>
@@ -114,13 +140,13 @@ export function RewardUnlockCelebration({ tiers, onDismiss, onClaim }: Props) {
     >
       {/* Center card */}
       <div
-        className="relative flex w-full max-w-sm flex-col items-center overflow-hidden rounded-3xl bg-white p-8 text-center shadow-2xl"
+        className="relative flex w-full max-w-sm flex-col items-center overflow-hidden rounded-3xl bg-white p-6 text-center shadow-2xl sm:p-8"
         style={{ maxWidth: 360 }}
       >
         <Confetti />
 
         {/* Heading */}
-        <p className="relative z-10 text-2xl font-bold text-slate-900">
+        <p className="relative z-10 text-xl font-bold text-slate-900 sm:text-2xl">
           🎉 You unlocked a reward!
         </p>
 

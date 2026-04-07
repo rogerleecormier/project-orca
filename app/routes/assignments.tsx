@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { DeleteConfirmModal } from "../components/delete-confirm-modal";
 import { QuizBuilder, type QuizQuestion } from "../components/quiz-builder";
@@ -7,6 +7,7 @@ import { RichTextEditor } from "../components/rich-text-editor";
 import { VideoSearch, type VideoData } from "../components/video-search";
 import { OrcaMark } from "../components/icons/orca-mark";
 import {
+  assignAssignmentToMarkingPeriod,
   createAssignmentRecord,
   deleteAssignmentRecord,
   generateQuizFromLinkedAssignment,
@@ -20,6 +21,9 @@ import {
 } from "../server/functions";
 
 export const Route = createFileRoute("/assignments")({
+  validateSearch: (search: Record<string, unknown>): { classId?: string } => ({
+    classId: typeof search.classId === "string" ? search.classId : undefined,
+  }),
   loader: async () => {
     const viewer = await getViewerContext();
 
@@ -36,7 +40,7 @@ export const Route = createFileRoute("/assignments")({
   component: CurriculumBuilderPage,
 });
 
-type AssignmentType = "text" | "file" | "url" | "video" | "quiz" | "essay_questions" | "report";
+type AssignmentType = "text" | "file" | "url" | "video" | "quiz" | "essay_questions" | "report" | "movie";
 
 const CHAT_SUGGESTION_STORAGE_KEY = "proorca.lessonPlanner.selectedSuggestion.v1";
 const CHAT_SUGGESTION_EVENT = "proorca:lesson-planner-suggestion";
@@ -67,6 +71,26 @@ type EssayQuestionsPayload = {
   questions?: string[];
 };
 
+type MoviePayload = {
+  title?: string;
+  synopsis?: string;
+  whereToWatch?: string[];
+};
+
+const KNOWN_PLATFORMS = [
+  "Netflix",
+  "Disney+",
+  "Amazon Prime Video",
+  "HBO Max",
+  "Max",
+  "Hulu",
+  "Apple TV+",
+  "Peacock",
+  "Paramount+",
+  "Tubi",
+  "YouTube",
+] as const;
+
 const TYPE_LABELS: Record<AssignmentType, string> = {
   text: "Reading",
   file: "File",
@@ -75,6 +99,7 @@ const TYPE_LABELS: Record<AssignmentType, string> = {
   quiz: "Quiz",
   essay_questions: "Essay Questions",
   report: "Report",
+  movie: "Movie",
 };
 
 const TYPE_DESCRIPTIONS: Record<AssignmentType, string> = {
@@ -85,6 +110,7 @@ const TYPE_DESCRIPTIONS: Record<AssignmentType, string> = {
   quiz: "Multiple-choice questions.",
   essay_questions: "Short structured prompts the student answers in writing — can be linked to a video.",
   report: "A long-form writing assignment with a rubric or instructions.",
+  movie: "Watch a film related to the topic, followed by a linked quiz, essay, or discussion.",
 };
 
 const TYPE_BADGE_STYLES: Record<AssignmentType, string> = {
@@ -95,6 +121,7 @@ const TYPE_BADGE_STYLES: Record<AssignmentType, string> = {
   url: "bg-sky-50 text-sky-800 border-sky-200",
   essay_questions: "bg-rose-50 text-rose-800 border-rose-200",
   report: "bg-indigo-50 text-indigo-800 border-indigo-200",
+  movie: "bg-violet-50 text-violet-800 border-violet-200",
 };
 
 function getTypeBadgeClass(type: string) {
@@ -138,6 +165,23 @@ function hasRichTextContent(value: string) {
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/g, " ")
     .trim().length > 0;
+}
+
+async function uploadInlineImageUtil(file: File) {
+  try {
+    const base64 = await fileToBase64(file);
+    const uploaded = await uploadAssignmentFile({
+      data: {
+        filename: file.name,
+        mimeType: file.type || "application/octet-stream",
+        base64,
+      },
+    });
+    return { key: uploaded.key };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "File upload failed";
+    throw new Error(`Failed to upload image: ${errorMessage}`);
+  }
 }
 
 function summarizeRichText(value: string, maxLength = 180) {
@@ -295,19 +339,6 @@ function EditAssignmentModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const uploadInlineImage = async (file: File) => {
-    const base64 = await fileToBase64(file);
-    const uploaded = await uploadAssignmentFile({
-      data: {
-        filename: file.name,
-        mimeType: file.type || "application/octet-stream",
-        base64,
-      },
-    });
-
-    return { key: uploaded.key };
-  };
-
   // For quiz editing
   const quizPayload = parseJson<QuizPayload>(assignment.contentRef);
   const [quizTitle, setQuizTitle] = useState(quizPayload?.title ?? "");
@@ -323,6 +354,13 @@ function EditAssignmentModal({
   const [essayQuestions, setEssayQuestions] = useState<string[]>(
     essayPayload?.questions ?? [""],
   );
+
+  // For movie editing
+  const moviePayload = parseJson<MoviePayload>(assignment.contentRef);
+  const [movieTitle, setMovieTitle] = useState(moviePayload?.title ?? "");
+  const [movieSynopsis, setMovieSynopsis] = useState(moviePayload?.synopsis ?? "");
+  const [moviePlatforms, setMoviePlatforms] = useState<string[]>(moviePayload?.whereToWatch ?? []);
+  const [movieCustomPlatform, setMovieCustomPlatform] = useState("");
 
   const linkableCandidates = allAssignments.filter(
     (a) => a.id !== assignment.id,
@@ -345,6 +383,17 @@ function EditAssignmentModal({
     if (assignment.contentType === "essay_questions") {
       const filtered = essayQuestions.filter((q) => q.trim());
       updatedContentRef = JSON.stringify({ questions: filtered });
+    }
+
+    if (assignment.contentType === "movie") {
+      const allPlatforms = movieCustomPlatform.trim()
+        ? [...moviePlatforms, movieCustomPlatform.trim()]
+        : moviePlatforms;
+      updatedContentRef = JSON.stringify({
+        title: movieTitle.trim() || title.trim(),
+        synopsis: movieSynopsis.trim(),
+        whereToWatch: allPlatforms,
+      } satisfies MoviePayload);
     }
 
     try {
@@ -415,7 +464,7 @@ function EditAssignmentModal({
                 disabled={saving}
                 placeholder="Paste the passage or instructions students should read."
                 documentName={title || assignment.title}
-                onUploadImage={(file) => uploadInlineImage(file)}
+                onUploadImage={(file) => uploadInlineImageUtil(file)}
               />
             </div>
           ) : null}
@@ -440,7 +489,7 @@ function EditAssignmentModal({
                 disabled={saving}
                 placeholder="Describe the assignment, expectations, length, and grading criteria."
                 documentName={title || assignment.title}
-                onUploadImage={(file) => uploadInlineImage(file)}
+                onUploadImage={(file) => uploadInlineImageUtil(file)}
               />
             </div>
           ) : null}
@@ -494,6 +543,74 @@ function EditAssignmentModal({
               >
                 + Add Question
               </button>
+            </div>
+          ) : null}
+
+          {assignment.contentType === "movie" ? (
+            <div className="space-y-4">
+              {/* Movie title */}
+              <label className="block space-y-1">
+                <span className="text-sm font-medium text-slate-700">Movie Title</span>
+                <input
+                  value={movieTitle}
+                  onChange={(e) => setMovieTitle(e.target.value)}
+                  placeholder="e.g. Schindler's List"
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                />
+              </label>
+
+              {/* Synopsis */}
+              <label className="block space-y-1">
+                <span className="text-sm font-medium text-slate-700">Why watch it</span>
+                <textarea
+                  value={movieSynopsis}
+                  onChange={(e) => setMovieSynopsis(e.target.value)}
+                  rows={2}
+                  placeholder="Brief description of the film and how it connects to the topic…"
+                  className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 resize-none"
+                />
+              </label>
+
+              {/* Where to watch */}
+              <div className="space-y-2">
+                <span className="text-sm font-medium text-slate-700">Where to watch</span>
+                <p className="text-xs text-slate-500">Check every platform where this film is available.</p>
+                <div className="flex flex-wrap gap-2">
+                  {KNOWN_PLATFORMS.map((platform) => {
+                    const checked = moviePlatforms.includes(platform);
+                    return (
+                      <button
+                        key={platform}
+                        type="button"
+                        onClick={() =>
+                          setMoviePlatforms(
+                            checked
+                              ? moviePlatforms.filter((p) => p !== platform)
+                              : [...moviePlatforms, platform],
+                          )
+                        }
+                        className={[
+                          "rounded-full px-3 py-1 text-xs font-semibold border transition",
+                          checked
+                            ? "bg-indigo-600 text-white border-indigo-600"
+                            : "bg-white text-slate-600 border-slate-300 hover:border-indigo-400",
+                        ].join(" ")}
+                      >
+                        {checked ? "✓ " : ""}{platform}
+                      </button>
+                    );
+                  })}
+                </div>
+                {/* Custom platform */}
+                <div className="flex gap-2 mt-1">
+                  <input
+                    value={movieCustomPlatform}
+                    onChange={(e) => setMovieCustomPlatform(e.target.value)}
+                    placeholder="Other platform (e.g. Kanopy, library DVD…)"
+                    className="flex-1 rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                  />
+                </div>
+              </div>
             </div>
           ) : null}
 
@@ -602,44 +719,265 @@ function EditAssignmentModal({
 
 type VideoStep = "search" | "preview" | "confirm";
 
+type FormState = {
+  classId: string;
+  createMode: "template" | "blank";
+  title: string;
+  description: string;
+  contentType: AssignmentType;
+  dueDate: string;
+  dueTime: string;
+  includeDueTime: boolean;
+  linkedAssignmentId: string;
+  textContent: string;
+  resourceUrl: string;
+  reportPrompt: string;
+  selectedFile: File | null;
+  templateFileAssetKey: string;
+  videos: VideoData[];
+  videoStep: VideoStep;
+  createQuizAfterVideoSave: boolean;
+  quizTitle: string;
+  quizQuestions: QuizQuestion[];
+  quizCreationMode: "generate" | "manual" | null;
+  quizSourceType: "video" | "text";
+  quizSourceAssignmentId: string;
+  quizQuestionCount: number;
+  essayQuestions: string[];
+  templateSubjectFilter: string;
+  templateTypeFilter: AssignmentType | "all";
+  templatePrefillMessage: string | null;
+  error: string | null;
+  successMessage: string | null;
+  quizGenerateError: string | null;
+};
+
+type FormAction =
+  | { type: "RESET_FORM"; nextContentType?: AssignmentType; nextMode?: "template" | "blank"; keepClassId?: boolean; defaultClassId: string }
+  | { type: "APPLY_TEMPLATE"; template: AssignmentTemplateRow }
+  | { type: "APPLY_SUGGESTION"; title: string; description: string; nextType: AssignmentType }
+  | { type: "CHANGE_CONTENT_TYPE"; contentType: AssignmentType; preserveQuizState?: boolean }
+  | { type: "POST_VIDEO_SAVE_QUIZ_TRANSITION"; assignmentId: string }
+  | { type: "QUIZ_GENERATED"; title: string; questions: QuizQuestion[]; sourceType: "video" | "text"; sourceTitle: string; sourceAssignmentId: string }
+  | { type: "SELECT_QUIZ_MODE"; mode: "generate" | "manual" }
+  | { type: "SET_QUIZ_SOURCE_TYPE"; sourceType: "video" | "text" }
+  | { type: "SET_QUIZ_SOURCE_ASSIGNMENT"; assignmentId: string }
+  | { type: "SET_FIELD"; field: keyof FormState; value: unknown };
+
+function FORM_INITIAL_STATE(defaultClassId: string): FormState {
+  return {
+    classId: defaultClassId,
+    createMode: "template",
+    title: "",
+    description: getDefaultAssignmentInstructions("video"),
+    contentType: "video",
+    dueDate: "",
+    dueTime: "23:59",
+    includeDueTime: false,
+    linkedAssignmentId: "",
+    textContent: "",
+    resourceUrl: "",
+    reportPrompt: "",
+    selectedFile: null,
+    templateFileAssetKey: "",
+    videos: [],
+    videoStep: "search",
+    createQuizAfterVideoSave: false,
+    quizTitle: "",
+    quizQuestions: [],
+    quizCreationMode: null,
+    quizSourceType: "video",
+    quizSourceAssignmentId: "",
+    quizQuestionCount: 5,
+    essayQuestions: [""],
+    templateSubjectFilter: "all",
+    templateTypeFilter: "all",
+    templatePrefillMessage: null,
+    error: null,
+    successMessage: null,
+    quizGenerateError: null,
+  };
+}
+
+function formReducer(state: FormState, action: FormAction): FormState {
+  switch (action.type) {
+    case "RESET_FORM": {
+      const nextContentType = action.nextContentType ?? "video";
+      const initial = FORM_INITIAL_STATE(action.keepClassId ? state.classId : action.defaultClassId);
+      return {
+        ...initial,
+        createMode: action.nextMode ?? "template",
+        contentType: nextContentType,
+      };
+    }
+
+    case "APPLY_TEMPLATE": {
+      const { template } = action;
+      const nextType = template.contentType as AssignmentType;
+      const quizPayload = parseJson<QuizPayload>(template.contentRef);
+      const essayPayload = parseJson<EssayQuestionsPayload>(template.contentRef);
+      const videoPayload = parseJson<VideoPayload>(template.contentRef);
+
+      const baseState: FormState = {
+        classId: state.classId,
+        createMode: "blank",
+        contentType: nextType,
+        title: template.title,
+        description: template.description ?? getDefaultAssignmentInstructions(nextType),
+        dueDate: "",
+        dueTime: "23:59",
+        includeDueTime: false,
+        linkedAssignmentId: "",
+        textContent: nextType === "text" ? (template.contentRef ?? "") : "",
+        resourceUrl: nextType === "url" ? (template.contentRef ?? "") : "",
+        reportPrompt: nextType === "report" ? (template.contentRef ?? "") : "",
+        selectedFile: null,
+        templateFileAssetKey: nextType === "file" ? (template.contentRef ?? "") : "",
+        videos: nextType === "video" ? (videoPayload?.videos?.map((v) => ({ ...v })) ?? []) : [],
+        videoStep: nextType === "video" && videoPayload?.videos?.length ? "preview" : "search",
+        createQuizAfterVideoSave: false,
+        quizTitle: nextType === "quiz" ? (quizPayload?.title ?? `${template.title} Quiz`) : "",
+        quizQuestions: nextType === "quiz"
+          ? (quizPayload?.questions ?? []).map((q) => ({
+              ...q,
+              id: q.id ?? crypto.randomUUID(),
+            }))
+          : [],
+        quizCreationMode: nextType === "quiz" ? "manual" : null,
+        quizSourceType: "video",
+        quizSourceAssignmentId: "",
+        quizQuestionCount: 5,
+        essayQuestions: nextType === "essay_questions" && essayPayload?.questions?.length ? essayPayload.questions : [""],
+        templateSubjectFilter: state.templateSubjectFilter,
+        templateTypeFilter: state.templateTypeFilter,
+        templatePrefillMessage: `Template loaded: ${template.title}`,
+        error: null,
+        successMessage: null,
+        quizGenerateError: null,
+      };
+
+      return baseState;
+    }
+
+    case "APPLY_SUGGESTION": {
+      const initial = FORM_INITIAL_STATE(state.classId);
+      return {
+        ...initial,
+        createMode: "blank",
+        title: action.title,
+        description: action.description,
+        contentType: action.nextType,
+      };
+    }
+
+    case "CHANGE_CONTENT_TYPE": {
+      if (state.contentType === action.contentType) {
+        return state;
+      }
+
+      const nextState = {
+        ...state,
+        contentType: action.contentType,
+        error: null,
+        successMessage: null,
+        templatePrefillMessage: null,
+      };
+
+      if (action.contentType === "quiz" && !action.preserveQuizState) {
+        nextState.quizTitle = "";
+        nextState.quizQuestions = [];
+        nextState.quizCreationMode = null;
+        nextState.quizSourceType = "video";
+        nextState.quizSourceAssignmentId = "";
+        nextState.linkedAssignmentId = "";
+        nextState.quizQuestionCount = 5;
+      }
+
+      nextState.description = getDefaultAssignmentInstructions(action.contentType);
+
+      return nextState;
+    }
+
+    case "POST_VIDEO_SAVE_QUIZ_TRANSITION": {
+      return {
+        ...state,
+        contentType: "quiz",
+        description: getDefaultAssignmentInstructions("quiz"),
+        quizCreationMode: "generate",
+        quizSourceType: "video",
+        quizSourceAssignmentId: action.assignmentId,
+        linkedAssignmentId: action.assignmentId,
+        templatePrefillMessage: null,
+      };
+    }
+
+    case "QUIZ_GENERATED": {
+      return {
+        ...state,
+        contentType: "quiz",
+        quizCreationMode: "generate",
+        quizSourceAssignmentId: action.sourceAssignmentId,
+        linkedAssignmentId: action.sourceAssignmentId,
+        quizTitle: action.title,
+        quizQuestions: action.questions,
+        quizGenerateError: null,
+        successMessage: `Quiz generated from ${action.sourceType === "video" ? "video" : "reading"} content.`,
+      };
+    }
+
+    case "SELECT_QUIZ_MODE": {
+      return {
+        ...state,
+        quizCreationMode: action.mode,
+        linkedAssignmentId: "",
+        quizSourceAssignmentId: "",
+      };
+    }
+
+    case "SET_QUIZ_SOURCE_TYPE": {
+      return {
+        ...state,
+        quizSourceType: action.sourceType,
+        quizSourceAssignmentId: "",
+        linkedAssignmentId: "",
+        quizGenerateError: null,
+      };
+    }
+
+    case "SET_QUIZ_SOURCE_ASSIGNMENT": {
+      return {
+        ...state,
+        quizSourceAssignmentId: action.assignmentId,
+        linkedAssignmentId: action.assignmentId,
+        quizGenerateError: null,
+      };
+    }
+
+    case "SET_FIELD": {
+      return {
+        ...state,
+        [action.field]: action.value,
+      };
+    }
+
+    default: {
+      const _exhaustive: never = action;
+      return _exhaustive;
+    }
+  }
+}
+
 function CurriculumBuilderPage() {
   const router = useRouter();
   const data = Route.useLoaderData();
+  const { classId: initialClassId } = Route.useSearch();
 
-  const [classId, setClassId] = useState(data.classes[0]?.id ?? "");
-  const [createMode, setCreateMode] = useState<"template" | "blank">("template");
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState(getDefaultAssignmentInstructions("video"));
-  const [contentType, setContentType] = useState<AssignmentType>("video");
-  const [dueDate, setDueDate] = useState("");
-  const [dueTime, setDueTime] = useState("23:59");
-  const [includeDueTime, setIncludeDueTime] = useState(false);
-  const [linkedAssignmentId, setLinkedAssignmentId] = useState("");
-
-  const [textContent, setTextContent] = useState("");
-  const [resourceUrl, setResourceUrl] = useState("");
-  const [reportPrompt, setReportPrompt] = useState("");
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [templateFileAssetKey, setTemplateFileAssetKey] = useState("");
-  const [videos, setVideos] = useState<VideoData[]>([]);
-  const [videoStep, setVideoStep] = useState<VideoStep>("search");
-  const [createQuizAfterVideoSave, setCreateQuizAfterVideoSave] = useState(false);
-  const [quizTitle, setQuizTitle] = useState("");
-  const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([]);
-  const [quizCreationMode, setQuizCreationMode] = useState<"generate" | "manual" | null>(null);
-  const [quizSourceType, setQuizSourceType] = useState<"video" | "text">("video");
-  const [quizSourceAssignmentId, setQuizSourceAssignmentId] = useState("");
-  const [quizQuestionCount, setQuizQuestionCount] = useState(5);
-  const [essayQuestions, setEssayQuestions] = useState<string[]>([""]);
+  const [form, dispatch] = useReducer(formReducer, undefined, () =>
+    FORM_INITIAL_STATE(data.classes[0]?.id ?? "")
+  );
 
   const [drafting, setDrafting] = useState(false);
-  const [quizGenerateError, setQuizGenerateError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [templatePrefillMessage, setTemplatePrefillMessage] = useState<string | null>(null);
-  const [templateSubjectFilter, setTemplateSubjectFilter] = useState("all");
-  const [templateTypeFilter, setTemplateTypeFilter] = useState<AssignmentType | "all">("all");
   const [savingTemplateAssignmentId, setSavingTemplateAssignmentId] = useState<string | null>(null);
   const [transcriptModal, setTranscriptModal] = useState<{
     title: string;
@@ -648,6 +986,7 @@ function CurriculumBuilderPage() {
   const [deleteTarget, setDeleteTarget] = useState<AssignmentRow | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [optimisticallyDeletedAssignmentIds, setOptimisticallyDeletedAssignmentIds] = useState<Set<string>>(new Set());
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [highlightedAssignmentId, setHighlightedAssignmentId] = useState<string | null>(null);
 
@@ -667,6 +1006,12 @@ function CurriculumBuilderPage() {
   const [gradingResults, setGradingResults] = useState<Map<string, GradingResult>>(new Map());
   const [gradingErrors, setGradingErrors] = useState<Map<string, string>>(new Map());
   const [releasingSubmissionIds, setReleasingSubmissionIds] = useState<Set<string>>(new Set());
+
+  // Class filter — initialised from URL search param
+  const [filterClassId, setFilterClassId] = useState<string>(initialClassId ?? "all");
+
+  // Marking period filter
+  const [filterMarkingPeriodId, setFilterMarkingPeriodId] = useState<string>("all");
 
   const handleGradeSubmission = async (
     submissionId: string,
@@ -693,24 +1038,36 @@ function CurriculumBuilderPage() {
     if (releasingSubmissionIds.has(submissionId)) {
       return;
     }
+
+    // Optimistic UI: immediately remove from grading state
+    const previousGradingResults = new Map(gradingResults);
+    const previousGradingErrors = new Map(gradingErrors);
+
     setReleasingSubmissionIds((prev) => new Set(prev).add(submissionId));
+    setGradingResults((prev) => {
+      const next = new Map(prev);
+      next.delete(submissionId);
+      return next;
+    });
+    setGradingErrors((prev) => {
+      const next = new Map(prev);
+      next.delete(submissionId);
+      return next;
+    });
+
     try {
       await releaseSubmissionToStudent({
         data: {
           submissionId,
         },
       });
-      setGradingResults((prev) => {
-        const next = new Map(prev);
-        next.delete(submissionId);
-        return next;
-      });
-      setGradingErrors((prev) => {
-        const next = new Map(prev);
-        next.delete(submissionId);
-        return next;
-      });
       await router.invalidate();
+    } catch (error) {
+      // Revert optimistic update on failure
+      setGradingResults(previousGradingResults);
+      setGradingErrors(previousGradingErrors);
+      const message = error instanceof Error ? error.message : "Failed to release submission";
+      alert(`Could not release submission: ${message}`);
     } finally {
       setReleasingSubmissionIds((prev) => {
         const next = new Set(prev);
@@ -722,9 +1079,6 @@ function CurriculumBuilderPage() {
 
   const newAssignmentSectionRef = useRef<HTMLElement | null>(null);
   const shouldScrollQuizBuilderToTopRef = useRef(false);
-  const preserveNextDescriptionRef = useRef(false);
-  const preserveNextQuizTypeStateRef = useRef(false);
-  const previousTypeRef = useRef<AssignmentType>("video");
   const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const highlightAssignment = (assignmentId: string) => {
@@ -769,60 +1123,18 @@ function CurriculumBuilderPage() {
     };
   }, []);
 
-  const uploadInlineImage = async (file: File) => {
-    const base64 = await fileToBase64(file);
-    const uploaded = await uploadAssignmentFile({
-      data: {
-        filename: file.name,
-        mimeType: file.type || "application/octet-stream",
-        base64,
-      },
-    });
-
-    return { key: uploaded.key };
-  };
-
   const resetForm = (options?: {
     nextContentType?: AssignmentType;
     nextMode?: "template" | "blank";
     keepClassId?: boolean;
   }) => {
-    const nextContentType = options?.nextContentType ?? "video";
-    preserveNextDescriptionRef.current = false;
-    preserveNextQuizTypeStateRef.current = false;
-    previousTypeRef.current = nextContentType;
-    setCreateMode(options?.nextMode ?? "template");
-    if (!options?.keepClassId) {
-      setClassId(data.classes[0]?.id ?? "");
-    }
-    setContentType(nextContentType);
-    setTitle("");
-    setDescription(getDefaultAssignmentInstructions(nextContentType));
-    setDueDate("");
-    setDueTime("23:59");
-    setIncludeDueTime(false);
-    setLinkedAssignmentId("");
-    setTextContent("");
-    setResourceUrl("");
-    setReportPrompt("");
-    setSelectedFile(null);
-    setTemplateFileAssetKey("");
-    setVideos([]);
-    setVideoStep("search");
-    setCreateQuizAfterVideoSave(false);
-    setQuizTitle("");
-    setQuizQuestions([]);
-    setQuizCreationMode(null);
-    setQuizSourceType("video");
-    setQuizSourceAssignmentId("");
-    setQuizQuestionCount(5);
-    setEssayQuestions([""]);
-    setTemplateSubjectFilter("all");
-    setTemplateTypeFilter("all");
-    setTemplatePrefillMessage(null);
-    setError(null);
-    setQuizGenerateError(null);
-    setSuccessMessage(null);
+    dispatch({
+      type: "RESET_FORM",
+      nextContentType: options?.nextContentType,
+      nextMode: options?.nextMode,
+      keepClassId: options?.keepClassId,
+      defaultClassId: data.classes[0]?.id ?? "",
+    });
   };
 
   const applySuggestionToForm = (raw: unknown) => {
@@ -850,12 +1162,12 @@ function CurriculumBuilderPage() {
         ? (candidate.type as AssignmentType)
         : "video";
 
-    resetForm({
-      nextContentType: nextType,
-      nextMode: "blank",
+    dispatch({
+      type: "APPLY_SUGGESTION",
+      title: candidate.title,
+      description: candidate.description,
+      nextType,
     });
-    setTitle(candidate.title);
-    setDescription(candidate.description);
     setShowCreateModal(true);
   };
 
@@ -882,85 +1194,16 @@ function CurriculumBuilderPage() {
   }, []);
 
   const applyTemplateToForm = (template: AssignmentTemplateRow) => {
-    const nextType = template.contentType as AssignmentType;
-    const quizPayload = parseJson<QuizPayload>(template.contentRef);
-    const essayPayload = parseJson<EssayQuestionsPayload>(template.contentRef);
-    const videoPayload = parseJson<VideoPayload>(template.contentRef);
-
-    preserveNextDescriptionRef.current = true;
-    if (nextType === "quiz") {
-      preserveNextQuizTypeStateRef.current = true;
-    }
-
-    setCreateMode("blank");
-    setContentType(nextType);
-    setTitle(template.title);
-    setDescription(template.description ?? getDefaultAssignmentInstructions(nextType));
-    setDueDate("");
-    setDueTime("23:59");
-    setIncludeDueTime(false);
-    setLinkedAssignmentId("");
-    setTextContent("");
-    setResourceUrl("");
-    setReportPrompt("");
-    setSelectedFile(null);
-    setTemplateFileAssetKey("");
-    setVideos([]);
-    setVideoStep("search");
-    setCreateQuizAfterVideoSave(false);
-    setQuizTitle("");
-    setQuizQuestions([]);
-    setQuizCreationMode(null);
-    setQuizSourceType("video");
-    setQuizSourceAssignmentId("");
-    setQuizQuestionCount(5);
-    setEssayQuestions([""]);
-    setError(null);
-    setQuizGenerateError(null);
-    setSuccessMessage(null);
-    setTemplatePrefillMessage(`Template loaded: ${template.title}`);
-
-    if (nextType === "text") {
-      setTextContent(template.contentRef ?? "");
-    }
-
-    if (nextType === "url") {
-      setResourceUrl(template.contentRef ?? "");
-    }
-
-    if (nextType === "report") {
-      setReportPrompt(template.contentRef ?? "");
-    }
-
-    if (nextType === "file") {
-      setTemplateFileAssetKey(template.contentRef ?? "");
-    }
-
-    if (nextType === "video") {
-      setVideos(videoPayload?.videos?.map((video) => ({ ...video })) ?? []);
-      setVideoStep(videoPayload?.videos?.length ? "preview" : "search");
-    }
-
-    if (nextType === "quiz") {
-      setQuizCreationMode("manual");
-      setQuizTitle(quizPayload?.title ?? `${template.title} Quiz`);
-      setQuizQuestions(
-        (quizPayload?.questions ?? []).map((question) => ({
-          ...question,
-          id: question.id ?? crypto.randomUUID(),
-        })),
-      );
-    }
-
-    if (nextType === "essay_questions") {
-      setEssayQuestions(essayPayload?.questions?.length ? essayPayload.questions : [""]);
-    }
+    dispatch({
+      type: "APPLY_TEMPLATE",
+      template,
+    });
   };
 
   const handleSaveAsTemplate = async (assignmentId: string, assignmentTitle: string) => {
     setSavingTemplateAssignmentId(assignmentId);
-    setError(null);
-    setSuccessMessage(null);
+    dispatch({ type: "SET_FIELD", field: "error", value: null });
+    dispatch({ type: "SET_FIELD", field: "successMessage", value: null });
 
     try {
       await saveAssignmentAsTemplate({
@@ -970,43 +1213,24 @@ function CurriculumBuilderPage() {
         },
       });
       await router.invalidate();
-      setSuccessMessage(`Saved "${assignmentTitle}" as a template.`);
+      dispatch({
+        type: "SET_FIELD",
+        field: "successMessage",
+        value: `Saved "${assignmentTitle}" as a template.`,
+      });
     } catch {
-      setError("Could not save that assignment as a template.");
+      dispatch({
+        type: "SET_FIELD",
+        field: "error",
+        value: "Could not save that assignment as a template.",
+      });
     } finally {
       setSavingTemplateAssignmentId(null);
     }
   };
 
   useEffect(() => {
-    const previousType = previousTypeRef.current;
-    if (previousType === contentType) return;
-
-    if (preserveNextDescriptionRef.current) {
-      preserveNextDescriptionRef.current = false;
-    } else {
-      setDescription(getDefaultAssignmentInstructions(contentType));
-    }
-
-    if (contentType === "quiz") {
-      if (preserveNextQuizTypeStateRef.current) {
-        preserveNextQuizTypeStateRef.current = false;
-      } else {
-        setQuizTitle("");
-        setQuizQuestions([]);
-        setQuizCreationMode(null);
-        setQuizSourceType("video");
-        setQuizSourceAssignmentId("");
-        setLinkedAssignmentId("");
-        setQuizQuestionCount(5);
-      }
-    }
-
-    previousTypeRef.current = contentType;
-  }, [contentType]);
-
-  useEffect(() => {
-    if (contentType !== "quiz") return;
+    if (form.contentType !== "quiz") return;
     if (!shouldScrollQuizBuilderToTopRef.current) return;
 
     const node = newAssignmentSectionRef.current;
@@ -1018,144 +1242,141 @@ function CurriculumBuilderPage() {
       behavior: "smooth",
     });
     shouldScrollQuizBuilderToTopRef.current = false;
-  }, [contentType]);
+  }, [form.contentType]);
 
   const submitAssignment = async () => {
-    if (!classId || !title.trim()) {
-      setError("Class and title are required.");
+    if (!form.classId || !form.title.trim()) {
+      dispatch({ type: "SET_FIELD", field: "error", value: "Class and title are required." });
       return;
     }
 
     let contentRef: string | undefined;
 
-    if (contentType === "text") {
-      if (!hasRichTextContent(textContent)) { setError("Reading text is required."); return; }
-      contentRef = textContent.trim();
+    if (form.contentType === "text") {
+      if (!hasRichTextContent(form.textContent)) { dispatch({ type: "SET_FIELD", field: "error", value: "Reading text is required." }); return; }
+      contentRef = form.textContent.trim();
     }
 
-    if (contentType === "url") {
-      if (!resourceUrl.trim()) { setError("A URL is required."); return; }
+    if (form.contentType === "url") {
+      if (!form.resourceUrl.trim()) { dispatch({ type: "SET_FIELD", field: "error", value: "A URL is required." }); return; }
       try {
-        contentRef = new URL(resourceUrl.trim()).toString();
+        contentRef = new URL(form.resourceUrl.trim()).toString();
       } catch {
-        setError("Please enter a valid URL.");
+        dispatch({ type: "SET_FIELD", field: "error", value: "Please enter a valid URL." });
         return;
       }
     }
 
-    if (contentType === "report") {
-      if (!hasRichTextContent(reportPrompt)) { setError("Report instructions are required."); return; }
-      contentRef = reportPrompt.trim();
+    if (form.contentType === "report") {
+      if (!hasRichTextContent(form.reportPrompt)) { dispatch({ type: "SET_FIELD", field: "error", value: "Report instructions are required." }); return; }
+      contentRef = form.reportPrompt.trim();
     }
 
-    if (contentType === "file") {
-      if (selectedFile) {
+    if (form.contentType === "file") {
+      if (form.selectedFile) {
         try {
-          const base64 = await fileToBase64(selectedFile);
+          const base64 = await fileToBase64(form.selectedFile);
           const uploaded = await uploadAssignmentFile({
             data: {
-              filename: selectedFile.name,
-              mimeType: selectedFile.type || "application/octet-stream",
+              filename: form.selectedFile.name,
+              mimeType: form.selectedFile.type || "application/octet-stream",
               base64,
             },
           });
           contentRef = uploaded.key;
         } catch {
-          setError("Could not upload file. Please try again.");
+          dispatch({ type: "SET_FIELD", field: "error", value: "Could not upload file. Please try again." });
           return;
         }
-      } else if (templateFileAssetKey) {
-        contentRef = templateFileAssetKey;
+      } else if (form.templateFileAssetKey) {
+        contentRef = form.templateFileAssetKey;
       } else {
-        setError("Choose a file to upload.");
+        dispatch({ type: "SET_FIELD", field: "error", value: "Choose a file to upload." });
         return;
       }
     }
 
-    if (contentType === "video") {
-      if (videos.length === 0) { setError("Add one YouTube video."); return; }
-      contentRef = JSON.stringify({ videos: [videos[0]] });
+    if (form.contentType === "video") {
+      if (form.videos.length === 0) { dispatch({ type: "SET_FIELD", field: "error", value: "Add one YouTube video." }); return; }
+      contentRef = JSON.stringify({ videos: [form.videos[0]] });
     }
 
-    if (contentType === "quiz") {
-      if (quizCreationMode === "generate") {
-        if (!linkedAssignmentId) {
-          setError("Generate the quiz from a saved video transcript or reading assignment first.");
+    if (form.contentType === "quiz") {
+      if (form.quizCreationMode === "generate") {
+        if (!form.linkedAssignmentId) {
+          dispatch({ type: "SET_FIELD", field: "error", value: "Generate the quiz from a saved video transcript or reading assignment first." });
           return;
         }
-        if (quizQuestions.length === 0) { setError("Generate quiz questions first."); return; }
-      } else if (quizCreationMode === "manual") {
-        if (quizQuestions.length === 0) { setError("Add at least one quiz question."); return; }
+        if (form.quizQuestions.length === 0) { dispatch({ type: "SET_FIELD", field: "error", value: "Generate quiz questions first." }); return; }
+      } else if (form.quizCreationMode === "manual") {
+        if (form.quizQuestions.length === 0) { dispatch({ type: "SET_FIELD", field: "error", value: "Add at least one quiz question." }); return; }
       } else {
-        setError("Choose whether to generate quiz questions or create them manually.");
+        dispatch({ type: "SET_FIELD", field: "error", value: "Choose whether to generate quiz questions or create them manually." });
         return;
       }
       contentRef = JSON.stringify({
-        title: quizTitle.trim() || `${title.trim()} Quiz`,
-        questions: quizQuestions,
+        title: form.quizTitle.trim() || `${form.title.trim()} Quiz`,
+        questions: form.quizQuestions,
       });
     }
 
-    if (contentType === "essay_questions") {
-      const filtered = essayQuestions.filter((q) => q.trim());
-      if (filtered.length === 0) { setError("Add at least one question."); return; }
+    if (form.contentType === "essay_questions") {
+      const filtered = form.essayQuestions.filter((q) => q.trim());
+      if (filtered.length === 0) { dispatch({ type: "SET_FIELD", field: "error", value: "Add at least one question." }); return; }
       contentRef = JSON.stringify({ questions: filtered });
     }
 
     setSaving(true);
-    setError(null);
-    setSuccessMessage(null);
+    dispatch({ type: "SET_FIELD", field: "error", value: null });
+    dispatch({ type: "SET_FIELD", field: "successMessage", value: null });
 
     try {
-      const dueAt = buildDueAt({ dueDate, dueTime, includeDueTime });
+      const dueAt = buildDueAt({ dueDate: form.dueDate, dueTime: form.dueTime, includeDueTime: form.includeDueTime });
       const created = await createAssignmentRecord({
         data: {
-          classId,
-          title: title.trim(),
-          description: description.trim() || undefined,
-          contentType,
+          classId: form.classId,
+          title: form.title.trim(),
+          description: form.description.trim() || undefined,
+          contentType: form.contentType,
           contentRef,
-          linkedAssignmentId: linkedAssignmentId || undefined,
+          linkedAssignmentId: form.linkedAssignmentId || undefined,
           dueAt,
         },
       });
       resetForm({
-        nextContentType: contentType,
-        nextMode: createQuizAfterVideoSave && contentType === "video" ? "blank" : "template",
+        nextContentType: form.contentType,
+        nextMode: form.createQuizAfterVideoSave && form.contentType === "video" ? "blank" : "template",
         keepClassId: true,
       });
       await router.invalidate();
-      if (contentType === "video") {
-        setSuccessMessage(
-          created.transcriptCached
+      if (form.contentType === "video") {
+        dispatch({
+          type: "SET_FIELD",
+          field: "successMessage",
+          value: created.transcriptCached
             ? "Video saved. Transcript was also saved and is ready for quiz generation."
             : `Video saved. Transcript could not be saved (${created.transcriptStatus ?? "unavailable"}).`,
-        );
-        if (createQuizAfterVideoSave) {
+        });
+        if (form.createQuizAfterVideoSave) {
           shouldScrollQuizBuilderToTopRef.current = true;
-          preserveNextDescriptionRef.current = true;
-          preserveNextQuizTypeStateRef.current = true;
-          setTemplatePrefillMessage(null);
-          setContentType("quiz");
-          setDescription(getDefaultAssignmentInstructions("quiz"));
-          setQuizCreationMode("generate");
-          setQuizSourceType("video");
-          setQuizSourceAssignmentId(created.assignmentId);
-          setLinkedAssignmentId(created.assignmentId);
+          dispatch({
+            type: "POST_VIDEO_SAVE_QUIZ_TRANSITION",
+            assignmentId: created.assignmentId,
+          });
         }
       } else {
-        setSuccessMessage("Assignment created.");
+        dispatch({ type: "SET_FIELD", field: "successMessage", value: "Assignment created." });
       }
     } catch {
-      setError("Unable to save assignment right now.");
+      dispatch({ type: "SET_FIELD", field: "error", value: "Unable to save assignment right now." });
     } finally {
       setSaving(false);
     }
   };
 
-  const classAssignments = data.assignments.filter((assignment) => assignment.classId === classId);
+  const classAssignments = data.assignments.filter((assignment) => assignment.classId === form.classId);
   const quizSourceCandidates = classAssignments.filter((assignment) =>
-    quizSourceType === "video"
+    form.quizSourceType === "video"
       ? assignment.contentType === "video" && hasSavedVideoTranscript(assignment)
       : isReadingSourceAssignment(assignment),
   );
@@ -1163,28 +1384,28 @@ function CurriculumBuilderPage() {
     new Set(data.templates.map((template) => getTemplatePrimarySubject(template))),
   ).sort((left, right) => left.localeCompare(right));
   const filteredTemplates = data.templates.filter((template) => {
-    if (templateSubjectFilter !== "all" && getTemplatePrimarySubject(template) !== templateSubjectFilter) {
+    if (form.templateSubjectFilter !== "all" && getTemplatePrimarySubject(template) !== form.templateSubjectFilter) {
       return false;
     }
-    if (templateTypeFilter !== "all" && template.contentType !== templateTypeFilter) {
+    if (form.templateTypeFilter !== "all" && template.contentType !== form.templateTypeFilter) {
       return false;
     }
     return true;
   });
 
   const generateDraftFromLinkedContent = async () => {
-    if (!quizSourceAssignmentId) {
-      setQuizGenerateError("Choose a source assignment first.");
+    if (!form.quizSourceAssignmentId) {
+      dispatch({ type: "SET_FIELD", field: "quizGenerateError", value: "Choose a source assignment first." });
       return;
     }
 
     setDrafting(true);
-    setQuizGenerateError(null);
+    dispatch({ type: "SET_FIELD", field: "quizGenerateError", value: null });
     try {
       const result = await generateQuizFromLinkedAssignment({
         data: {
-          assignmentId: quizSourceAssignmentId,
-          questionCount: quizQuestionCount,
+          assignmentId: form.quizSourceAssignmentId,
+          questionCount: form.quizQuestionCount,
         },
       });
       const questions: QuizQuestion[] = result.quiz.questions.map((q) => ({
@@ -1199,18 +1420,17 @@ function CurriculumBuilderPage() {
         answerIndex: Math.min(q.answerIndex, 3),
         explanation: q.explanation,
       }));
-      preserveNextQuizTypeStateRef.current = true;
-      setContentType("quiz");
-      setQuizCreationMode("generate");
-      setQuizSourceAssignmentId(quizSourceAssignmentId);
-      setLinkedAssignmentId(quizSourceAssignmentId);
-      setQuizTitle(`${result.sourceTitle} Quiz`);
-      setQuizQuestions(questions);
-      setQuizGenerateError(null);
-      setSuccessMessage(`Quiz generated from ${result.sourceType === "video" ? "video" : "reading"} content.`);
+      dispatch({
+        type: "QUIZ_GENERATED",
+        title: `${result.sourceTitle} Quiz`,
+        questions,
+        sourceType: result.sourceType === "video" ? "video" : "text",
+        sourceTitle: result.sourceTitle,
+        sourceAssignmentId: form.quizSourceAssignmentId,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
-      setQuizGenerateError(getQuizGenerationErrorMessage(message));
+      dispatch({ type: "SET_FIELD", field: "quizGenerateError", value: getQuizGenerationErrorMessage(message) });
     } finally {
       setDrafting(false);
     }
@@ -1237,7 +1457,11 @@ function CurriculumBuilderPage() {
       setQuickClassId(data.classes[0]?.id ?? "");
       setQuickType("video");
       await router.invalidate();
-      setSuccessMessage("Assignment created. Edit it to add content.");
+      dispatch({
+        type: "SET_FIELD",
+        field: "successMessage",
+        value: "Assignment created. Edit it to add content.",
+      });
     } catch {
       setQuickError("Could not create assignment. Please try again.");
     } finally {
@@ -1246,11 +1470,18 @@ function CurriculumBuilderPage() {
   };
 
   // Build grouped view: video assignments with their linked children
-  const videoAssignments = data.assignments.filter((a) => a.contentType === "video");
+  // Filter out optimistically deleted assignments and apply marking period filter
+  const visibleAssignments = data.assignments.filter((a) => {
+    if (optimisticallyDeletedAssignmentIds.has(a.id)) return false;
+    if (filterClassId !== "all" && a.classId !== filterClassId) return false;
+    if (filterMarkingPeriodId !== "all" && a.markingPeriodId !== filterMarkingPeriodId) return false;
+    return true;
+  });
+  const videoAssignments = visibleAssignments.filter((a) => a.contentType === "video");
   const linkedIds = new Set(
-    data.assignments.flatMap((a) => (a.linkedAssignmentId ? [a.linkedAssignmentId] : [])),
+    visibleAssignments.flatMap((a) => (a.linkedAssignmentId ? [a.linkedAssignmentId] : [])),
   );
-  const standaloneAssignments = data.assignments.filter(
+  const standaloneAssignments = visibleAssignments.filter(
     (a) => a.contentType !== "video" && !linkedIds.has(a.id),
   );
 
@@ -1269,57 +1500,70 @@ function CurriculumBuilderPage() {
   const handleDeleteAssignment = async (pin: string) => {
     if (!deleteTarget) return;
 
+    // Optimistic UI: immediately hide the assignment
+    const deletedAssignmentId = deleteTarget.id;
+    setOptimisticallyDeletedAssignmentIds((prev) => new Set(prev).add(deletedAssignmentId));
+
     setDeleteLoading(true);
     setDeleteError(null);
+
     try {
       await deleteAssignmentRecord({
         data: {
-          id: deleteTarget.id,
+          id: deletedAssignmentId,
           parentPin: pin,
         },
       });
-      if (editingAssignment?.id === deleteTarget.id) {
+      if (editingAssignment?.id === deletedAssignmentId) {
         setEditingAssignment(null);
       }
       setDeleteTarget(null);
-      setSuccessMessage(`Assignment deleted: ${deleteTarget.title}`);
+      dispatch({ type: "SET_FIELD", field: "successMessage", value: `Assignment deleted: ${deleteTarget.title}` });
       await router.invalidate();
     } catch (error) {
+      // Revert optimistic deletion on failure
+      setOptimisticallyDeletedAssignmentIds((prev) => {
+        const next = new Set(prev);
+        next.delete(deletedAssignmentId);
+        return next;
+      });
       const message = error instanceof Error ? error.message : "";
-      setDeleteError(
-        message.includes("INVALID_PIN") || message.includes("FORBIDDEN")
+      dispatch({
+        type: "SET_FIELD",
+        field: "error",
+        value: message.includes("INVALID_PIN") || message.includes("FORBIDDEN")
           ? "Incorrect PIN. Please try again."
           : `Could not delete the assignment${message ? ` (${message})` : "."}`,
-      );
+      });
     } finally {
       setDeleteLoading(false);
     }
   };
 
   const renderTypeSpecificFields = () => {
-    if (contentType === "text") {
+    if (form.contentType === "text") {
       return (
         <div className="block space-y-2 md:col-span-2">
           <span className="text-sm font-medium text-slate-700">Reading Text</span>
           <RichTextEditor
-            value={textContent}
-            onChange={setTextContent}
+            value={form.textContent}
+            onChange={(value) => dispatch({ type: "SET_FIELD", field: "textContent", value })}
             disabled={saving}
             placeholder="Paste the passage or instructions students should read."
-            documentName={title || "reading-assignment"}
-            onUploadImage={(file) => uploadInlineImage(file)}
+            documentName={form.title || "reading-assignment"}
+            onUploadImage={(file) => uploadInlineImageUtil(file)}
           />
         </div>
       );
     }
 
-    if (contentType === "url") {
+    if (form.contentType === "url") {
       return (
         <label className="block space-y-2 md:col-span-2">
           <span className="text-sm font-medium text-slate-700">Learning URL</span>
           <input
-            value={resourceUrl}
-            onChange={(e) => setResourceUrl(e.target.value)}
+            value={form.resourceUrl}
+            onChange={(e) => dispatch({ type: "SET_FIELD", field: "resourceUrl", value: e.target.value })}
             className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
             placeholder="https://www.example.com/lesson"
           />
@@ -1327,23 +1571,23 @@ function CurriculumBuilderPage() {
       );
     }
 
-    if (contentType === "report") {
+    if (form.contentType === "report") {
       return (
         <div className="block space-y-2 md:col-span-2">
           <span className="text-sm font-medium text-slate-700">Report Instructions & Rubric</span>
           <RichTextEditor
-            value={reportPrompt}
-            onChange={setReportPrompt}
+            value={form.reportPrompt}
+            onChange={(value) => dispatch({ type: "SET_FIELD", field: "reportPrompt", value })}
             disabled={saving}
             placeholder="Describe the assignment, expectations, length, and grading criteria."
-            documentName={title || "report-assignment"}
-            onUploadImage={(file) => uploadInlineImage(file)}
+            documentName={form.title || "report-assignment"}
+            onUploadImage={(file) => uploadInlineImageUtil(file)}
           />
         </div>
       );
     }
 
-    if (contentType === "essay_questions") {
+    if (form.contentType === "essay_questions") {
       return (
         <div className="space-y-3 md:col-span-2">
           <div className="flex items-center justify-between">
@@ -1352,22 +1596,22 @@ function CurriculumBuilderPage() {
               Short structured prompts — student answers each in writing.
             </p>
           </div>
-          {essayQuestions.map((q, i) => (
+          {form.essayQuestions.map((q, i) => (
             <div key={i} className="flex gap-2">
               <input
                 value={q}
                 onChange={(e) => {
-                  const next = [...essayQuestions];
+                  const next = [...form.essayQuestions];
                   next[i] = e.target.value;
-                  setEssayQuestions(next);
+                  dispatch({ type: "SET_FIELD", field: "essayQuestions", value: next });
                 }}
                 className="flex-1 rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
                 placeholder={`Question ${i + 1}…`}
               />
-              {essayQuestions.length > 1 ? (
+              {form.essayQuestions.length > 1 ? (
                 <button
                   type="button"
-                  onClick={() => setEssayQuestions(essayQuestions.filter((_, j) => j !== i))}
+                  onClick={() => dispatch({ type: "SET_FIELD", field: "essayQuestions", value: form.essayQuestions.filter((_, j) => j !== i) })}
                   className="text-xs text-rose-600 hover:text-rose-800"
                 >
                   Remove
@@ -1377,7 +1621,7 @@ function CurriculumBuilderPage() {
           ))}
           <button
             type="button"
-            onClick={() => setEssayQuestions([...essayQuestions, ""])}
+            onClick={() => dispatch({ type: "SET_FIELD", field: "essayQuestions", value: [...form.essayQuestions, ""] })}
             className="text-xs font-medium text-cyan-700 hover:text-cyan-800"
           >
             + Add Question
@@ -1389,23 +1633,23 @@ function CurriculumBuilderPage() {
       );
     }
 
-    if (contentType === "file") {
+    if (form.contentType === "file") {
       return (
         <label className="block space-y-2 md:col-span-2">
           <span className="text-sm font-medium text-slate-700">Attach File</span>
           <input
             type="file"
             onChange={(e) => {
-              setSelectedFile(e.target.files?.[0] ?? null);
+              dispatch({ type: "SET_FIELD", field: "selectedFile", value: e.target.files?.[0] ?? null });
               if (e.target.files?.[0]) {
-                setTemplateFileAssetKey("");
+                dispatch({ type: "SET_FIELD", field: "templateFileAssetKey", value: "" });
               }
             }}
             className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
           />
-          {selectedFile ? (
-            <p className="text-xs text-slate-500">Selected: {selectedFile.name}</p>
-          ) : templateFileAssetKey ? (
+          {form.selectedFile ? (
+            <p className="text-xs text-slate-500">Selected: {form.selectedFile.name}</p>
+          ) : form.templateFileAssetKey ? (
             <p className="text-xs text-slate-500">
               Using the file already stored in this template. Upload a new file to replace it.
             </p>
@@ -1416,44 +1660,44 @@ function CurriculumBuilderPage() {
       );
     }
 
-    if (contentType === "video") {
-      const selectedVideo = videos[0];
+    if (form.contentType === "video") {
+      const selectedVideo = form.videos[0];
       return (
         <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
           <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-slate-700">Video Builder</h3>
 
           {/* Step indicator */}
           <div className="mt-3 flex items-center gap-2 text-sm">
-            <span className={videoStep === "search" ? "font-semibold text-cyan-600" : "text-slate-400"}>
+            <span className={form.videoStep === "search" ? "font-semibold text-cyan-600" : "text-slate-400"}>
               1 Search
             </span>
             <span className="text-slate-300">→</span>
-            <span className={videoStep === "preview" ? "font-semibold text-cyan-600" : "text-slate-400"}>
+            <span className={form.videoStep === "preview" ? "font-semibold text-cyan-600" : "text-slate-400"}>
               2 Preview
             </span>
             <span className="text-slate-300">→</span>
-            <span className={videoStep === "confirm" ? "font-semibold text-cyan-600" : "text-slate-400"}>
+            <span className={form.videoStep === "confirm" ? "font-semibold text-cyan-600" : "text-slate-400"}>
               3 Save
             </span>
           </div>
 
           <div className="mt-4">
-            {videoStep === "search" ? (
+            {form.videoStep === "search" ? (
               <VideoSearch
-                videos={videos}
+                videos={form.videos}
                 onVideosChange={(nextVideos) => {
-                  setVideos(nextVideos);
+                  dispatch({ type: "SET_FIELD", field: "videos", value: nextVideos });
                   if (nextVideos.length > 0) {
-                    setVideoStep("preview");
+                    dispatch({ type: "SET_FIELD", field: "videoStep", value: "preview" });
                   }
                 }}
                 disabled={saving}
-                gradeLevel={data.classes.find((c) => c.id === classId)?.title}
+                gradeLevel={data.classes.find((c) => c.id === form.classId)?.title}
                 enableQuizGeneration={false}
               />
             ) : null}
 
-            {videoStep === "preview" && selectedVideo ? (
+            {form.videoStep === "preview" && selectedVideo ? (
               <div className="space-y-3">
                 <div
                   className="relative w-full overflow-hidden rounded-xl bg-black"
@@ -1476,8 +1720,8 @@ function CurriculumBuilderPage() {
                   <button
                     type="button"
                     onClick={() => {
-                      setVideos([]);
-                      setVideoStep("search");
+                      dispatch({ type: "SET_FIELD", field: "videos", value: [] });
+                      dispatch({ type: "SET_FIELD", field: "videoStep", value: "search" });
                     }}
                     className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
                   >
@@ -1485,7 +1729,7 @@ function CurriculumBuilderPage() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setVideoStep("confirm")}
+                    onClick={() => dispatch({ type: "SET_FIELD", field: "videoStep", value: "confirm" })}
                     className="rounded-xl bg-cyan-600 px-3 py-2 text-sm font-medium text-white hover:bg-cyan-700"
                   >
                     Looks good →
@@ -1494,13 +1738,13 @@ function CurriculumBuilderPage() {
               </div>
             ) : null}
 
-            {videoStep === "confirm" ? (
+            {form.videoStep === "confirm" ? (
               <div className="space-y-3">
                 <label className="inline-flex items-center gap-2 text-sm text-slate-700">
                   <input
                     type="checkbox"
-                    checked={createQuizAfterVideoSave}
-                    onChange={(e) => setCreateQuizAfterVideoSave(e.target.checked)}
+                    checked={form.createQuizAfterVideoSave}
+                    onChange={(e) => dispatch({ type: "SET_FIELD", field: "createQuizAfterVideoSave", value: e.target.checked })}
                     className="h-4 w-4 rounded border-slate-300"
                   />
                   Create quiz after saving this video
@@ -1511,7 +1755,7 @@ function CurriculumBuilderPage() {
                 <p className="text-xs text-slate-500">
                   If transcript saving fails, we will note it after save so you can retry with another video.
                 </p>
-                {createQuizAfterVideoSave ? (
+                {form.createQuizAfterVideoSave ? (
                   <div className="rounded-xl border border-dashed border-cyan-300 bg-cyan-50/60 px-4 py-3">
                     <p className="text-sm font-medium text-cyan-900">Next Step: Quiz Builder</p>
                     <p className="text-xs text-cyan-800">
@@ -1522,7 +1766,7 @@ function CurriculumBuilderPage() {
                 <div className="pt-1">
                   <button
                     type="button"
-                    onClick={() => setVideoStep("preview")}
+                    onClick={() => dispatch({ type: "SET_FIELD", field: "videoStep", value: "preview" })}
                     className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
                   >
                     ← Back
@@ -1535,8 +1779,8 @@ function CurriculumBuilderPage() {
       );
     }
 
-    if (contentType === "quiz") {
-      const selectedQuizSource = classAssignments.find((assignment) => assignment.id === quizSourceAssignmentId);
+    if (form.contentType === "quiz") {
+      const selectedQuizSource = classAssignments.find((assignment) => assignment.id === form.quizSourceAssignmentId);
       return (
         <>
           <div className="md:col-span-2 rounded-2xl border bg-slate-50/80 p-4">
@@ -1544,14 +1788,9 @@ function CurriculumBuilderPage() {
             <div className="grid gap-3 sm:grid-cols-2">
               <button
                 type="button"
-                onClick={() => {
-                  setQuizCreationMode("generate");
-                  setQuizSourceAssignmentId("");
-                  setLinkedAssignmentId("");
-                  setQuizQuestions([]);
-                }}
+                onClick={() => dispatch({ type: "SELECT_QUIZ_MODE", mode: "generate" })}
                 className={`rounded-2xl border p-4 text-left transition ${
-                  quizCreationMode === "generate"
+                  form.quizCreationMode === "generate"
                     ? "border-cyan-500 bg-cyan-50"
                     : "border-slate-200 bg-white hover:border-cyan-300"
                 }`}
@@ -1563,13 +1802,9 @@ function CurriculumBuilderPage() {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setQuizCreationMode("manual");
-                  setLinkedAssignmentId("");
-                  setQuizSourceAssignmentId("");
-                }}
+                onClick={() => dispatch({ type: "SELECT_QUIZ_MODE", mode: "manual" })}
                 className={`rounded-2xl border p-4 text-left transition ${
-                  quizCreationMode === "manual"
+                  form.quizCreationMode === "manual"
                     ? "border-cyan-500 bg-cyan-50"
                     : "border-slate-200 bg-white hover:border-cyan-300"
                 }`}
@@ -1581,7 +1816,7 @@ function CurriculumBuilderPage() {
               </button>
             </div>
 
-            {quizCreationMode === "generate" ? (
+            {form.quizCreationMode === "generate" ? (
               <div className="mt-4 space-y-4">
                 {/* Source type toggle */}
                 <div>
@@ -1589,14 +1824,9 @@ function CurriculumBuilderPage() {
                   <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
-                      onClick={() => {
-                        setQuizSourceType("video");
-                        setQuizSourceAssignmentId("");
-                        setLinkedAssignmentId("");
-                        setQuizGenerateError(null);
-                      }}
+                      onClick={() => dispatch({ type: "SET_QUIZ_SOURCE_TYPE", sourceType: "video" })}
                       className={`rounded-xl border px-3 py-2 text-sm font-medium ${
-                        quizSourceType === "video"
+                        form.quizSourceType === "video"
                           ? "border-cyan-500 bg-cyan-50 text-cyan-800"
                           : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
                       }`}
@@ -1605,14 +1835,9 @@ function CurriculumBuilderPage() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        setQuizSourceType("text");
-                        setQuizSourceAssignmentId("");
-                        setLinkedAssignmentId("");
-                        setQuizGenerateError(null);
-                      }}
+                      onClick={() => dispatch({ type: "SET_QUIZ_SOURCE_TYPE", sourceType: "text" })}
                       className={`rounded-xl border px-3 py-2 text-sm font-medium ${
-                        quizSourceType === "text"
+                        form.quizSourceType === "text"
                           ? "border-cyan-500 bg-cyan-50 text-cyan-800"
                           : "border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
                       }`}
@@ -1627,7 +1852,7 @@ function CurriculumBuilderPage() {
 
                 {/* Source assignment select — collapses to chip once selected */}
                 <div>
-                  {quizSourceAssignmentId && selectedQuizSource ? (
+                  {form.quizSourceAssignmentId && selectedQuizSource ? (
                     <div className="flex items-center gap-2">
                       <span className="rounded-full border border-cyan-200 bg-cyan-50 px-3 py-1 text-xs font-medium text-cyan-800">
                         Source: {selectedQuizSource.title}
@@ -1635,9 +1860,9 @@ function CurriculumBuilderPage() {
                       <button
                         type="button"
                         onClick={() => {
-                          setQuizSourceAssignmentId("");
-                          setLinkedAssignmentId("");
-                          setQuizGenerateError(null);
+                          dispatch({ type: "SET_FIELD", field: "quizSourceAssignmentId", value: "" });
+                          dispatch({ type: "SET_FIELD", field: "linkedAssignmentId", value: "" });
+                          dispatch({ type: "SET_FIELD", field: "quizGenerateError", value: null });
                         }}
                         className="text-xs text-slate-500 hover:text-slate-700 underline"
                       >
@@ -1647,15 +1872,11 @@ function CurriculumBuilderPage() {
                   ) : (
                     <label className="block space-y-2">
                       <span className="text-sm font-medium text-slate-700">
-                        {quizSourceType === "video" ? "Saved Video Assignment" : "Reading Assignment"}
+                        {form.quizSourceType === "video" ? "Saved Video Assignment" : "Reading Assignment"}
                       </span>
                       <select
-                        value={quizSourceAssignmentId}
-                        onChange={(e) => {
-                          setQuizSourceAssignmentId(e.target.value);
-                          setLinkedAssignmentId(e.target.value);
-                          setQuizGenerateError(null);
-                        }}
+                        value={form.quizSourceAssignmentId}
+                        onChange={(e) => dispatch({ type: "SET_QUIZ_SOURCE_ASSIGNMENT", assignmentId: e.target.value })}
                         className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
                       >
                         <option value="">Select source...</option>
@@ -1667,7 +1888,7 @@ function CurriculumBuilderPage() {
                       </select>
                       {quizSourceCandidates.length === 0 ? (
                         <p className="text-xs text-slate-500">
-                          {quizSourceType === "video"
+                          {form.quizSourceType === "video"
                             ? "No saved video assignments with transcript in this class yet."
                             : "No reading assignments with saved reading text in this class yet."}
                         </p>
@@ -1681,10 +1902,10 @@ function CurriculumBuilderPage() {
                   <label className="block space-y-2">
                     <span className="text-sm font-medium text-slate-700">Number of Questions</span>
                     <select
-                      value={String(quizQuestionCount)}
+                      value={String(form.quizQuestionCount)}
                       onChange={(e) => {
-                        setQuizQuestionCount(Number(e.target.value));
-                        setQuizGenerateError(null);
+                        dispatch({ type: "SET_FIELD", field: "quizQuestionCount", value: Number(e.target.value) });
+                        dispatch({ type: "SET_FIELD", field: "quizGenerateError", value: null });
                       }}
                       className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
                     >
@@ -1698,7 +1919,7 @@ function CurriculumBuilderPage() {
                   <div className="flex flex-wrap items-center gap-3">
                     <button
                       type="button"
-                      disabled={drafting || !quizSourceAssignmentId}
+                      disabled={drafting || !form.quizSourceAssignmentId}
                       onClick={() => void generateDraftFromLinkedContent()}
                       className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60"
                     >
@@ -1708,14 +1929,14 @@ function CurriculumBuilderPage() {
                       Questions will be built from the stored source content.
                     </p>
                   </div>
-                  {quizGenerateError ? (
-                    <p className="text-xs font-medium text-rose-700">{quizGenerateError}</p>
+                  {form.quizGenerateError ? (
+                    <p className="text-xs font-medium text-rose-700">{form.quizGenerateError}</p>
                   ) : null}
                 </div>
               </div>
             ) : null}
 
-            {quizCreationMode === "manual" ? (
+            {form.quizCreationMode === "manual" ? (
               <div className="mt-4 rounded-xl border border-dashed border-slate-300 bg-white px-4 py-3">
                 <p className="text-sm font-medium text-slate-900">Manual mode selected</p>
                 <p className="mt-1 text-xs text-slate-600">
@@ -1728,8 +1949,8 @@ function CurriculumBuilderPage() {
           <label className="block space-y-2 md:col-span-2">
             <span className="text-sm font-medium text-slate-700">Quiz Title</span>
             <input
-              value={quizTitle}
-              onChange={(e) => setQuizTitle(e.target.value)}
+              value={form.quizTitle}
+              onChange={(e) => dispatch({ type: "SET_FIELD", field: "quizTitle", value: e.target.value })}
               className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
               placeholder="Weekly Science Check-in"
             />
@@ -1740,7 +1961,7 @@ function CurriculumBuilderPage() {
               Quiz Questions
             </h3>
             <div className="mt-3">
-              <QuizBuilder questions={quizQuestions} onChange={setQuizQuestions} disabled={saving} />
+              <QuizBuilder questions={form.quizQuestions} onChange={(questions) => dispatch({ type: "SET_FIELD", field: "quizQuestions", value: questions })} disabled={saving} />
             </div>
           </div>
         </>
@@ -1756,8 +1977,8 @@ function CurriculumBuilderPage() {
         <span className="text-sm font-medium text-slate-700">Due Date</span>
         <input
           type="date"
-          value={dueDate}
-          onChange={(e) => setDueDate(e.target.value)}
+          value={form.dueDate}
+          onChange={(e) => dispatch({ type: "SET_FIELD", field: "dueDate", value: e.target.value })}
           className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
         />
       </label>
@@ -1766,17 +1987,17 @@ function CurriculumBuilderPage() {
         <span className="inline-flex items-center gap-2 text-sm text-slate-700">
           <input
             type="checkbox"
-            checked={includeDueTime}
-            onChange={(e) => setIncludeDueTime(e.target.checked)}
+            checked={form.includeDueTime}
+            onChange={(e) => dispatch({ type: "SET_FIELD", field: "includeDueTime", value: e.target.checked })}
             className="h-4 w-4 rounded border-slate-300"
           />
           Add specific due time
         </span>
-        {includeDueTime ? (
+        {form.includeDueTime ? (
           <input
             type="time"
-            value={dueTime}
-            onChange={(e) => setDueTime(e.target.value)}
+            value={form.dueTime}
+            onChange={(e) => dispatch({ type: "SET_FIELD", field: "dueTime", value: e.target.value })}
             className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
           />
         ) : (
@@ -1816,11 +2037,11 @@ function CurriculumBuilderPage() {
         </p>
       </section>
 
-      {!showCreateModal && error ? (
-        <p className="text-sm text-rose-700">{error}</p>
+      {!showCreateModal && form.error ? (
+        <p className="text-sm text-rose-700">{form.error}</p>
       ) : null}
-      {!showCreateModal && successMessage ? (
-        <p className="text-sm text-emerald-700">{successMessage}</p>
+      {!showCreateModal && form.successMessage ? (
+        <p className="text-sm text-emerald-700">{form.successMessage}</p>
       ) : null}
 
       {showCreateModal ? (
@@ -1834,8 +2055,8 @@ function CurriculumBuilderPage() {
                   onClick={() => {
                     if (saving) return;
                     setShowCreateModal(false);
-                    setError(null);
-                    setSuccessMessage(null);
+                    dispatch({ type: "SET_FIELD", field: "error", value: null });
+                    dispatch({ type: "SET_FIELD", field: "successMessage", value: null });
                   }}
                   className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
                 >
@@ -1846,9 +2067,9 @@ function CurriculumBuilderPage() {
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setCreateMode("template")}
+                  onClick={() => dispatch({ type: "SET_FIELD", field: "createMode", value: "template" })}
                   className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
-                    createMode === "template"
+                    form.createMode === "template"
                       ? "bg-cyan-600 text-white shadow-sm"
                       : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
                   }`}
@@ -1857,9 +2078,9 @@ function CurriculumBuilderPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setCreateMode("blank")}
+                  onClick={() => dispatch({ type: "SET_FIELD", field: "createMode", value: "blank" })}
                   className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
-                    createMode === "blank"
+                    form.createMode === "blank"
                       ? "bg-slate-900 text-white shadow-sm"
                       : "border border-slate-300 bg-white text-slate-700 hover:bg-slate-100"
                   }`}
@@ -1868,13 +2089,15 @@ function CurriculumBuilderPage() {
                 </button>
               </div>
 
-              {createMode === "template" ? (
+              {form.createMode === "template" ? (
                 <div className="mt-4 space-y-4">
                   <div className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50/80 p-4 lg:grid-cols-[1.5fr_220px_220px]">
                     <div>
                       <h3 className="text-base font-semibold text-slate-900">Choose a template</h3>
                       <p className="mt-1 text-sm text-slate-600">
-                        Start with your own saved templates or one of the curated public assignments below. Picking a card fills the blank form so you can adjust the class, due date, or content before saving.
+                        Start with your saved templates. If shared public templates exist in your
+                        data, they will appear here too. Picking a card fills the blank form so you
+                        can adjust the class, due date, or content before saving.
                       </p>
                       <a href="/templates" className="mt-2 inline-block text-xs font-medium text-cyan-700 hover:underline">
                         Open Template Manager →
@@ -1884,8 +2107,8 @@ function CurriculumBuilderPage() {
                     <label className="space-y-2">
                       <span className="text-sm font-medium text-slate-700">Subject</span>
                       <select
-                        value={templateSubjectFilter}
-                        onChange={(e) => setTemplateSubjectFilter(e.target.value)}
+                        value={form.templateSubjectFilter}
+                        onChange={(e) => dispatch({ type: "SET_FIELD", field: "templateSubjectFilter", value: e.target.value })}
                         className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
                       >
                         <option value="all">All subjects</option>
@@ -1900,8 +2123,8 @@ function CurriculumBuilderPage() {
                     <label className="space-y-2">
                       <span className="text-sm font-medium text-slate-700">Type</span>
                       <select
-                        value={templateTypeFilter}
-                        onChange={(e) => setTemplateTypeFilter(e.target.value as AssignmentType | "all")}
+                        value={form.templateTypeFilter}
+                        onChange={(e) => dispatch({ type: "SET_FIELD", field: "templateTypeFilter", value: e.target.value as AssignmentType | "all" })}
                         className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
                       >
                         <option value="all">All types</option>
@@ -1987,8 +2210,8 @@ function CurriculumBuilderPage() {
                         <button
                           type="button"
                           onClick={() => {
-                            setTemplateSubjectFilter("all");
-                            setTemplateTypeFilter("all");
+                            dispatch({ type: "SET_FIELD", field: "templateSubjectFilter", value: "all" });
+                            dispatch({ type: "SET_FIELD", field: "templateTypeFilter", value: "all" });
                           }}
                           className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
                         >
@@ -1996,7 +2219,7 @@ function CurriculumBuilderPage() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => setCreateMode("blank")}
+                          onClick={() => dispatch({ type: "SET_FIELD", field: "createMode", value: "blank" })}
                           className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"
                         >
                           Start Blank
@@ -2007,17 +2230,17 @@ function CurriculumBuilderPage() {
                 </div>
               ) : (
                 <>
-                  {templatePrefillMessage ? (
+                  {form.templatePrefillMessage ? (
                     <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50/80 p-4">
                       <div>
-                        <p className="text-sm font-semibold text-emerald-900">{templatePrefillMessage}</p>
+                        <p className="text-sm font-semibold text-emerald-900">{form.templatePrefillMessage}</p>
                         <p className="mt-1 text-xs text-emerald-800">
                           Review the fields below and adjust anything before saving.
                         </p>
                       </div>
                       <button
                         type="button"
-                        onClick={() => setCreateMode("template")}
+                        onClick={() => dispatch({ type: "SET_FIELD", field: "createMode", value: "template" })}
                         className="rounded-xl border border-emerald-300 bg-white px-3 py-2 text-sm font-medium text-emerald-800 hover:bg-emerald-100"
                       >
                         Choose Another Template
@@ -2029,8 +2252,8 @@ function CurriculumBuilderPage() {
                     <label className="space-y-2">
                       <span className="text-sm font-medium text-slate-700">Class</span>
                       <select
-                        value={classId}
-                        onChange={(e) => setClassId(e.target.value)}
+                        value={form.classId}
+                        onChange={(e) => dispatch({ type: "SET_FIELD", field: "classId", value: e.target.value })}
                         className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
                       >
                         {data.classes.map((row) => (
@@ -2042,46 +2265,41 @@ function CurriculumBuilderPage() {
                     <label className="space-y-2">
                       <span className="text-sm font-medium text-slate-700">Assignment Type</span>
                       <select
-                        value={contentType}
-                        onChange={(e) => {
-                          setContentType(e.target.value as AssignmentType);
-                          setError(null);
-                          setSuccessMessage(null);
-                          setTemplatePrefillMessage(null);
-                        }}
+                        value={form.contentType}
+                        onChange={(e) => dispatch({ type: "CHANGE_CONTENT_TYPE", contentType: e.target.value as AssignmentType })}
                         className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
                       >
                         {(Object.keys(TYPE_LABELS) as AssignmentType[]).map((t) => (
                           <option key={t} value={t}>{TYPE_LABELS[t]}</option>
                         ))}
                       </select>
-                      <p className="text-xs text-slate-500">{TYPE_DESCRIPTIONS[contentType]}</p>
+                      <p className="text-xs text-slate-500">{TYPE_DESCRIPTIONS[form.contentType]}</p>
                     </label>
 
                     <label className="space-y-2 md:col-span-2">
                       <span className="text-sm font-medium text-slate-700">Title</span>
                       <input
-                        value={title}
-                        onChange={(e) => setTitle(e.target.value)}
+                        value={form.title}
+                        onChange={(e) => dispatch({ type: "SET_FIELD", field: "title", value: e.target.value })}
                         className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
                         placeholder="e.g. The Water Cycle — Video Lesson"
                       />
                     </label>
 
-                    {contentType === "video" || contentType === "quiz" ? renderDueFields() : null}
+                    {form.contentType === "video" || form.contentType === "quiz" ? renderDueFields() : null}
 
                     {renderTypeSpecificFields()}
 
                     <label className="space-y-2 md:col-span-2">
                       <span className="text-sm font-medium text-slate-700">Assignment Instructions</span>
                       <textarea
-                        value={description}
-                        onChange={(e) => setDescription(e.target.value)}
+                        value={form.description}
+                        onChange={(e) => dispatch({ type: "SET_FIELD", field: "description", value: e.target.value })}
                         className="min-h-20 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
                       />
                     </label>
 
-                    {data.assignments.length > 0 && contentType !== "video" && contentType !== "quiz" ? (
+                    {data.assignments.length > 0 && form.contentType !== "video" && form.contentType !== "quiz" ? (
                       <label className="space-y-2 md:col-span-2">
                         <span className="text-sm font-medium text-slate-700">
                           Link to Assignment (optional)
@@ -2090,8 +2308,8 @@ function CurriculumBuilderPage() {
                           Attach this to a video lesson or another assignment so students can navigate between them.
                         </p>
                         <select
-                          value={linkedAssignmentId}
-                          onChange={(e) => setLinkedAssignmentId(e.target.value)}
+                          value={form.linkedAssignmentId}
+                          onChange={(e) => dispatch({ type: "SET_FIELD", field: "linkedAssignmentId", value: e.target.value })}
                           className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
                         >
                           <option value="">— None —</option>
@@ -2104,13 +2322,13 @@ function CurriculumBuilderPage() {
                       </label>
                     ) : null}
 
-                    {contentType !== "video" && contentType !== "quiz" ? renderDueFields() : null}
+                    {form.contentType !== "video" && form.contentType !== "quiz" ? renderDueFields() : null}
                   </div>
                 </>
               )}
 
-              {error ? <p className="mt-3 text-sm text-rose-700">{error}</p> : null}
-              {successMessage ? <p className="mt-3 text-sm text-emerald-700">{successMessage}</p> : null}
+              {form.error ? <p className="mt-3 text-sm text-rose-700">{form.error}</p> : null}
+              {form.successMessage ? <p className="mt-3 text-sm text-emerald-700">{form.successMessage}</p> : null}
 
               <div className="mt-4 flex flex-wrap justify-end gap-2">
                 <button
@@ -2118,29 +2336,29 @@ function CurriculumBuilderPage() {
                   onClick={() => {
                     if (saving) return;
                     setShowCreateModal(false);
-                    setError(null);
-                    setSuccessMessage(null);
+                    dispatch({ type: "SET_FIELD", field: "error", value: null });
+                    dispatch({ type: "SET_FIELD", field: "successMessage", value: null });
                   }}
                   className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
                 >
                   Cancel
                 </button>
                 <button
-                  disabled={saving || (createMode === "blank" && data.classes.length === 0)}
+                  disabled={saving || (form.createMode === "blank" && data.classes.length === 0)}
                   onClick={() => {
-                    if (createMode === "template") {
-                      setCreateMode("blank");
+                    if (form.createMode === "template") {
+                      dispatch({ type: "SET_FIELD", field: "createMode", value: "blank" });
                       return;
                     }
                     void submitAssignment();
                   }}
                   className="rounded-xl bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {createMode === "template"
+                  {form.createMode === "template"
                     ? "Start Blank"
                     : saving
                       ? "Saving…"
-                      : contentType === "video"
+                      : form.contentType === "video"
                         ? "Save Video"
                         : "Create Assignment"}
                 </button>
@@ -2152,7 +2370,57 @@ function CurriculumBuilderPage() {
 
       {/* Published Assignments */}
       <section className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
-        <h2 className="text-xl font-semibold text-slate-900">Published Assignments</h2>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <h2 className="text-xl font-semibold text-slate-900">Published Assignments</h2>
+          <div className="flex flex-wrap items-center gap-4">
+            {/* Course filter */}
+            {data.classes.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-500 shrink-0">Course:</span>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    onClick={() => setFilterClassId("all")}
+                    className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${filterClassId === "all" ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+                  >
+                    All
+                  </button>
+                  {data.classes.map((c) => (
+                    <button
+                      key={c.id}
+                      onClick={() => setFilterClassId(c.id)}
+                      className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${filterClassId === c.id ? "bg-cyan-700 text-white" : "bg-cyan-50 text-cyan-700 hover:bg-cyan-100"}`}
+                    >
+                      {c.title}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {/* Marking period filter */}
+            {data.markingPeriods.length > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-500 shrink-0">Period:</span>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    onClick={() => setFilterMarkingPeriodId("all")}
+                    className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${filterMarkingPeriodId === "all" ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+                  >
+                    All
+                  </button>
+                  {data.markingPeriods.map(p => (
+                    <button
+                      key={p.id}
+                      onClick={() => setFilterMarkingPeriodId(p.id)}
+                      className={`rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors ${filterMarkingPeriodId === p.id ? "bg-violet-700 text-white" : "bg-violet-50 text-violet-700 hover:bg-violet-100"}`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
 
         <div className="mt-4 space-y-4">
           {/* Video lessons with their linked assignments grouped */}
@@ -2174,11 +2442,33 @@ function CurriculumBuilderPage() {
                 {/* Video row */}
                 <div className="flex items-start justify-between gap-4 p-5">
                   <div className="min-w-0">
-                    <span
-                      className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${getTypeBadgeClass(video.contentType)}`}
-                    >
-                      {TYPE_LABELS[video.contentType as AssignmentType] ?? video.contentType}
-                    </span>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span
+                        className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${getTypeBadgeClass(video.contentType)}`}
+                      >
+                        {TYPE_LABELS[video.contentType as AssignmentType] ?? video.contentType}
+                      </span>
+                      {video.markingPeriodId && (
+                        <span className="inline-flex items-center rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700">
+                          {data.markingPeriods.find(p => p.id === video.markingPeriodId)?.label ?? "Period"}
+                        </span>
+                      )}
+                      {data.markingPeriods.length > 0 && (
+                        <select
+                          value={video.markingPeriodId ?? ""}
+                          onChange={async (e) => {
+                            await assignAssignmentToMarkingPeriod({ data: { assignmentId: video.id, markingPeriodId: e.target.value || null } });
+                            await router.invalidate();
+                          }}
+                          className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-xs text-slate-600"
+                        >
+                          <option value="">No period</option>
+                          {data.markingPeriods.map(p => (
+                            <option key={p.id} value={p.id}>{p.label}</option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
                     <h3 className="mt-0.5 text-lg font-semibold text-slate-900 truncate">
                       {video.title}
                     </h3>
@@ -2299,11 +2589,33 @@ function CurriculumBuilderPage() {
                   } ${isGradable && rowSubmissions.length > 0 ? "rounded-t-2xl" : "rounded-2xl"}`}
                 >
                   <div className="min-w-0">
-                    <p
-                      className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${getTypeBadgeClass(row.contentType)}`}
-                    >
-                      {TYPE_LABELS[row.contentType as AssignmentType] ?? row.contentType}
-                    </p>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <p
+                        className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${getTypeBadgeClass(row.contentType)}`}
+                      >
+                        {TYPE_LABELS[row.contentType as AssignmentType] ?? row.contentType}
+                      </p>
+                      {row.markingPeriodId && (
+                        <span className="inline-flex items-center rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700">
+                          {data.markingPeriods.find(p => p.id === row.markingPeriodId)?.label ?? "Period"}
+                        </span>
+                      )}
+                      {data.markingPeriods.length > 0 && (
+                        <select
+                          value={row.markingPeriodId ?? ""}
+                          onChange={async (e) => {
+                            await assignAssignmentToMarkingPeriod({ data: { assignmentId: row.id, markingPeriodId: e.target.value || null } });
+                            await router.invalidate();
+                          }}
+                          className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-xs text-slate-600"
+                        >
+                          <option value="">No period</option>
+                          {data.markingPeriods.map(p => (
+                            <option key={p.id} value={p.id}>{p.label}</option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
                     <h3 className="mt-0.5 text-lg font-semibold text-slate-900 truncate">{row.title}</h3>
                     {row.description ? (
                       <p className="mt-1 text-sm text-slate-600 line-clamp-2">{row.description}</p>
@@ -2597,7 +2909,7 @@ function CurriculumBuilderPage() {
                       nextMode: "blank",
                       keepClassId: true,
                     });
-                    setClassId(quickClassId);
+                    dispatch({ type: "SET_FIELD", field: "classId", value: quickClassId });
                     setShowCreateModal(true);
                   }}
                   className="font-medium text-cyan-700 hover:text-cyan-800 underline"

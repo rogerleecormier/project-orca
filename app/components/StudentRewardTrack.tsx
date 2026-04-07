@@ -80,7 +80,7 @@ function TierCard({
   if (status === "delivered") {
     return (
       <div
-        className="relative flex h-22 w-18 shrink-0 scroll-snap-start flex-col items-center justify-center rounded-xl p-2 text-center"
+        className="relative flex h-22 w-18 shrink-0 snap-start flex-col items-center justify-center rounded-xl p-2 text-center"
         style={{
           background: "linear-gradient(135deg, #fbbf24, #d97706)",
           border: "2px solid #f59e0b",
@@ -110,7 +110,7 @@ function TierCard({
   if (status === "claimed") {
     return (
       <div
-        className="relative flex shrink-0 scroll-snap-start flex-col items-center justify-center rounded-xl p-2 text-center"
+        className="relative flex shrink-0 snap-start flex-col items-center justify-center rounded-xl p-2 text-center"
         style={{
           width: 72,
           height: 88,
@@ -135,7 +135,7 @@ function TierCard({
   if (status === "unlocked") {
     return (
       <div
-        className="relative flex shrink-0 scroll-snap-start flex-col items-center justify-center rounded-xl bg-white p-2 text-center"
+        className="relative flex shrink-0 snap-start flex-col items-center justify-center rounded-xl bg-white p-2 text-center"
         style={{ width: 72, height: 88, border: "2px solid #22d3ee" }}
       >
         <span
@@ -170,7 +170,7 @@ function TierCard({
   // Locked
   return (
     <div
-      className="relative flex shrink-0 scroll-snap-start flex-col items-center justify-center rounded-xl bg-slate-100 p-2 text-center"
+      className="relative flex shrink-0 snap-start flex-col items-center justify-center rounded-xl bg-slate-100 p-2 text-center"
       style={{ width: 72, height: 88, border: "1.5px solid #e2e8f0" }}
     >
       <span style={{ fontSize: 28, opacity: 0.35 }}>{tier.icon ?? "🎁"}</span>
@@ -215,42 +215,54 @@ export function StudentRewardTrack({
       <style>{`
         @keyframes reward-sparkle {
           0%, 100% { transform: scale(1); }
-          50%       { transform: scale(1.15); }
+          50%       { transform: scale(1.18) rotate(5deg); }
         }
         @keyframes reward-pulse {
           0%, 100% { box-shadow: 0 0 0 3px #ddd6fe; }
-          50%       { box-shadow: 0 0 0 6px #c4b5fd; }
+          50%       { box-shadow: 0 0 0 7px #c4b5fd; }
         }
+        @keyframes progress-shimmer {
+          0%   { background-position: -200% center; }
+          100% { background-position: 200% center; }
+        }
+        @keyframes xp-pop {
+          0%   { transform: scale(0.8); opacity: 0; }
+          60%  { transform: scale(1.1); }
+          100% { transform: scale(1); opacity: 1; }
+        }
+        .reward-xp-pop { animation: xp-pop 0.4s cubic-bezier(0.34,1.56,0.64,1) forwards; }
       `}</style>
 
-      <div className="rounded-2xl border border-violet-200 bg-gradient-to-br from-violet-50 to-amber-50 p-4">
+      <div className="min-w-0 rounded-2xl border border-violet-200 bg-gradient-to-br from-violet-50 to-amber-50 p-4 sm:p-5">
         {/* Header */}
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2">
             <span className="text-lg" aria-hidden="true">🏆</span>
-            <h3 className="text-sm font-semibold text-slate-800">{track.title}</h3>
+            <h3 className="truncate text-sm font-semibold text-slate-800">{track.title}</h3>
           </div>
-          <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-xs font-semibold text-amber-700">
+          <span className="reward-xp-pop shrink-0 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-xs font-semibold text-amber-700">
             ⭐ {xpEarned.toLocaleString()} XP
           </span>
         </div>
 
-        {/* Progress bar */}
-        <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-slate-200">
+        {/* Progress bar with shimmer */}
+        <div className="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-slate-200">
           <div
-            className="h-full rounded-full transition-all duration-700"
+            className="h-full rounded-full transition-all duration-1000 ease-out"
             style={{
               width: `${fillPct}%`,
-              background: "linear-gradient(90deg, #a78bfa, #fbbf24)",
+              background: fillPct >= 100
+                ? "linear-gradient(90deg, #a78bfa, #fbbf24, #a78bfa)"
+                : "linear-gradient(90deg, #8b5cf6 0%, #a78bfa 40%, #fde68a 70%, #fbbf24 100%)",
+              backgroundSize: "200% auto",
+              animation: fillPct > 0 ? "progress-shimmer 3s linear infinite" : "none",
+              boxShadow: fillPct > 0 ? "0 0 8px rgba(167,139,250,0.5)" : "none",
             }}
           />
         </div>
 
         {/* Track row */}
-        <div
-          className="mt-3 flex gap-2 overflow-x-auto pb-2"
-          style={{ scrollSnapType: "x mandatory" }}
-        >
+        <div className="mt-3 flex max-w-full gap-2 overflow-x-auto pb-2 snap-x snap-mandatory">
           {sorted.map((tier, i) => (
             <div key={tier.id} className="flex items-center gap-2">
               <TierCard

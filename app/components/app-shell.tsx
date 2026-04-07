@@ -200,7 +200,7 @@ export function AppShell({
     <div className="relative min-h-screen">
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(120deg,rgba(27,127,194,0.1),rgba(4,8,15,0))]" />
 
-      <div className="relative mx-auto flex min-h-screen max-w-[1400px]">
+      <div className="relative mx-auto flex min-h-screen w-full max-w-[1400px] overflow-x-clip">
         {/* Sidebar */}
         <aside
           className={`fixed inset-y-0 left-0 z-40 w-72 border-r border-slate-200 bg-white/90 p-5 shadow-xl backdrop-blur transition-transform md:static md:translate-x-0 md:shadow-none ${
@@ -329,6 +329,18 @@ export function AppShell({
 
             {canAccessParentModules ? (
               <Link
+                to="/curriculum-builder"
+                className={`block w-full rounded-xl px-3 py-2 text-left text-sm font-medium transition ${
+                  pathname.startsWith("/curriculum-builder") ? "bg-cyan-50 text-cyan-900" : "text-slate-700 hover:bg-slate-100"
+                }`}
+                onClick={() => setSidebarOpen(false)}
+              >
+                Curriculum Builder
+              </Link>
+            ) : null}
+
+            {canAccessParentModules ? (
+              <Link
                 to="/rewards"
                 className={`relative flex items-center justify-between rounded-xl px-3 py-2 text-sm font-medium transition ${
                   pathname.startsWith("/rewards") ? "bg-cyan-50 text-cyan-900" : "text-slate-700 hover:bg-slate-100"
@@ -390,7 +402,7 @@ export function AppShell({
           />
         ) : null}
 
-        <div className="flex w-full flex-1 flex-col md:ml-0">
+        <div className="flex min-w-0 w-full flex-1 flex-col md:ml-0">
           <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/85 px-4 py-3 backdrop-blur md:px-8">
             <div className="flex flex-wrap items-center gap-3">
               <button
@@ -485,7 +497,7 @@ export function AppShell({
             ) : null}
           </header>
 
-          <main className="flex-1 p-4 md:p-8">{children}</main>
+          <main className="min-w-0 flex-1 p-4 md:p-8">{children}</main>
 
           <LessonPlannerChat
             studentName={fallbackProfile?.displayName ?? "your student"}

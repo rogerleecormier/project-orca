@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
-import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
+import { createFileRoute, Link, redirect, useRouter } from "@tanstack/react-router";
 import {
+  assignClassToMarkingPeriod,
   createClassRecord,
   getClassEngineData,
   getViewerContext,
@@ -289,7 +290,11 @@ function ClassEnginePage() {
 
           <div className="mt-4 space-y-3">
             {visibleClasses.map((row) => (
-              <article key={row.id} className="rounded-2xl border border-slate-200 bg-slate-50/80 p-5">
+              <article
+                id={`class-${row.id}`}
+                key={row.id}
+                className="scroll-mt-24 rounded-2xl border border-slate-200 bg-slate-50/80 p-5"
+              >
                 {editingClassId === row.id ? (
                   <div className="space-y-3">
                     <label className="block space-y-2">
@@ -369,20 +374,44 @@ function ClassEnginePage() {
                 ) : (
                   <>
                     <div className="flex flex-wrap items-start justify-between gap-2">
-                      <div>
+                      <div className="min-w-0">
                         <h3 className="text-lg font-semibold text-slate-900">{row.title}</h3>
-                        {row.schoolYear ? (
-                          <span className="mt-0.5 inline-block rounded-full bg-cyan-50 px-2 py-0.5 text-xs font-medium text-cyan-700">
-                            {row.schoolYear}
-                          </span>
-                        ) : null}
+                        <div className="mt-0.5 flex flex-wrap gap-1.5">
+                          {row.schoolYear ? (
+                            <span className="inline-block rounded-full bg-cyan-50 px-2 py-0.5 text-xs font-medium text-cyan-700">
+                              {row.schoolYear}
+                            </span>
+                          ) : null}
+                          {row.markingPeriodId ? (
+                            <span className="inline-block rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700">
+                              {data.markingPeriods.find(p => p.id === row.markingPeriodId)?.label ?? "Period"}
+                            </span>
+                          ) : null}
+                        </div>
                       </div>
-                      <button
-                        onClick={() => beginEdit(row)}
-                        className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
-                      >
-                        Edit
-                      </button>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {data.markingPeriods.length > 0 && (
+                          <select
+                            value={row.markingPeriodId ?? ""}
+                            onChange={async (e) => {
+                              await assignClassToMarkingPeriod({ data: { classId: row.id, markingPeriodId: e.target.value || null } });
+                              await router.invalidate();
+                            }}
+                            className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700"
+                          >
+                            <option value="">No period</option>
+                            {data.markingPeriods.map(p => (
+                              <option key={p.id} value={p.id}>{p.label} — {p.title}</option>
+                            ))}
+                          </select>
+                        )}
+                        <button
+                          onClick={() => beginEdit(row)}
+                          className="rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100"
+                        >
+                          Edit
+                        </button>
+                      </div>
                     </div>
                     <p className="mt-2 text-sm text-slate-600">
                       {row.description ?? "No description provided yet."}
@@ -401,6 +430,15 @@ function ClassEnginePage() {
                           : "Unassigned"}
                       </span>
                     </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Link
+                        to="/assignments"
+                        search={{ classId: row.id }}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 transition"
+                      >
+                        📋 View Assignments
+                      </Link>
+                    </div>
                   </>
                 )}
               </article>

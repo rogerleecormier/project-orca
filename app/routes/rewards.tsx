@@ -152,7 +152,7 @@ function ActiveTrackCard({ track, onDeactivated }: { track: TrackRow; onDeactiva
   return (
     <article className="rounded-2xl border border-emerald-200 bg-white shadow-sm">
       {/* Header */}
-      <div className="flex flex-wrap items-center gap-3 border-b border-slate-100 p-5">
+      <div className="flex flex-wrap items-center gap-3 border-b border-slate-100 p-4 sm:p-5">
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-100 text-lg font-bold text-slate-600">
           {track.profile?.displayName?.charAt(0).toUpperCase() ?? "?"}
         </div>
@@ -162,7 +162,7 @@ function ActiveTrackCard({ track, onDeactivated }: { track: TrackRow; onDeactiva
           </p>
           <h3 className="truncate text-base font-semibold text-slate-900">{track.title}</h3>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
           <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
             ACTIVE
           </span>
@@ -205,7 +205,7 @@ function ActiveTrackCard({ track, onDeactivated }: { track: TrackRow; onDeactiva
       </div>
 
       {/* Progress bar */}
-      <div className="px-5 pt-4 pb-2">
+      <div className="px-4 pb-2 pt-4 sm:px-5">
         <RewardProgressBar
           tiers={track.tiers}
           xpEarned={xpEarned}
@@ -215,7 +215,7 @@ function ActiveTrackCard({ track, onDeactivated }: { track: TrackRow; onDeactiva
 
       {/* Pending claims banner */}
       {track.pendingClaimsCount > 0 ? (
-        <div className="mx-5 mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+        <div className="mx-4 mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 sm:mx-5 sm:mb-5">
           <p className="text-sm font-semibold text-amber-800">
             ⚡ {track.pendingClaimsCount} reward{track.pendingClaimsCount > 1 ? "s" : ""} waiting to be delivered
           </p>
@@ -453,9 +453,9 @@ function CreateTrackModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
-      <div className="flex w-full max-w-2xl flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl max-h-[90vh]">
+      <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl">
         {/* Modal header */}
-        <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
+        <div className="flex items-center justify-between border-b border-slate-100 px-4 py-4 sm:px-6">
           <h2 className="text-base font-semibold text-slate-900">
             {step === "done" ? "Track Created!" : step === 1 ? "New Reward Track" : "Set Rewards"}
           </h2>
@@ -470,7 +470,7 @@ function CreateTrackModal({
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-6 py-5">
+        <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
           {/* ── Step 1 ── */}
           {step === 1 ? (
             <div className="space-y-4">
@@ -597,7 +597,7 @@ function CreateTrackModal({
                 {draftTiers.map((tier, i) => (
                   <div
                     key={tier.tierNumber}
-                    className="flex items-center gap-3 rounded-xl border border-slate-100 bg-slate-50/60 px-3 py-2.5"
+                    className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-100 bg-slate-50/60 px-3 py-2.5 sm:flex-nowrap sm:gap-3"
                   >
                     <div className="flex shrink-0 flex-col items-center">
                       <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
@@ -611,7 +611,7 @@ function CreateTrackModal({
                       type="text"
                       value={tier.icon}
                       onChange={(e) => updateTier(i, { icon: e.target.value })}
-                      className="w-10 rounded-lg border border-slate-200 bg-white px-1.5 py-1 text-center text-sm focus:border-cyan-500 focus:outline-none"
+                      className="w-10 shrink-0 rounded-lg border border-slate-200 bg-white px-1.5 py-1 text-center text-sm focus:border-cyan-500 focus:outline-none"
                       maxLength={4}
                       placeholder="🎁"
                     />
@@ -625,7 +625,7 @@ function CreateTrackModal({
                     <select
                       value={tier.rewardType}
                       onChange={(e) => updateTier(i, { rewardType: e.target.value as RewardType })}
-                      className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none"
+                      className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none sm:w-auto"
                     >
                       {REWARD_TYPES.map((rt) => (
                         <option key={rt} value={rt}>
@@ -674,7 +674,7 @@ function CreateTrackModal({
 
         {/* Footer buttons */}
         {step === 1 ? (
-          <div className="flex justify-end border-t border-slate-100 px-6 py-4">
+          <div className="flex justify-end border-t border-slate-100 px-4 py-4 sm:px-6">
             <button
               type="button"
               disabled={!title.trim() || !profileId}
@@ -685,7 +685,7 @@ function CreateTrackModal({
             </button>
           </div>
         ) : step === 2 ? (
-          <div className="flex items-center justify-between border-t border-slate-100 px-6 py-4">
+          <div className="flex items-center justify-between border-t border-slate-100 px-4 py-4 sm:px-6">
             <button
               type="button"
               onClick={() => setStep(1)}
@@ -727,9 +727,9 @@ function RewardsIndexPage() {
   const activeTracks = initialTracks.filter((t) => t.isActive);
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 space-y-6">
       {/* Hero */}
-      <section className="orca-hero orca-wave rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+      <section className="orca-hero orca-wave rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm sm:p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <span className="orca-icon-chip" aria-hidden="true">
@@ -779,13 +779,13 @@ function RewardsIndexPage() {
       </section>
 
       {/* All tracks table */}
-      <section className="orca-wave rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+      <section className="orca-wave rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm sm:p-6">
         <h3 className="mb-4 text-base font-semibold text-slate-900">All Tracks</h3>
         {initialTracks.length === 0 ? (
           <p className="text-sm text-slate-500">No reward tracks yet. Create one to get started.</p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[560px] text-left">
+            <table className="w-full min-w-[520px] text-left">
               <thead>
                 <tr className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
                   <th className="pb-2 pr-4">Student</th>

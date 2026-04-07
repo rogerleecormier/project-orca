@@ -79,6 +79,7 @@ const TYPE_COLORS: Record<string, string> = {
   file:            "bg-amber-100 text-amber-700",
   url:             "bg-emerald-100 text-emerald-700",
   report:          "bg-orange-100 text-orange-700",
+  movie:           "bg-indigo-100 text-indigo-700",
 };
 
 const TYPE_LABELS: Record<string, string> = {
@@ -89,6 +90,7 @@ const TYPE_LABELS: Record<string, string> = {
   quiz:            "Quiz",
   essay_questions: "Essay",
   report:          "Report",
+  movie:           "Movie",
 };
 
 const QUICK_TYPES = [
@@ -97,6 +99,7 @@ const QUICK_TYPES = [
   { type: "quiz",            label: "Quiz" },
   { type: "essay_questions", label: "Essay" },
   { type: "report",          label: "Lab Report" },
+  { type: "movie",           label: "Movie" },
 ] as const;
 
 const STATUS_LABELS: Record<string, string> = {
@@ -170,6 +173,28 @@ function AssignmentRow({
       ) : null}
     </div>
   );
+}
+
+// ── Prerequisite chain helper ─────────────────────────────────────────────────
+
+/** Walk backwards from nodeId, following one predecessor per step, to build a root→node chain. */
+function buildPrereqChain(nodeId: string, nodes: PanelNode[], edges: PanelEdge[]): PanelNode[] {
+  const nodeMap = new Map(nodes.map((n) => [n.id, n]));
+  const chain: PanelNode[] = [];
+  const visited = new Set<string>([nodeId]);
+  let current = nodeId;
+
+  for (let i = 0; i < 12; i++) {
+    const inEdge = edges.find((e) => e.targetNodeId === current && !visited.has(e.sourceNodeId));
+    if (!inEdge) break;
+    const parent = nodeMap.get(inEdge.sourceNodeId);
+    if (!parent) break;
+    chain.unshift(parent);
+    visited.add(parent.id);
+    current = parent.id;
+  }
+
+  return chain;
 }
 
 // ── Main Component ────────────────────────────────────────────────────────────
@@ -457,60 +482,111 @@ export function NodeSidePanel({
         ) : null}
 
         {/* ── INFO TAB ── */}
-        {activeTab === "info" ? (
-          <div className="space-y-4">
-            {node.description ? (
-              <div>
-                <p className="mb-1 text-xs font-medium text-slate-500">Description</p>
-                <p className="text-sm text-slate-700">{node.description}</p>
-              </div>
-            ) : null}
-
-            {node.subject ? (
-              <div>
-                <p className="mb-1 text-xs font-medium text-slate-500">Subject</p>
-                <p className="text-sm text-slate-700">{node.subject}</p>
-              </div>
-            ) : null}
-
-            {prereqNodes.length > 0 ? (
-              <div>
-                <p className="mb-1.5 text-xs font-medium text-slate-500">Prerequisites</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {prereqNodes.map((pn) => (
-                    <span
-                      key={pn.id}
-                      className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-600"
-                    >
-                      {pn.title}
-                    </span>
-                  ))}
+        {activeTab === "info" ? (() => {
+          const prereqChain = buildPrereqChain(node.id, nodes, edges);
+          return (
+            <div className="space-y-4">
+              {node.description ? (
+                <div>
+                  <p className="mb-1 text-xs font-medium text-slate-500">Description</p>
+                  <p className="text-sm text-slate-700">{node.description}</p>
                 </div>
-              </div>
-            ) : null}
+              ) : null}
 
-            {unlockNodes.length > 0 ? (
-              <div>
-                <p className="mb-1.5 text-xs font-medium text-slate-500">Unlocks</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {unlockNodes.map((un) => (
-                    <span
-                      key={un.id}
-                      className="rounded-full border border-cyan-200 bg-cyan-50 px-2.5 py-1 text-xs text-cyan-700"
-                    >
-                      {un.title}
-                    </span>
-                  ))}
+              {node.subject ? (
+                <div>
+                  <p className="mb-1 text-xs font-medium text-slate-500">Subject</p>
+                  <p className="text-sm text-slate-700">{node.subject}</p>
                 </div>
-              </div>
-            ) : null}
+              ) : null}
 
-            <div>
-              <p className="mb-1 text-xs font-medium text-slate-500">XP Reward</p>
-              <p className="text-sm font-medium text-amber-600">⭐ {node.xpReward} XP</p>
+              {/* Prerequisite path chain */}
+              {prereqChain.length > 0 ? (
+                <div>
+                  <p className="mb-2 text-xs font-medium text-slate-500">Path to unlock</p>
+                  <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
+                    <div className="flex flex-col gap-1">
+                      {prereqChain.map((pn, i) => {
+                        const color = RAMP_COLORS[pn.colorRamp] ?? RAMP_COLORS.blue;
+                        return (
+                          <div key={pn.id}>
+                            <div className="flex items-center gap-2">
+                              <div
+                                className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-bold text-white"
+                                style={{ background: color }}
+                              >
+                                {i + 1}
+                              </div>
+                              <span className="text-xs text-slate-700">{pn.title}</span>
+                              <span
+                                className="ml-auto rounded-full px-1.5 py-0.5 text-[9px] font-semibold"
+                                style={{ background: color + "22", color }}
+                              >
+                                {pn.nodeType}
+                              </span>
+                            </div>
+                            {/* Connector line */}
+                            <div className="ml-2.5 h-3 w-px bg-slate-200" />
+                          </div>
+                        );
+                      })}
+                      {/* Current node (destination) */}
+                      <div className="flex items-center gap-2">
+                        <div
+                          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-bold text-white"
+                          style={{ background: RAMP_COLORS[node.colorRamp] ?? RAMP_COLORS.blue }}
+                        >
+                          ★
+                        </div>
+                        <span className="text-xs font-semibold text-slate-900">{node.title}</span>
+                        <span className="ml-auto text-[10px] font-medium text-amber-600">
+                          {node.xpReward} XP
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {prereqNodes.length > 0 ? (
+                <div>
+                  <p className="mb-1.5 text-xs font-medium text-slate-500">Direct prerequisites</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {prereqNodes.map((pn) => (
+                      <span
+                        key={pn.id}
+                        className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-600"
+                      >
+                        {pn.title}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {unlockNodes.length > 0 ? (
+                <div>
+                  <p className="mb-1.5 text-xs font-medium text-slate-500">Unlocks</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {unlockNodes.map((un) => (
+                      <span
+                        key={un.id}
+                        className="rounded-full border border-cyan-200 bg-cyan-50 px-2.5 py-1 text-xs text-cyan-700"
+                      >
+                        {un.title}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              <div>
+                <p className="mb-1 text-xs font-medium text-slate-500">XP Reward</p>
+                <p className="text-sm font-medium text-amber-600">⭐ {node.xpReward} XP</p>
+              </div>
             </div>
-          </div>
-        ) : null}
+          );
+        })() : null}
 
         {/* ── EDIT TAB ── */}
         {activeTab === "edit" && editMode ? (

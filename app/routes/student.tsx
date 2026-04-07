@@ -83,7 +83,39 @@ const TYPE_LABELS: Record<string, string> = {
   quiz: "Quiz",
   essay_questions: "Essay Questions",
   report: "Report",
+  movie: "Movie",
 };
+
+// Platform badge colors — kept child-friendly
+const PLATFORM_COLORS: Record<string, { bg: string; text: string; dot: string }> = {
+  "Netflix":            { bg: "bg-red-100",    text: "text-red-800",    dot: "bg-red-500" },
+  "Disney+":            { bg: "bg-blue-100",   text: "text-blue-800",   dot: "bg-blue-500" },
+  "Amazon Prime Video": { bg: "bg-amber-100",  text: "text-amber-800",  dot: "bg-amber-500" },
+  "HBO Max":            { bg: "bg-purple-100", text: "text-purple-800", dot: "bg-purple-500" },
+  "Max":                { bg: "bg-purple-100", text: "text-purple-800", dot: "bg-purple-500" },
+  "Hulu":               { bg: "bg-green-100",  text: "text-green-800",  dot: "bg-green-500" },
+  "Apple TV+":          { bg: "bg-slate-100",  text: "text-slate-800",  dot: "bg-slate-500" },
+  "Peacock":            { bg: "bg-sky-100",    text: "text-sky-800",    dot: "bg-sky-500" },
+  "Paramount+":         { bg: "bg-cyan-100",   text: "text-cyan-800",   dot: "bg-cyan-500" },
+  "Tubi":               { bg: "bg-orange-100", text: "text-orange-800", dot: "bg-orange-500" },
+  "YouTube":            { bg: "bg-rose-100",   text: "text-rose-800",   dot: "bg-rose-500" },
+};
+
+type MoviePayload = {
+  title?: string;
+  synopsis?: string;
+  whereToWatch?: string[];
+};
+
+function PlatformBadge({ platform }: { platform: string }) {
+  const colors = PLATFORM_COLORS[platform] ?? { bg: "bg-indigo-100", text: "text-indigo-800", dot: "bg-indigo-400" };
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${colors.bg} ${colors.text}`}>
+      <span className={`w-1.5 h-1.5 rounded-full ${colors.dot}`} />
+      {platform}
+    </span>
+  );
+}
 
 function parseJson<T>(value: string | null | undefined): T | null {
   if (!value) return null;
@@ -265,19 +297,32 @@ function AssignmentListView({
       })}
 
       {/* Standalone non-video assignments */}
-      {standaloneAssignments.map((row) => (
+      {standaloneAssignments.map((row) => {
+        const moviePayload = row.contentType === "movie"
+          ? parseJson<MoviePayload>(row.contentRef)
+          : null;
+        return (
         <button
           key={row.id}
           type="button"
           onClick={() => onOpen(row.id)}
-          className="w-full flex items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white px-5 py-4 text-left hover:bg-slate-50 transition shadow-sm"
+          className={`w-full flex items-center justify-between gap-4 rounded-2xl border bg-white px-5 py-4 text-left hover:bg-slate-50 transition shadow-sm ${
+            row.contentType === "movie" ? "border-indigo-200" : "border-slate-200"
+          }`}
         >
           <div className="min-w-0">
-            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-              {TYPE_LABELS[row.contentType] ?? row.contentType}
+            <p className={`text-xs font-medium uppercase tracking-wide ${row.contentType === "movie" ? "text-indigo-600" : "text-slate-500"}`}>
+              {row.contentType === "movie" ? "🎬 Movie" : (TYPE_LABELS[row.contentType] ?? row.contentType)}
             </p>
             <p className="mt-0.5 text-base font-semibold text-slate-900 truncate">{row.title}</p>
-            {row.description ? (
+            {/* Show platform badges inline on the card */}
+            {moviePayload?.whereToWatch && moviePayload.whereToWatch.length > 0 ? (
+              <div className="mt-1.5 flex flex-wrap gap-1">
+                {moviePayload.whereToWatch.slice(0, 3).map((p) => (
+                  <PlatformBadge key={p} platform={p} />
+                ))}
+              </div>
+            ) : row.description ? (
               <p className="mt-0.5 text-xs text-slate-500 line-clamp-1">{row.description}</p>
             ) : null}
             {row.dueAt ? (
@@ -303,7 +348,8 @@ function AssignmentListView({
             <span className="text-slate-400">›</span>
           </div>
         </button>
-      ))}
+        );
+      })}
 
       {assignments.length === 0 ? (
         <p className="text-sm text-slate-500 italic">No assignments yet.</p>
@@ -827,6 +873,117 @@ function EssayQuestionsView({
   );
 }
 
+// ── Movie assignment view ──────────────────────────────────────────────────────
+
+function MovieAssignmentView({
+  assignment,
+  linkedAssignments,
+  submission,
+  onBack,
+  onNavigateTo,
+  onMarkWatched,
+  saving,
+}: {
+  assignment: AssignmentRow;
+  linkedAssignments: AssignmentRow[];
+  submission: SubmissionRow | undefined;
+  onBack: () => void;
+  onNavigateTo: (id: string) => void;
+  onMarkWatched: (assignmentId: string) => void;
+  saving: boolean;
+}) {
+  const payload = parseJson<MoviePayload>(assignment.contentRef);
+  const platforms = payload?.whereToWatch ?? [];
+  const alreadyWatched = isSubmissionComplete(submission);
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center gap-3">
+        <button type="button" onClick={onBack} className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50">
+          ← Back
+        </button>
+        <p className="text-xs uppercase tracking-wide text-indigo-600 font-medium">Movie Assignment</p>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
+        {/* Movie title */}
+        <div className="flex items-start gap-4">
+          <div className="shrink-0 w-14 h-14 rounded-2xl bg-indigo-100 flex items-center justify-center text-2xl">
+            🎬
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-xl font-bold text-slate-900 leading-tight">
+              {payload?.title ?? assignment.title}
+            </h2>
+            {payload?.synopsis ? (
+              <p className="mt-1 text-sm text-slate-600">{payload.synopsis}</p>
+            ) : assignment.description ? (
+              <p className="mt-1 text-sm text-slate-600">{assignment.description}</p>
+            ) : null}
+          </div>
+        </div>
+
+        {/* Where to watch */}
+        {platforms.length > 0 ? (
+          <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-4 py-3 space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-indigo-600">Where to watch</p>
+            <div className="flex flex-wrap gap-2">
+              {platforms.map((p) => (
+                <PlatformBadge key={p} platform={p} />
+              ))}
+            </div>
+            <p className="text-xs text-indigo-500">
+              Ask a parent to help you find this movie. Availability may vary by region.
+            </p>
+          </div>
+        ) : null}
+
+        {/* Watched status / button */}
+        {alreadyWatched ? (
+          <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 flex items-center gap-2">
+            <span className="text-emerald-600">✓</span>
+            <p className="text-sm font-medium text-emerald-700">You marked this as watched!</p>
+          </div>
+        ) : (
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => onMarkWatched(assignment.id)}
+            className="w-full rounded-xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60 transition"
+          >
+            {saving ? "Saving…" : "Mark as Watched"}
+          </button>
+        )}
+      </div>
+
+      {/* Linked follow-up assignments */}
+      {linkedAssignments.length > 0 ? (
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 px-1">
+            After watching, complete:
+          </p>
+          {linkedAssignments.map((linked) => (
+            <button
+              key={linked.id}
+              type="button"
+              onClick={() => onNavigateTo(linked.id)}
+              className="w-full flex items-center justify-between gap-4 rounded-2xl border border-slate-200 bg-white px-5 py-4 text-left hover:bg-slate-50 transition shadow-sm"
+            >
+              <div className="min-w-0">
+                <p className="text-xs font-medium uppercase tracking-wide text-violet-600">
+                  {TYPE_LABELS[linked.contentType] ?? linked.contentType}
+                </p>
+                <p className="text-sm font-semibold text-slate-900 truncate">{linked.title}</p>
+              </div>
+              <span className="text-slate-400 shrink-0">›</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 // ── Report (long-form writing) view ───────────────────────────────────────────
 
 function ReportAssignmentView({
@@ -1107,6 +1264,11 @@ function StudentWorkspacePage() {
     data.activeRewardTrack?.claims ?? [],
   );
 
+  // Animation state
+  const [assignmentCompleteAnim, setAssignmentCompleteAnim] = useState<string | null>(null); // assignmentId
+  const [nodeCompleteAnim, setNodeCompleteAnim] = useState<{ nodeId: string; xp: number } | null>(null);
+  const [treeCompleteAnim, setTreeCompleteAnim] = useState<{ title: string; xp: number } | null>(null);
+
   // Show celebration overlay after a short delay if new tiers were unlocked
   useEffect(() => {
     if ((data.activeRewardTrack?.newlyUnlockedTierIds?.length ?? 0) > 0) {
@@ -1181,6 +1343,8 @@ function StudentWorkspacePage() {
         },
       });
       setUploadPhase("done");
+      setAssignmentCompleteAnim(assignmentId);
+      setTimeout(() => setAssignmentCompleteAnim(null), 2500);
       await router.invalidate();
       await progressQuery.refetch();
     } catch {
@@ -1263,6 +1427,20 @@ function StudentWorkspacePage() {
       );
     }
 
+    if (activeAssignment.contentType === "movie") {
+      return (
+        <MovieAssignmentView
+          assignment={activeAssignment}
+          linkedAssignments={getLinkedChildren(activeAssignment.id)}
+          submission={submissionMap.get(activeAssignment.id)}
+          onBack={() => setActiveAssignmentId(null)}
+          onNavigateTo={setActiveAssignmentId}
+          onMarkWatched={(id) => void submitWork(id, "watched")}
+          saving={saving}
+        />
+      );
+    }
+
     return (
       <GenericAssignmentView
         assignment={activeAssignment}
@@ -1284,7 +1462,86 @@ function StudentWorkspacePage() {
     : [];
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 space-y-6">
+      {/* Animation keyframes */}
+      <style>{`
+        @keyframes check-burst {
+          0% { transform: scale(0) rotate(-10deg); opacity: 0; }
+          60% { transform: scale(1.25) rotate(5deg); opacity: 1; }
+          100% { transform: scale(1) rotate(0deg); opacity: 1; }
+        }
+        @keyframes anim-float-up {
+          0% { transform: translateY(0); opacity: 1; }
+          100% { transform: translateY(-48px); opacity: 0; }
+        }
+        @keyframes firework-pop {
+          0% { transform: scale(0); opacity: 0; }
+          50% { transform: scale(1.15); opacity: 1; }
+          100% { transform: scale(1); opacity: 1; }
+        }
+        @keyframes confetti-fall {
+          0% { transform: translateY(-20px) rotate(0deg); opacity: 1; }
+          100% { transform: translateY(80px) rotate(360deg); opacity: 0; }
+        }
+        @keyframes toast-slide-in {
+          from { transform: translateY(24px) scale(0.95); opacity: 0; }
+          to { transform: translateY(0) scale(1); opacity: 1; }
+        }
+        .anim-check-burst { animation: check-burst 0.45s cubic-bezier(0.34,1.56,0.64,1) forwards; }
+        .anim-float-up { animation: anim-float-up 1.4s ease-out forwards; }
+        .anim-firework { animation: firework-pop 0.5s cubic-bezier(0.34,1.56,0.64,1) forwards; }
+        .anim-confetti { animation: confetti-fall 1.2s ease-in forwards; }
+        .anim-toast { animation: toast-slide-in 0.3s ease-out forwards; }
+      `}</style>
+
+      {/* Assignment complete toast */}
+      {assignmentCompleteAnim !== null ? (
+        <div className="fixed bottom-4 left-4 right-4 z-50 anim-toast sm:bottom-6 sm:left-auto sm:right-6">
+          <div className="mx-auto flex max-w-sm items-center gap-3 rounded-2xl bg-emerald-600 px-4 py-3 sm:px-5 sm:py-3.5 shadow-xl text-white">
+            <span className="anim-check-burst inline-block text-2xl">✓</span>
+            <div>
+              <p className="font-semibold text-sm">Assignment Complete!</p>
+              <p className="text-xs text-emerald-100">Nice work — keep it up!</p>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Tree complete overlay */}
+      {treeCompleteAnim !== null ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="anim-firework relative w-full max-w-sm rounded-3xl bg-white p-8 text-center shadow-2xl">
+            <div className="absolute inset-0 overflow-hidden rounded-3xl pointer-events-none">
+              {Array.from({ length: 30 }, (_, i) => (
+                <span
+                  key={i}
+                  className="anim-confetti absolute text-lg"
+                  style={{
+                    left: `${Math.random() * 100}%`,
+                    top: `${Math.random() * 40}%`,
+                    animationDelay: `${Math.random() * 0.8}s`,
+                    fontSize: `${10 + Math.random() * 12}px`,
+                    color: ["#f59e0b", "#06b6d4", "#8b5cf6", "#10b981", "#ef4444"][i % 5],
+                  }}
+                >
+                  ★
+                </span>
+              ))}
+            </div>
+            <div className="text-5xl mb-3">🎓</div>
+            <h2 className="text-2xl font-bold text-slate-900">Skill Tree Complete!</h2>
+            <p className="mt-1 text-slate-600 text-sm">{treeCompleteAnim.title}</p>
+            <p className="mt-2 text-amber-600 font-semibold">+{treeCompleteAnim.xp} XP earned!</p>
+            <button
+              onClick={() => setTreeCompleteAnim(null)}
+              className="mt-6 rounded-xl bg-slate-900 px-6 py-2 text-sm font-medium text-white hover:bg-slate-800"
+            >
+              Awesome!
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {/* Reward unlock celebration overlay */}
       {showCelebration && celebrationTiers.length > 0 ? (
         <RewardUnlockCelebration
@@ -1295,7 +1552,7 @@ function StudentWorkspacePage() {
       ) : null}
 
       {/* Header */}
-      <section className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+      <section className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm sm:p-6">
         <p className="text-xs uppercase tracking-[0.2em] text-cyan-700">Student Workspace</p>
         <h1 className="mt-2 text-2xl font-semibold text-slate-900">
           Welcome, {data.profile.displayName}
@@ -1310,15 +1567,15 @@ function StudentWorkspacePage() {
         </p>
         {/* XP level display */}
         {(progressQuery.data?.totalXp ?? 0) > 0 || (progressQuery.data?.xpLevel ?? 0) > 0 ? (
-          <div className="mt-2 flex items-center gap-2">
+          <div className="mt-2 flex flex-wrap items-center gap-2">
             <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800">
               Lv {progressQuery.data?.xpLevel ?? 1} — {progressQuery.data?.xpTitle ?? "Curious Learner"}
             </span>
             {progressQuery.data?.nextThreshold !== null && progressQuery.data?.nextThreshold !== undefined ? (
               <>
-                <div className="h-1.5 max-w-[120px] flex-1 overflow-hidden rounded-full bg-slate-200">
+                <div className="h-2 max-w-[140px] flex-1 overflow-hidden rounded-full bg-slate-200">
                   <div
-                    className="h-full rounded-full bg-amber-400 transition-all"
+                    className="h-full rounded-full bg-gradient-to-r from-amber-400 to-orange-400 transition-all duration-700 ease-out shadow-[0_0_6px_rgba(251,191,36,0.5)]"
                     style={{
                       width: `${Math.min(
                         100,
@@ -1356,7 +1613,7 @@ function StudentWorkspacePage() {
 
       {/* Today's Plan */}
       {(todaysPlanQuery.data?.slots.length ?? 0) > 0 ? (
-        <section className="rounded-2xl border border-cyan-200 bg-cyan-50/60 p-6 shadow-sm">
+        <section className="rounded-2xl border border-cyan-200 bg-cyan-50/60 p-4 shadow-sm sm:p-6">
           <div className="flex items-center gap-2 mb-4">
             <span className="rounded-full bg-cyan-600 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white">
               Today
@@ -1404,7 +1661,7 @@ function StudentWorkspacePage() {
 
       {/* Skill Maps section */}
       {data.skillTrees.length > 0 ? (
-        <section className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+        <section className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm sm:p-6">
           <div className="mb-4 flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <h2 className="text-lg font-semibold text-slate-900">My Skill Maps</h2>
@@ -1415,11 +1672,11 @@ function StudentWorkspacePage() {
               ) : null}
             </div>
           </div>
-          <div className="flex gap-3 overflow-x-auto pb-2">
+          <div className="flex max-w-full gap-3 overflow-x-auto pb-2">
             {data.skillTrees.map(({ tree, completedNodes, totalNodes, earnedXp }) => (
               <article
                 key={tree.id}
-                className="flex w-[200px] shrink-0 flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:shadow-md"
+                className="flex w-[180px] shrink-0 flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:shadow-md sm:w-[200px]"
               >
                 <p className="truncate text-sm font-semibold text-slate-900" title={tree.title}>
                   {tree.title}
@@ -1430,16 +1687,17 @@ function StudentWorkspacePage() {
                   </span>
                 ) : null}
                 <div className="mt-3 space-y-1">
-                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
                     <div
-                      className="h-full rounded-full bg-emerald-400 transition-all"
+                      className={`h-full rounded-full transition-all duration-700 ease-out ${completedNodes === totalNodes && totalNodes > 0 ? "bg-gradient-to-r from-emerald-400 to-cyan-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]" : "bg-emerald-400"}`}
                       style={{
                         width: totalNodes > 0 ? `${Math.round((completedNodes / totalNodes) * 100)}%` : "0%",
                       }}
                     />
                   </div>
                   <p className="text-[10px] text-slate-500">
-                    {completedNodes}/{totalNodes} nodes · {earnedXp} XP
+                    {completedNodes}/{totalNodes} nodes · <span className="text-amber-600 font-medium">{earnedXp} XP</span>
+                    {completedNodes === totalNodes && totalNodes > 0 ? " · 🏆 Complete!" : ""}
                   </p>
                 </div>
                 <Link
@@ -1461,7 +1719,7 @@ function StudentWorkspacePage() {
       ) : null}
 
       {/* Assignment area */}
-      <section className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+      <section className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm sm:p-6">
         {activeAssignment ? (
           renderActiveAssignment()
         ) : (
@@ -1479,7 +1737,7 @@ function StudentWorkspacePage() {
       </section>
 
       {/* Mastery Gallery / Progress */}
-      <section className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+      <section className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm sm:p-6">
         {pendingCount === 0 && data.assignments.length > 0 ? (
           <MasteryGallery
             displayName={data.profile.displayName}

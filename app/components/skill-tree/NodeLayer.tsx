@@ -28,6 +28,28 @@ export type SkillTreeNodeProgress = {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/**
+ * Compute display radius from node type and XP reward.
+ *
+ * Size tiers (clear delineation for children):
+ *   boss       — 40px base  (dominant capstone, always biggest)
+ *   milestone  — 30px base  (chapter entry points, clearly large)
+ *   lesson     — 20px base  (core topic nodes, medium)
+ *   branch     — 20px base  (hub nodes, same as lesson)
+ *   elective   — 14px base  (optional deep dives, clearly smallest)
+ *
+ * XP scales within each tier (±25% of base) so high-XP lessons
+ * are visibly larger than low-XP ones, but never overlap the tier above.
+ */
+function computeRadius(nodeType: string, xpReward: number): number {
+  const base: Record<string, number> = {
+    boss: 40, milestone: 30, lesson: 20, branch: 20, elective: 14,
+  };
+  const b = base[nodeType] ?? 20;
+  const t = Math.min(1, Math.max(0, (xpReward - 50) / 950));
+  return Math.round(b * (1 + 0.25 * t));
+}
+
 function hexagonPoints(cx: number, cy: number, r: number): string {
   return Array.from({ length: 6 }, (_, i) => {
     const a = (i * 60 - 90) * (Math.PI / 180);
@@ -58,6 +80,7 @@ type Props = {
   draggingNodeId: string | null;
   selectedNodeId: string | null;
   newlyAddedNodeIds?: Set<string>;
+  dimmedNodeIds?: Set<string>;
   onNodeClick: (nodeId: string) => void;
   onNodeDragStart: (nodeId: string, e: React.MouseEvent) => void;
 };
@@ -71,6 +94,7 @@ export function NodeLayer({
   draggingNodeId,
   selectedNodeId,
   newlyAddedNodeIds,
+  dimmedNodeIds,
   onNodeClick,
   onNodeDragStart,
 }: Props) {
@@ -79,7 +103,7 @@ export function NodeLayer({
       {nodes.map((node) => {
         const p = progressMap.get(node.id);
         const status = p?.status ?? "locked";
-        const r = node.radius ?? 28;
+        const r = computeRadius(node.nodeType, node.xpReward);
         const cx = node.positionX;
         const cy = node.positionY;
         const nodeColor = RAMP_COLORS[node.colorRamp] ?? RAMP_COLORS.blue;
@@ -109,7 +133,7 @@ export function NodeLayer({
               fill={fillColor}
               fillOpacity={shapeOpacity}
               stroke={nodeColor}
-              strokeWidth={isDragging || isSelected ? 3 : 2}
+              strokeWidth={isDragging || isSelected ? 4 : 3}
             />
           );
         } else if (node.nodeType === "boss") {
@@ -119,7 +143,7 @@ export function NodeLayer({
               fill={fillColor}
               fillOpacity={shapeOpacity}
               stroke={nodeColor}
-              strokeWidth={isDragging || isSelected ? 3 : 2}
+              strokeWidth={isDragging || isSelected ? 4 : 3}
             />
           );
         } else {
@@ -139,12 +163,13 @@ export function NodeLayer({
         // Node content
         let contentEl: React.ReactNode;
         if (isComplete) {
+          const ck = Math.max(6, Math.round(r * 0.35));
           contentEl = (
             <path
-              d={`M ${cx - 7} ${cy} L ${cx - 2} ${cy + 5} L ${cx + 8} ${cy - 5}`}
+              d={`M ${cx - ck} ${cy} L ${cx - Math.round(ck * 0.3)} ${cy + ck * 0.7} L ${cx + ck * 1.1} ${cy - ck * 0.7}`}
               fill="none"
               stroke="white"
-              strokeWidth={2.5}
+              strokeWidth={Math.max(2, Math.round(r * 0.1))}
               strokeLinecap="round"
               strokeLinejoin="round"
               style={{ pointerEvents: "none" }}
@@ -152,11 +177,15 @@ export function NodeLayer({
           );
         } else {
           const label = node.icon ?? node.title.charAt(0).toUpperCase();
+          // Scale icon/letter with node size so larger nodes don't look empty
+          const iconSize = node.icon
+            ? Math.max(14, Math.round(r * 0.65))
+            : Math.max(11, Math.round(r * 0.5));
           contentEl = (
             <text
               x={cx}
               y={cy}
-              fontSize={node.icon ? 16 : 13}
+              fontSize={iconSize}
               textAnchor="middle"
               dominantBaseline="central"
               fill="white"
@@ -195,16 +224,70 @@ export function NodeLayer({
           />
         ) : null;
 
-        // Selected ring
+        // Selected ring — three wave circles rippling outward from node center
         const selectedRing = isSelected && !isConnectSource ? (
-          <circle
-            cx={cx}
-            cy={cy}
-            r={r + 6}
+          <>
+            {/* Tight inner selection outline */}
+            <circle
+              cx={cx}
+              cy={cy}
+              r={r + 3}
+              fill="none"
+              stroke={nodeColor}
+              strokeWidth={2.5}
+              opacity={0.9}
+            />
+            {/* Wave 1 */}
+            <circle
+              cx={cx}
+              cy={cy}
+              fill="none"
+              stroke={nodeColor}
+              strokeWidth={2}
+              style={{
+                transformOrigin: `${cx}px ${cy}px`,
+                animation: "wave-select 1.5s ease-out infinite",
+              }}
+              r={r + 3}
+            />
+            {/* Wave 2 — delayed */}
+            <circle
+              cx={cx}
+              cy={cy}
+              fill="none"
+              stroke={nodeColor}
+              strokeWidth={1.5}
+              style={{
+                transformOrigin: `${cx}px ${cy}px`,
+                animation: "wave-select 1.5s ease-out 0.4s infinite",
+              }}
+              r={r + 3}
+            />
+            {/* Wave 3 — more delayed */}
+            <circle
+              cx={cx}
+              cy={cy}
+              fill="none"
+              stroke={nodeColor}
+              strokeWidth={1}
+              style={{
+                transformOrigin: `${cx}px ${cy}px`,
+                animation: "wave-select 1.5s ease-out 0.8s infinite",
+              }}
+              r={r + 3}
+            />
+          </>
+        ) : null;
+
+        // Chapter (milestone) nodes get a distinctive outer accent ring to mark them as entry points
+        const chapterRing = node.nodeType === "milestone" && !isSelected && !isConnectSource ? (
+          <polygon
+            points={hexagonPoints(cx, cy, r + 8)}
             fill="none"
             stroke={nodeColor}
-            strokeWidth={2}
-            opacity={0.6}
+            strokeWidth={1.5}
+            opacity={isLocked ? 0.15 : 0.35}
+            strokeDasharray="4 3"
           />
         ) : null;
 
@@ -253,10 +336,12 @@ export function NodeLayer({
         const labelFill = isLocked ? "#b0aea6" : "#1e293b";
         const titleText = node.title.length > 16 ? node.title.slice(0, 15) + "…" : node.title;
 
+        const isDimmed = (dimmedNodeIds?.size ?? 0) > 0 && (dimmedNodeIds?.has(node.id) ?? false);
+
         return (
           <g
             key={node.id}
-            style={{ cursor }}
+            style={{ cursor, opacity: isDimmed ? 0.15 : 1, transition: "opacity 0.2s" }}
             onClick={(e) => { e.stopPropagation(); onNodeClick(node.id); }}
             onMouseDown={(e) => {
               if (editMode && !connectMode) onNodeDragStart(node.id, e);
@@ -277,6 +362,7 @@ export function NodeLayer({
             {pingRing}
             {pulseRing}
             {connectRing}
+            {chapterRing}
             {selectedRing}
             {shapeEl}
             {contentEl}
@@ -316,7 +402,7 @@ export function NodeLayer({
       {/* Global keyframes */}
       <style>{`
         @keyframes pulse-ring {
-          0%   { opacity: 0.5; r: ${0}; }
+          0%   { opacity: 0.5; }
           70%  { opacity: 0.1; }
           100% { opacity: 0; }
         }
@@ -324,6 +410,13 @@ export function NodeLayer({
           0%   { transform: scale(1); opacity: 0.6; }
           100% { transform: scale(1.4); opacity: 0; }
         }
+        @keyframes wave-select {
+          0%   { transform: scale(1);    opacity: 0.75; }
+          70%  { transform: scale(1.5);  opacity: 0.15; }
+          100% { transform: scale(1.7);  opacity: 0; }
+        }
+        .node-hover-ring { transition: opacity 0.15s; }
+        g:hover .node-hover-ring { opacity: 0.5 !important; }
       `}</style>
     </>
   );

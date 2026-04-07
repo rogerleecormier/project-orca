@@ -41,6 +41,7 @@ type Props = {
   selectedEdgeId: string | null;
   connectingFromId: string | null;
   rubberBandEnd: { x: number; y: number } | null;
+  highlightedEdgeIds?: Set<string>;
   onEdgeClick: (edgeId: string) => void;
   onDeleteEdge?: (edgeId: string) => void;
 };
@@ -52,10 +53,12 @@ export function EdgeLayer({
   selectedEdgeId,
   connectingFromId,
   rubberBandEnd,
+  highlightedEdgeIds,
   onEdgeClick,
   onDeleteEdge,
 }: Props) {
   const nodeMap = new Map(nodes.map((n) => [n.id, n]));
+  const hasHighlight = (highlightedEdgeIds?.size ?? 0) > 0;
 
   return (
     <>
@@ -65,49 +68,63 @@ export function EdgeLayer({
         .rubber-band { animation: dash-flow 0.4s linear infinite; }
       `}</style>
 
+      {/* SVG filter for core-path glow */}
+      <defs>
+        <filter id="edge-glow" x="-60%" y="-60%" width="220%" height="220%">
+          <feGaussianBlur stdDeviation="3" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+      </defs>
+
       {edges.map((edge) => {
         const src = nodeMap.get(edge.sourceNodeId);
         const tgt = nodeMap.get(edge.targetNodeId);
         if (!src || !tgt) return null;
 
-        const midY = (src.positionY + tgt.positionY) / 2;
-        const d = `M ${src.positionX} ${src.positionY} C ${src.positionX} ${midY}, ${tgt.positionX} ${midY}, ${tgt.positionX} ${tgt.positionY}`;
+        const d = `M ${src.positionX} ${src.positionY} L ${tgt.positionX} ${tgt.positionY}`;
 
         const isSelected = selectedEdgeId === edge.id;
-        const strokeWidth = isSelected ? 3 : 2;
+        const isHighlighted = highlightedEdgeIds?.has(edge.id) ?? false;
+
+        // All connectors use a single unified style — solid, rounded, soft glow
+        // Color always comes from the source node's color ramp for visual continuity
         const baseColor = RAMP_COLORS[src.colorRamp] ?? RAMP_COLORS.blue;
-        const opacity = 0.7;
+        const stroke = baseColor;
+        const strokeWidth = isSelected ? 4 : isHighlighted ? 3 : 2;
 
-        let stroke = baseColor;
-        let strokeDasharray: string | undefined;
-
-        if (edge.edgeType === "optional") {
-          stroke = "#b4b2a9";
-          strokeDasharray = "6 3";
-        } else if (edge.edgeType === "bonus") {
-          stroke = "#ef9f27";
-          strokeDasharray = "4 4";
-        }
+        // Dimming when path highlighting is active
+        const dimOpacity = hasHighlight && !isHighlighted && !isSelected ? 0.12 : 1;
 
         const handleClick = editMode
           ? (e: React.MouseEvent) => { e.stopPropagation(); onEdgeClick(edge.id); }
           : undefined;
 
-        // Bezier midpoint (t=0.5): B(0.5) = 0.125*P0 + 0.375*P1 + 0.375*P2 + 0.125*P3
-        // where P0=(src.x,src.y), P1=(src.x,ctrlY), P2=(tgt.x,ctrlY), P3=(tgt.x,tgt.y)
-        const btMidX = 0.125 * src.positionX + 0.375 * src.positionX + 0.375 * tgt.positionX + 0.125 * tgt.positionX;
-        const btMidY = 0.125 * src.positionY + 0.375 * midY + 0.375 * midY + 0.125 * tgt.positionY;
+        const btMidX = (src.positionX + tgt.positionX) / 2;
+        const btMidY = (src.positionY + tgt.positionY) / 2;
 
         return (
-          <g key={edge.id}>
-            {/* Visible path */}
+          <g key={edge.id} opacity={dimOpacity} style={{ transition: "opacity 0.2s" }}>
+            {/* Soft glow halo */}
             <path
               d={d}
               fill="none"
-              stroke={isSelected ? baseColor : stroke}
-              strokeWidth={isSelected ? 3.5 : strokeWidth}
-              strokeDasharray={strokeDasharray}
-              opacity={isSelected ? 1 : opacity}
+              stroke={stroke}
+              strokeWidth={strokeWidth + 6}
+              opacity={isHighlighted || isSelected ? 0.35 : 0.12}
+              strokeLinecap="round"
+              filter="url(#edge-glow)"
+              style={{ pointerEvents: "none" }}
+            />
+            {/* Visible path — unified style */}
+            <path
+              d={d}
+              fill="none"
+              stroke={stroke}
+              strokeWidth={strokeWidth}
+              opacity={isSelected ? 1 : 0.7}
               strokeLinecap="round"
               style={{ pointerEvents: "none" }}
             />
@@ -120,7 +137,7 @@ export function EdgeLayer({
               style={{ cursor: editMode ? "pointer" : "default" }}
               onClick={handleClick}
             />
-            {/* Delete button at bezier midpoint (selected edge only) */}
+            {/* Delete button at segment midpoint (selected edge only) */}
             {isSelected && editMode && onDeleteEdge ? (
               <g
                 transform={`translate(${btMidX} ${btMidY})`}

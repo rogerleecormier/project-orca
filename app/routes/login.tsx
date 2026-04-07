@@ -3,6 +3,7 @@ import { Link, createFileRoute, redirect } from "@tanstack/react-router";
 import { PostLoginRoleModal } from "../components/post-login-role-modal";
 import {
   completePostLoginRoleSelection,
+  ensureDemoAccount,
   getStudentSelectionOptions,
   getViewerContext,
   loginAsParent,
@@ -15,6 +16,9 @@ export const Route = createFileRoute("/login")({
     if (viewer.isAuthenticated) {
       throw redirect({ to: viewer.activeRole === "student" ? "/student" : "/" });
     }
+
+    // Ensure the demo account exists (best-effort — never crash the login page)
+    try { await ensureDemoAccount(); } catch { /* ignore */ }
 
     return null;
   },
@@ -180,6 +184,36 @@ function LoginPage() {
         >
           {loading ? "Signing in..." : "Sign In"}
         </button>
+
+        <div className="mt-3 flex items-center gap-3">
+          <div className="flex-1 h-px bg-slate-200" />
+          <span className="text-xs text-slate-400">or</span>
+          <div className="flex-1 h-px bg-slate-200" />
+        </div>
+
+        <button
+          type="button"
+          onClick={async () => {
+            setError(null);
+            setLoading(true);
+            try {
+              await loginAsParent({ data: { username: "demo", password: "demo1234" } });
+              const options = await getStudentSelectionOptions();
+              setProfiles(options.profiles);
+              setRoleModalError(null);
+              setRoleModalOpen(true);
+            } catch {
+              setError("Demo account not available. Seed it from Settings → Content Controls.");
+            } finally {
+              setLoading(false);
+            }
+          }}
+          disabled={loading}
+          className="mt-3 w-full rounded-xl border border-cyan-300 bg-cyan-50 px-4 py-2 text-sm font-medium text-cyan-700 hover:bg-cyan-100 disabled:opacity-60"
+        >
+          Try Demo Account
+        </button>
+        <p className="mt-1.5 text-center text-xs text-slate-500">Explore with pre-loaded sample data — no account needed</p>
 
         <p className="mt-4 text-sm text-slate-600">
           Don't have an account? <Link className="font-medium text-cyan-700 hover:underline" to="/register">Create One</Link>

@@ -17,7 +17,17 @@
       "Read(//run/media/rogerleecormier/Storage/dev/project-orca/app/routes/**)",
       "Bash(grep -n 'rewards\\\\|skill-tree\\\\.$treeId' /run/media/rogerleecormier/Storage/dev/project-orca/app/routeTree.gen.ts)",
       "Bash(pnpm vite:*)",
-      "Bash(node_modules/.bin/tsr generate:*)"
+      "Bash(node_modules/.bin/tsr generate:*)",
+      "Read(//^function CurriculumBuilderPage/,/^function/**)",
+      "Bash(pnpm typecheck:*)",
+      "Read(//run/media/rogerleecormier/Storage/**)",
+      "Bash(grep -E \"\\\\.tsx?$\")",
+      "Read(//run/media/rogerleecormier/Storage/dev/project-orca/**)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(pnpm db:migrate:remote)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(echo \"exit:$?\")",
+      "Bash(ls -la /run/media/rogerleecormier/Storage/dev/project-orca/app/routes/skill-tree*)"
     ]
   }
 }

@@ -259,6 +259,42 @@ export const profiles = sqliteTable(
   (table) => [index("profiles_org_idx").on(table.organizationId)],
 );
 
+export const markingPeriods = sqliteTable(
+  "marking_periods",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    label: text("label").notNull(), // "Q1", "MP1", "Semester 1"
+    title: text("title").notNull(), // "First Quarter"
+    periodNumber: integer("period_number").notNull(), // 1, 2, 3, or 4
+    startDate: text("start_date").notNull(), // ISO date "2025-09-01"
+    endDate: text("end_date").notNull(), // ISO date "2025-11-15"
+    schoolYear: text("school_year").notNull(), // "2025-2026"
+    status: text("status", {
+      enum: ["upcoming", "active", "completed"],
+    })
+      .notNull()
+      .default("upcoming"),
+    createdAt: text("created_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+    updatedAt: text("updated_at")
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+  },
+  (table) => [
+    index("marking_periods_org_idx").on(table.organizationId),
+    index("marking_periods_org_year_idx").on(table.organizationId, table.schoolYear),
+    uniqueIndex("marking_periods_org_number_year_unique").on(
+      table.organizationId,
+      table.periodNumber,
+      table.schoolYear,
+    ),
+  ],
+);
+
 export const classes = sqliteTable(
   "classes",
   {
@@ -266,6 +302,10 @@ export const classes = sqliteTable(
     organizationId: text("organization_id")
       .notNull()
       .references(() => organizations.id, { onDelete: "cascade" }),
+    markingPeriodId: text("marking_period_id").references(
+      () => markingPeriods.id,
+      { onDelete: "set null" },
+    ),
     title: text("title").notNull(),
     description: text("description"),
     schoolYear: text("school_year"),
@@ -282,6 +322,7 @@ export const classes = sqliteTable(
   (table) => [
     index("classes_org_idx").on(table.organizationId),
     index("classes_school_year_idx").on(table.schoolYear),
+    index("classes_marking_period_idx").on(table.markingPeriodId),
   ],
 );
 
@@ -322,9 +363,13 @@ export const assignments = sqliteTable(
     title: text("title").notNull(),
     description: text("description"),
     contentType: text("content_type", {
-      enum: ["text", "file", "url", "video", "quiz", "essay_questions", "report"],
+      enum: ["text", "file", "url", "video", "quiz", "essay_questions", "report", "movie"],
     }).notNull(),
     contentRef: text("content_ref"),
+    markingPeriodId: text("marking_period_id").references(
+      () => markingPeriods.id,
+      { onDelete: "set null" },
+    ),
     linkedAssignmentId: text("linked_assignment_id"),
     dueAt: text("due_at"),
     createdByUserId: text("created_by_user_id")
@@ -341,6 +386,7 @@ export const assignments = sqliteTable(
     index("assignments_org_idx").on(table.organizationId),
     index("assignments_class_idx").on(table.classId),
     index("assignments_linked_idx").on(table.linkedAssignmentId),
+    index("assignments_marking_period_idx").on(table.markingPeriodId),
   ],
 );
 
@@ -354,7 +400,7 @@ export const assignmentTemplates = sqliteTable(
     title: text("title").notNull(),
     description: text("description"),
     contentType: text("content_type", {
-      enum: ["text", "file", "url", "video", "quiz", "essay_questions", "report"],
+      enum: ["text", "file", "url", "video", "quiz", "essay_questions", "report", "movie"],
     }).notNull(),
     contentRef: text("content_ref"),
     tags: text("tags").notNull().default("[]"),

@@ -4,13 +4,13 @@ import { and, count, desc, eq, gte, inArray, isNull, lte, or, sql, sum } from "d
 import { env } from "cloudflare:workers";
 import { z } from "zod";
 import { getDb } from "../db/client";
-import { seedAssignmentTemplates } from "../db/seed-templates";
 import {
   assignments,
   assignmentTemplates,
   classEnrollments,
   classes,
   healthCheck,
+  markingPeriods,
   memberships,
   organizations,
   profiles,
@@ -31,13 +31,22 @@ import { auth, getRoleContext, requireActiveRole } from "../lib/auth";
 import {
   fetchYoutubeTranscript,
   fetchYoutubeTranscriptWithMeta,
+  generateBranchCluster,
+  generateChapterCluster,
+  generateCurriculumSpine,
+  generateAssignmentsForNode,
+  generateNodeAssignments,
+  type AssignmentPrefs,
+  type GeneratedAssignment,
   generateCurriculumTree,
+  generateCurriculumWebFromSpine,
   generateNodeExpansion,
   generateQuizDraft,
   generateRewardSuggestions,
   generateWeekPlanWithAI as aiGenerateWeekPlan,
   gradeSubmission,
-  layoutRadialTree,
+  layoutForceDirected,
+  reweaveCurriculumTree,
   searchYoutubeForVideos,
 } from "../lib/ai";
 
@@ -46,6 +55,9 @@ const DEFAULT_PBKDF2_ITERATIONS = 100000;
 const PASSWORD_HASH_VERSION = "pbkdf2_sha256";
 const MIN_PBKDF2_ITERATIONS = 50000;
 const MAX_PBKDF2_ITERATIONS = 600000;
+type SkillTreeNodeRow = typeof skillTreeNodes.$inferSelect;
+type SkillTreeEdgeRow = typeof skillTreeEdges.$inferSelect;
+type SkillTreeNodeProgressRow = typeof skillTreeNodeProgress.$inferSelect;
 const subtleCrypto = crypto.subtle as SubtleCrypto & {
   timingSafeEqual(a: BufferSource, b: BufferSource): boolean;
 };
@@ -381,6 +393,15 @@ function getCurrentSchoolYearLabel() {
   const year = now.getFullYear();
   const start = now.getMonth() >= 7 ? year : year - 1;
   return `${start}-${start + 1}`;
+}
+
+function chunkIds(ids: string[], chunkSize = 50): string[][] {
+  if (ids.length === 0) return [];
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    chunks.push(ids.slice(i, i + chunkSize));
+  }
+  return chunks;
 }
 
 function buildDemoAssignments(
@@ -883,6 +904,8 @@ export const seedDemoWorkspaceContent = createServerFn({ method: "POST" })
               title: nodeTitle,
               description: `Demo ${subject} node ${nodeIndex + 1} of ${nodeCount}.`,
               subject,
+              icon: null,
+              colorRamp: nodeType === "boss" ? "blue" : nodeType === "milestone" ? "teal" : "blue",
               nodeType,
               xpReward: 80 + (nodeIndex % 6) * 20,
               positionX: 180 + column * 160,
@@ -1094,50 +1117,78 @@ export const resetWorkspaceContent = createServerFn({ method: "POST" })
       where: eq(skillTrees.organizationId, organizationId),
       columns: { id: true },
     });
+    const orgRewardTracks = await db.query.rewardTracks.findMany({
+      where: eq(rewardTracks.organizationId, organizationId),
+      columns: { id: true },
+    });
 
     const classIds = orgClasses.map((row) => row.id);
     const profileIds = orgProfiles.map((row) => row.id);
     const assignmentIds = orgAssignments.map((row) => row.id);
     const treeIds = orgTrees.map((row) => row.id);
+    const rewardTrackIds = orgRewardTracks.map((row) => row.id);
 
-    await db.delete(weekPlan).where(eq(weekPlan.organizationId, organizationId));
-    await db.delete(submissions).where(eq(submissions.organizationId, organizationId));
+    // Execute deletes sequentially without transaction (D1 remote has limitations with BEGIN)
+    try {
+      await db.delete(weekPlan).where(eq(weekPlan.organizationId, organizationId));
+      await db.delete(submissions).where(eq(submissions.organizationId, organizationId));
 
-    if (treeIds.length > 0) {
-      await db.delete(skillTreeNodeProgress).where(inArray(skillTreeNodeProgress.treeId, treeIds));
-      await db.delete(skillTreeEdges).where(inArray(skillTreeEdges.treeId, treeIds));
+      for (const treeIdChunk of chunkIds(treeIds)) {
+        await db.delete(skillTreeNodeProgress).where(inArray(skillTreeNodeProgress.treeId, treeIdChunk));
+        await db.delete(skillTreeEdges).where(inArray(skillTreeEdges.treeId, treeIdChunk));
+      }
+
+      for (const assignmentIdChunk of chunkIds(assignmentIds)) {
+        await db
+          .delete(skillTreeNodeAssignments)
+          .where(inArray(skillTreeNodeAssignments.assignmentId, assignmentIdChunk));
+      }
+
+      if (classIds.length > 0 || profileIds.length > 0) {
+        if (classIds.length > 0 && profileIds.length > 0) {
+          for (const classIdChunk of chunkIds(classIds)) {
+            await db.delete(classEnrollments).where(inArray(classEnrollments.classId, classIdChunk));
+          }
+          for (const profileIdChunk of chunkIds(profileIds)) {
+            await db.delete(classEnrollments).where(inArray(classEnrollments.profileId, profileIdChunk));
+          }
+        } else if (classIds.length > 0) {
+          for (const classIdChunk of chunkIds(classIds)) {
+            await db.delete(classEnrollments).where(inArray(classEnrollments.classId, classIdChunk));
+          }
+        } else {
+          for (const profileIdChunk of chunkIds(profileIds)) {
+            await db.delete(classEnrollments).where(inArray(classEnrollments.profileId, profileIdChunk));
+          }
+        }
+      }
+
+      await db.delete(rewardClaims).where(eq(rewardClaims.organizationId, organizationId));
+      await db.delete(rewardTiers).where(eq(rewardTiers.organizationId, organizationId));
+      for (const rewardTrackIdChunk of chunkIds(rewardTrackIds)) {
+        await db
+          .delete(rewardTrackXpSnapshots)
+          .where(inArray(rewardTrackXpSnapshots.trackId, rewardTrackIdChunk));
+      }
+      await db.delete(rewardTracks).where(eq(rewardTracks.organizationId, organizationId));
+
       await db.delete(skillTreeNodes).where(eq(skillTreeNodes.organizationId, organizationId));
       await db.delete(skillTrees).where(eq(skillTrees.organizationId, organizationId));
+      await db.delete(assignments).where(eq(assignments.organizationId, organizationId));
+      await db.delete(classes).where(eq(classes.organizationId, organizationId));
+      await db.delete(profiles).where(eq(profiles.organizationId, organizationId));
+      await db.delete(assignmentTemplates).where(
+        or(
+          eq(assignmentTemplates.organizationId, organizationId),
+          eq(assignmentTemplates.createdByUserId, session.user.id),
+        ),
+      );
+    } catch (error) {
+      console.error("Error resetting workspace content:", error);
+      throw new Error(
+        `Failed to reset workspace content: ${error instanceof Error ? error.message : "Unknown error"}`
+      );
     }
-
-    if (classIds.length > 0 || profileIds.length > 0) {
-      if (classIds.length > 0 && profileIds.length > 0) {
-        await db.delete(classEnrollments).where(
-          or(
-            inArray(classEnrollments.classId, classIds),
-            inArray(classEnrollments.profileId, profileIds),
-          ),
-        );
-      } else if (classIds.length > 0) {
-        await db.delete(classEnrollments).where(inArray(classEnrollments.classId, classIds));
-      } else if (profileIds.length > 0) {
-        await db.delete(classEnrollments).where(inArray(classEnrollments.profileId, profileIds));
-      }
-    }
-
-    if (assignmentIds.length > 0) {
-      await db.delete(skillTreeNodeAssignments).where(inArray(skillTreeNodeAssignments.assignmentId, assignmentIds));
-    }
-
-    await db.delete(assignments).where(eq(assignments.organizationId, organizationId));
-    await db.delete(classes).where(eq(classes.organizationId, organizationId));
-    await db.delete(profiles).where(eq(profiles.organizationId, organizationId));
-    await db.delete(assignmentTemplates).where(
-      or(
-        eq(assignmentTemplates.organizationId, organizationId),
-        eq(assignmentTemplates.createdByUserId, session.user.id),
-      ),
-    );
 
     return {
       success: true,
@@ -1161,8 +1212,8 @@ export const getLoginOptions = createServerFn({ method: "GET" }).handler(async (
 });
 
 const parentLoginInput = z.object({
-  username: z.string().min(3).max(20),
-  password: z.string().min(8),
+  username: z.string().min(1).max(20),
+  password: z.string().min(1),
 });
 
 export const loginAsParent = createServerFn({ method: "POST" })
@@ -2499,14 +2550,20 @@ export const getClassEngineData = createServerFn({ method: "GET" }).handler(
       }),
     ]);
 
-    const enrollmentRows = classRows.length
-      ? await db.query.classEnrollments.findMany({
-          where: inArray(
-            classEnrollments.classId,
-            classRows.map((classRow) => classRow.id),
-          ),
-        })
-      : [];
+    const [enrollmentRows, markingPeriodRows] = await Promise.all([
+      classRows.length
+        ? db.query.classEnrollments.findMany({
+            where: inArray(
+              classEnrollments.classId,
+              classRows.map((classRow) => classRow.id),
+            ),
+          })
+        : Promise.resolve([]),
+      db.query.markingPeriods.findMany({
+        where: eq(markingPeriods.organizationId, organizationId),
+        orderBy: [markingPeriods.periodNumber],
+      }),
+    ]);
 
     const studentMap = new Map(studentRows.map((student) => [student.id, student]));
     const enrollmentsByClassId = new Map<string, string[]>();
@@ -2534,6 +2591,7 @@ export const getClassEngineData = createServerFn({ method: "GET" }).handler(
         displayName: student.displayName,
         gradeLevel: student.gradeLevel ?? null,
       })),
+      markingPeriods: markingPeriodRows,
     };
   },
 );
@@ -2578,6 +2636,7 @@ const ASSIGNMENT_CONTENT_TYPES = [
   "quiz",
   "essay_questions",
   "report",
+  "movie",
 ] as const;
 
 const createAssignmentInput = z.object({
@@ -2843,22 +2902,7 @@ async function getAccessibleAssignmentTemplates(
         ? "mine"
         : "public",
   }));
-  const seededPublicTemplates = seedAssignmentTemplates
-    .filter((template) => template.isPublic)
-    .map((template): AccessibleAssignmentTemplate => ({
-      id: template.id,
-      organizationId: template.organizationId,
-      title: template.title,
-      description: template.description,
-      contentType: template.contentType,
-      contentRef: template.contentRef,
-      tags: parseStoredTemplateTags(template.tags),
-      isPublic: template.isPublic,
-      createdByUserId: template.createdByUserId,
-      scope: "public",
-    }));
-  const mergedTemplates = [...dbTemplates, ...seededPublicTemplates];
-  const dedupedTemplates = mergedTemplates.filter((template, index, list) => (
+  const dedupedTemplates = dbTemplates.filter((template, index, list) => (
     list.findIndex((candidate) => candidate.id === template.id) === index
   ));
   const gradeTag = normalizeTemplateGradeTag(options.gradeLevel);
@@ -3443,7 +3487,7 @@ export const getCurriculumBuilderData = createServerFn({ method: "GET" }).handle
       session.session.activeOrganizationId,
     );
 
-    const [classRows, assignmentRows, userRecord, submissionRows, profileRows, templatesResult] = await Promise.all([
+    const [classRows, assignmentRows, userRecord, submissionRows, profileRows, templatesResult, markingPeriodRows] = await Promise.all([
       db.query.classes.findMany({
         where: eq(classes.organizationId, organizationId),
         orderBy: [desc(classes.createdAt)],
@@ -3469,6 +3513,10 @@ export const getCurriculumBuilderData = createServerFn({ method: "GET" }).handle
         organizationId,
         userId: session.user.id,
       }),
+      db.query.markingPeriods.findMany({
+        where: eq(markingPeriods.organizationId, organizationId),
+        orderBy: [markingPeriods.periodNumber],
+      }),
     ]);
     const templates: AccessibleAssignmentTemplate[] = templatesResult;
 
@@ -3476,6 +3524,7 @@ export const getCurriculumBuilderData = createServerFn({ method: "GET" }).handle
       parentPinLength: resolveParentPinLength(userRecord?.parentPinLength),
       classes: classRows,
       assignments: assignmentRows,
+      markingPeriods: markingPeriodRows,
       templates,
       submissions: submissionRows,
       profiles: profileRows.map((p) => ({
@@ -4710,20 +4759,24 @@ export const getSkillTreeData = createServerFn({ method: "GET" })
 
     const nodeIds = nodes.map((n) => n.id);
 
-    const junctionRows = nodeIds.length
-      ? await db.query.skillTreeNodeAssignments.findMany({
-          where: inArray(skillTreeNodeAssignments.nodeId, nodeIds),
-          orderBy: [desc(skillTreeNodeAssignments.orderIndex)],
-        })
-      : [];
+    const junctionRows: (typeof skillTreeNodeAssignments.$inferSelect)[] = [];
+    for (const chunk of chunkIds(nodeIds, 50)) {
+      const rows = await db.query.skillTreeNodeAssignments.findMany({
+        where: inArray(skillTreeNodeAssignments.nodeId, chunk),
+        orderBy: [desc(skillTreeNodeAssignments.orderIndex)],
+      });
+      junctionRows.push(...rows);
+    }
 
     const assignmentIds = [...new Set(junctionRows.map((j) => j.assignmentId))];
 
-    const assignmentRows = assignmentIds.length
-      ? await db.query.assignments.findMany({
-          where: inArray(assignments.id, assignmentIds),
-        })
-      : [];
+    const assignmentRows: (typeof assignments.$inferSelect)[] = [];
+    for (const chunk of chunkIds(assignmentIds, 50)) {
+      const rows = await db.query.assignments.findMany({
+        where: inArray(assignments.id, chunk),
+      });
+      assignmentRows.push(...rows);
+    }
 
     const assignmentMap = new Map(assignmentRows.map((a) => [a.id, a]));
 
@@ -5185,6 +5238,769 @@ export const updateNodePositions = createServerFn({ method: "POST" })
     return { updated: data.updates.length };
   });
 
+const PROGRESS_GATING_EDGE_TYPES = new Set(["required", "optional"]);
+const SPECIALIZATION_COLOR_RAMPS = ["purple", "amber", "coral", "green"] as const;
+const CORE_COLOR_RAMPS = ["blue", "teal"] as const;
+
+function isProgressGatingEdgeType(edgeType: string | null | undefined): edgeType is "required" | "optional" {
+  return typeof edgeType === "string" && PROGRESS_GATING_EDGE_TYPES.has(edgeType);
+}
+
+function parseSkillTreeLayoutMetadata(raw: string | null): {
+  description?: string;
+  cluster?: "core" | "specialization";
+  depth?: number;
+  prerequisiteGroups?: string[][];
+} {
+  if (!raw) return {};
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return {};
+    const record = parsed as Record<string, unknown>;
+    const prerequisiteGroups = Array.isArray(record.prerequisiteGroups)
+      ? (record.prerequisiteGroups as unknown[])
+          .map((group) =>
+            Array.isArray(group)
+              ? group.filter((value): value is string => typeof value === "string" && value.length > 0)
+              : [],
+          )
+          .filter((group) => group.length > 0)
+      : undefined;
+    return {
+      description: typeof record.description === "string" ? record.description : undefined,
+      cluster: record.cluster === "specialization" ? "specialization" : record.cluster === "core" ? "core" : undefined,
+      depth:
+        typeof record.depth === "number" && Number.isFinite(record.depth)
+          ? Math.max(0, Math.round(record.depth))
+          : undefined,
+      prerequisiteGroups,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function orderTreeNodesForTraversal(
+  nodeRows: SkillTreeNodeRow[],
+  edgeRows: SkillTreeEdgeRow[],
+): SkillTreeNodeRow[] {
+  const nodeById = new Map(nodeRows.map((node) => [node.id, node]));
+  const childMap = new Map<string, string[]>();
+  const inDegree = new Map<string, number>();
+
+  const sortNodeRows = (a: SkillTreeNodeRow, b: SkillTreeNodeRow) =>
+    a.positionY - b.positionY || a.positionX - b.positionX || a.title.localeCompare(b.title);
+
+  for (const node of nodeRows) {
+    childMap.set(node.id, []);
+    inDegree.set(node.id, 0);
+  }
+
+  for (const edge of edgeRows) {
+    if (!isProgressGatingEdgeType(edge.edgeType)) continue;
+    if (!nodeById.has(edge.sourceNodeId) || !nodeById.has(edge.targetNodeId)) continue;
+    childMap.get(edge.sourceNodeId)?.push(edge.targetNodeId);
+    inDegree.set(edge.targetNodeId, (inDegree.get(edge.targetNodeId) ?? 0) + 1);
+  }
+
+  const queue = nodeRows
+    .filter((node) => (inDegree.get(node.id) ?? 0) === 0)
+    .sort(sortNodeRows);
+  const ordered: SkillTreeNodeRow[] = [];
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    ordered.push(current);
+
+    const children = (childMap.get(current.id) ?? [])
+      .map((childId) => nodeById.get(childId))
+      .filter((node): node is SkillTreeNodeRow => Boolean(node))
+      .sort(sortNodeRows);
+
+    for (const child of children) {
+      const nextDegree = (inDegree.get(child.id) ?? 0) - 1;
+      inDegree.set(child.id, nextDegree);
+      if (nextDegree === 0) {
+        queue.push(child);
+        queue.sort(sortNodeRows);
+      }
+    }
+  }
+
+  const remaining = nodeRows
+    .filter((node) => !ordered.some((orderedNode) => orderedNode.id === node.id))
+    .sort(sortNodeRows);
+
+  return [...ordered, ...remaining];
+}
+
+function computeTreeDepthByNodeId(
+  nodeRows: SkillTreeNodeRow[],
+  edgeRows: SkillTreeEdgeRow[],
+): Map<string, number> {
+  const ordered = orderTreeNodesForTraversal(nodeRows, edgeRows);
+  const depthByNodeId = new Map<string, number>();
+  const parentMap = new Map<string, string[]>();
+
+  for (const node of nodeRows) {
+    parentMap.set(node.id, []);
+  }
+
+  for (const edge of edgeRows) {
+    if (!isProgressGatingEdgeType(edge.edgeType)) continue;
+    const parents = parentMap.get(edge.targetNodeId);
+    if (parents) parents.push(edge.sourceNodeId);
+  }
+
+  for (const node of ordered) {
+    const parents = parentMap.get(node.id) ?? [];
+    const depth =
+      parents.length === 0
+        ? 0
+        : parents.reduce(
+            (maxDepth, parentId) => Math.max(maxDepth, (depthByNodeId.get(parentId) ?? 0) + 1),
+            0,
+          );
+    depthByNodeId.set(node.id, depth);
+  }
+
+  return depthByNodeId;
+}
+
+function buildNodeLayoutMetadata(input: {
+  description: string | null;
+  cluster: "core" | "specialization";
+  depth: number;
+  prerequisiteGroups?: string[][];
+}) {
+  return JSON.stringify({
+    description: input.description ?? "",
+    cluster: input.cluster,
+    depth: input.depth,
+    prerequisiteGroups: input.prerequisiteGroups ?? [],
+  });
+}
+
+function normalizePrerequisiteGroups(
+  groups: string[][],
+  allowedSourceIds?: Set<string>,
+): string[][] {
+  const seen = new Set<string>();
+  const normalized: string[][] = [];
+
+  for (const rawGroup of groups) {
+    const group = Array.from(
+      new Set(
+        rawGroup.filter(
+          (sourceId): sourceId is string =>
+            typeof sourceId === "string" &&
+            sourceId.length > 0 &&
+            (!allowedSourceIds || allowedSourceIds.has(sourceId)),
+        ),
+      ),
+    ).sort();
+
+    if (group.length === 0) continue;
+
+    const key = group.join("|");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(group);
+  }
+
+  return normalized;
+}
+
+function deriveStoredPrerequisiteGroups(params: {
+  node: Pick<SkillTreeNodeRow, "aiGeneratedDescription">;
+  incomingEdges: SkillTreeEdgeRow[];
+}) {
+  const metadata = parseSkillTreeLayoutMetadata(params.node.aiGeneratedDescription);
+  const incomingSourceIds = new Set(params.incomingEdges.map((edge) => edge.sourceNodeId));
+
+  if (metadata.prerequisiteGroups?.length) {
+    const explicitGroups = normalizePrerequisiteGroups(
+      metadata.prerequisiteGroups,
+      incomingSourceIds,
+    );
+    if (explicitGroups.length > 0) return explicitGroups;
+  }
+
+  const gatingGroup = params.incomingEdges
+    .filter((edge) => isProgressGatingEdgeType(edge.edgeType))
+    .map((edge) => edge.sourceNodeId);
+
+  const fallbackGroups = normalizePrerequisiteGroups(
+    gatingGroup.length > 0 ? [gatingGroup] : [],
+    incomingSourceIds,
+  );
+
+  return fallbackGroups;
+}
+
+function arePrerequisiteGroupsMet(groups: string[][], completedNodeIds: Set<string>) {
+  if (groups.length === 0) return true;
+  return groups.some((group) => group.every((sourceId) => completedNodeIds.has(sourceId)));
+}
+
+function assignRewovenColorRamps(
+  nodes: Array<{
+    tempId: string;
+    cluster: "core" | "specialization";
+    nodeType: string;
+    depth: number;
+    prerequisites: string[];
+  }>,
+): Map<string, string> {
+  const byId = new Map(nodes.map((node) => [node.tempId, node]));
+  const colorById = new Map<string, string>();
+  const branchColorByRoot = new Map<string, string>();
+  let nextBranchColorIndex = 0;
+
+  const resolveSpecializationRoot = (nodeId: string): string => {
+    let currentId = nodeId;
+    const seen = new Set<string>();
+
+    while (!seen.has(currentId)) {
+      seen.add(currentId);
+      const current = byId.get(currentId);
+      if (!current || current.cluster !== "specialization") return currentId;
+      const primaryParentId = current.prerequisites[0];
+      if (!primaryParentId) return currentId;
+      const parent = byId.get(primaryParentId);
+      if (!parent || parent.cluster !== "specialization") return currentId;
+      currentId = primaryParentId;
+    }
+
+    return currentId;
+  };
+
+  for (const node of nodes) {
+    if (node.cluster === "specialization") {
+      const branchRootId = resolveSpecializationRoot(node.tempId);
+      let ramp = branchColorByRoot.get(branchRootId);
+      if (!ramp) {
+        ramp = SPECIALIZATION_COLOR_RAMPS[nextBranchColorIndex % SPECIALIZATION_COLOR_RAMPS.length]!;
+        branchColorByRoot.set(branchRootId, ramp);
+        nextBranchColorIndex += 1;
+      }
+      colorById.set(node.tempId, ramp);
+      continue;
+    }
+
+    const coreRamp =
+      node.nodeType === "boss"
+        ? "blue"
+        : node.nodeType === "milestone"
+          ? "teal"
+          : CORE_COLOR_RAMPS[node.depth % CORE_COLOR_RAMPS.length]!;
+    colorById.set(node.tempId, coreRamp);
+  }
+
+  return colorById;
+}
+
+async function syncSkillTreeProgressRows(params: {
+  db: ReturnType<typeof getDb>;
+  treeId: string;
+  treeProfileId?: string | null;
+  nodeRows: SkillTreeNodeRow[];
+  edgeRows: SkillTreeEdgeRow[];
+}) {
+  const { db, treeId, treeProfileId, nodeRows, edgeRows } = params;
+  const existingProgressRows = await db.query.skillTreeNodeProgress.findMany({
+    where: eq(skillTreeNodeProgress.treeId, treeId),
+  });
+
+  const profileIds = Array.from(
+    new Set([
+      ...existingProgressRows.map((row) => row.profileId),
+      ...(treeProfileId ? [treeProfileId] : []),
+    ]),
+  );
+
+  if (profileIds.length === 0) return;
+
+  const incomingEdgesByNodeId = new Map<string, SkillTreeEdgeRow[]>(
+    nodeRows.map((node) => [node.id, []]),
+  );
+
+  for (const edge of edgeRows) {
+    const incomingEdges = incomingEdgesByNodeId.get(edge.targetNodeId);
+    if (incomingEdges) incomingEdges.push(edge);
+  }
+
+  const rowsByProfileId = new Map<string, SkillTreeNodeProgressRow[]>();
+  for (const row of existingProgressRows) {
+    const bucket = rowsByProfileId.get(row.profileId) ?? [];
+    bucket.push(row);
+    rowsByProfileId.set(row.profileId, bucket);
+  }
+
+  const now = new Date().toISOString();
+
+  for (const profileId of profileIds) {
+    const profileRows = rowsByProfileId.get(profileId) ?? [];
+    const rowByNodeId = new Map(profileRows.map((row) => [row.nodeId, row]));
+    const completedNodeIds = new Set(
+      profileRows
+        .filter((row) => row.status === "complete" || row.status === "mastery")
+        .map((row) => row.nodeId),
+    );
+
+    for (const node of nodeRows) {
+      const existing = rowByNodeId.get(node.id);
+      const prerequisiteGroups = deriveStoredPrerequisiteGroups({
+        node,
+        incomingEdges: incomingEdgesByNodeId.get(node.id) ?? [],
+      });
+      const prereqsMet = arePrerequisiteGroupsMet(prerequisiteGroups, completedNodeIds);
+
+      const status =
+        existing?.status === "complete" || existing?.status === "mastery"
+          ? existing.status
+          : prereqsMet
+            ? existing?.status === "in_progress"
+              ? "in_progress"
+              : "available"
+            : "locked";
+
+      const values = {
+        status,
+        xpEarned:
+          status === "complete" || status === "mastery"
+            ? existing?.xpEarned ?? node.xpReward
+            : status === "in_progress"
+              ? Math.max(existing?.xpEarned ?? 0, Math.max(40, Math.round(node.xpReward * 0.45)))
+              : 0,
+        completedAt: status === "complete" || status === "mastery" ? existing?.completedAt ?? null : null,
+        masteryAt: status === "mastery" ? existing?.masteryAt ?? existing?.completedAt ?? null : null,
+        updatedAt: now,
+      } as const;
+
+      if (existing) {
+        await db
+          .update(skillTreeNodeProgress)
+          .set(values)
+          .where(
+            and(
+              eq(skillTreeNodeProgress.nodeId, node.id),
+              eq(skillTreeNodeProgress.profileId, profileId),
+            ),
+          );
+      } else {
+        await db.insert(skillTreeNodeProgress).values({
+          id: crypto.randomUUID(),
+          nodeId: node.id,
+          profileId,
+          treeId,
+          ...values,
+        });
+      }
+    }
+  }
+}
+
+const autoLayoutSkillTreeInput = z.object({
+  treeId: z.string(),
+});
+
+export const autoLayoutSkillTree = createServerFn({ method: "POST" })
+  .inputValidator((data) => autoLayoutSkillTreeInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const tree = await db.query.skillTrees.findFirst({
+      where: and(eq(skillTrees.id, data.treeId), eq(skillTrees.organizationId, organizationId)),
+    });
+    if (!tree) throw new Error("NOT_FOUND");
+
+    const [nodeRows, edgeRows] = await Promise.all([
+      db.query.skillTreeNodes.findMany({
+        where: and(
+          eq(skillTreeNodes.treeId, data.treeId),
+          eq(skillTreeNodes.organizationId, organizationId),
+        ),
+      }),
+      db.query.skillTreeEdges.findMany({
+        where: eq(skillTreeEdges.treeId, data.treeId),
+      }),
+    ]);
+
+    if (nodeRows.length === 0) {
+      return { updated: 0, nodes: [], edges: [] };
+    }
+
+    const prerequisitesByNode = new Map<string, string[]>(
+      nodeRows.map((node) => [node.id, []]),
+    );
+    for (const edge of edgeRows) {
+      const existing = prerequisitesByNode.get(edge.targetNodeId);
+      if (existing) existing.push(edge.sourceNodeId);
+    }
+
+    const specializationRamps = new Set(["purple", "amber", "coral", "green"]);
+    const layoutNodes = enforceAdjacentPrerequisites(
+      nodeRows.map((node) => {
+        const parsedLayout = parseSkillTreeLayoutMetadata(node.aiGeneratedDescription);
+
+        const cluster =
+          parsedLayout.cluster === "specialization" ||
+          node.nodeType === "elective" ||
+          specializationRamps.has(node.colorRamp)
+            ? "specialization"
+            : "core";
+
+        return {
+          tempId: node.id,
+          prerequisites: prerequisitesByNode.get(node.id) ?? [],
+          depth: parsedLayout.depth,
+          cluster,
+          nodeType: node.nodeType,
+          description: node.description,
+        };
+      }),
+    );
+
+    const existingEdgeTypeByKey = new Map(
+      edgeRows.map((edge) => [`${edge.sourceNodeId}>${edge.targetNodeId}`, edge.edgeType] as const),
+    );
+    const now = new Date().toISOString();
+    const layoutNodeById = new Map(layoutNodes.map((node) => [node.tempId, node] as const));
+
+    const positionMap = layoutForceDirected(
+      layoutNodes.map((node) => ({
+        id: node.tempId,
+        prerequisites: node.prerequisites,
+        depth: node.depth,
+        cluster: node.cluster,
+        nodeType: node.nodeType,
+      })),
+      { width: 1200, height: 900 },
+    );
+
+    const normalizedEdgeRows: SkillTreeEdgeRow[] = layoutNodes.flatMap((node) =>
+      node.prerequisites.map((sourceNodeId, index) => ({
+        id: crypto.randomUUID(),
+        treeId: data.treeId,
+        sourceNodeId,
+        targetNodeId: node.tempId,
+        edgeType:
+          index > 0
+            ? "bonus"
+            : (existingEdgeTypeByKey.get(`${sourceNodeId}>${node.tempId}`) ??
+                (node.cluster === "specialization" || node.nodeType === "elective"
+                  ? "optional"
+                  : "required")),
+        createdAt: now,
+      })),
+    );
+
+    const incomingEdgesByNodeId = new Map<string, SkillTreeEdgeRow[]>(
+      nodeRows.map((node) => [node.id, []]),
+    );
+    for (const edge of normalizedEdgeRows) {
+      const incomingEdges = incomingEdgesByNodeId.get(edge.targetNodeId);
+      if (incomingEdges) incomingEdges.push(edge);
+    }
+
+    const updatedNodeRows = nodeRows.map((node) => {
+      const position = positionMap.get(node.id) ?? {
+        x: node.positionX,
+        y: node.positionY,
+      };
+      const layoutNode = layoutNodeById.get(node.id);
+      const parsedLayout = parseSkillTreeLayoutMetadata(node.aiGeneratedDescription);
+      const prerequisiteGroups =
+        parsedLayout.prerequisiteGroups && parsedLayout.prerequisiteGroups.length > 0
+          ? normalizePrerequisiteGroups(
+              parsedLayout.prerequisiteGroups,
+              new Set((incomingEdgesByNodeId.get(node.id) ?? []).map((edge) => edge.sourceNodeId)),
+            )
+          : layoutNode && layoutNode.prerequisites.length > 1
+            ? layoutNode.prerequisites.map((sourceId) => [sourceId])
+            : layoutNode && layoutNode.prerequisites.length === 1
+              ? [layoutNode.prerequisites]
+              : [];
+
+      return {
+        ...node,
+        positionX: position.x,
+        positionY: position.y,
+        aiGeneratedDescription: buildNodeLayoutMetadata({
+          description: node.description,
+          cluster: layoutNode?.cluster === "specialization" ? "specialization" : "core",
+          depth: layoutNode?.depth ?? 0,
+          prerequisiteGroups,
+        }),
+        updatedAt: now,
+      };
+    });
+
+    await Promise.all(
+      updatedNodeRows.map((node) => {
+        return db
+          .update(skillTreeNodes)
+          .set({
+            positionX: node.positionX,
+            positionY: node.positionY,
+            aiGeneratedDescription: node.aiGeneratedDescription,
+            updatedAt: now,
+          })
+          .where(eq(skillTreeNodes.id, node.id));
+      }),
+    );
+
+    await db.delete(skillTreeEdges).where(eq(skillTreeEdges.treeId, data.treeId));
+    if (normalizedEdgeRows.length > 0) {
+      await Promise.all(normalizedEdgeRows.map((edge) => db.insert(skillTreeEdges).values(edge)));
+    }
+
+    await syncSkillTreeProgressRows({
+      db,
+      treeId: data.treeId,
+      treeProfileId: tree.profileId,
+      nodeRows: updatedNodeRows,
+      edgeRows: normalizedEdgeRows,
+    });
+
+    const progressRows = tree.profileId
+      ? await db.query.skillTreeNodeProgress.findMany({
+          where: and(
+            eq(skillTreeNodeProgress.treeId, data.treeId),
+            eq(skillTreeNodeProgress.profileId, tree.profileId),
+          ),
+        })
+      : [];
+
+    return {
+      updated: nodeRows.length,
+      nodes: updatedNodeRows,
+      edges: normalizedEdgeRows,
+      nodeProgress: progressRows,
+    };
+  });
+
+const reweaveSkillTreeInput = z.object({
+  treeId: z.string(),
+});
+
+export const reweaveSkillTree = createServerFn({ method: "POST" })
+  .inputValidator((data) => reweaveSkillTreeInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const tree = await db.query.skillTrees.findFirst({
+      where: and(eq(skillTrees.id, data.treeId), eq(skillTrees.organizationId, organizationId)),
+    });
+    if (!tree) throw new Error("NOT_FOUND");
+
+    const [nodeRows, edgeRows] = await Promise.all([
+      db.query.skillTreeNodes.findMany({
+        where: and(
+          eq(skillTreeNodes.treeId, data.treeId),
+          eq(skillTreeNodes.organizationId, organizationId),
+        ),
+      }),
+      db.query.skillTreeEdges.findMany({
+        where: eq(skillTreeEdges.treeId, data.treeId),
+      }),
+    ]);
+
+    if (nodeRows.length === 0) {
+      return { updated: 0, nodes: [], edges: [] };
+    }
+
+    const orderedNodes = orderTreeNodesForTraversal(nodeRows, edgeRows);
+    const currentDepthByNodeId = computeTreeDepthByNodeId(nodeRows, edgeRows);
+    const tempIdByRealId = new Map<string, string>();
+    const realIdByTempId = new Map<string, string>();
+
+    orderedNodes.forEach((node, index) => {
+      const tempId = `node_${index + 1}`;
+      tempIdByRealId.set(node.id, tempId);
+      realIdByTempId.set(tempId, node.id);
+    });
+
+    const specializationRamps = new Set(["purple", "amber", "coral", "green"]);
+    const rewovenPlan = await reweaveCurriculumTree({
+      treeTitle: tree.title,
+      subject: tree.subject ?? "general",
+      gradeLevel: tree.gradeLevel ?? "mixed",
+      nodes: orderedNodes.map((node) => {
+        const metadata = parseSkillTreeLayoutMetadata(node.aiGeneratedDescription);
+        return {
+          tempId: tempIdByRealId.get(node.id)!,
+          title: node.title,
+          description: node.description ?? metadata.description ?? "",
+          nodeType: node.nodeType,
+          colorRamp: node.colorRamp,
+          xpReward: node.xpReward,
+        };
+      }),
+    });
+
+    const planByTempId = new Map(rewovenPlan.map((node) => [node.tempId, node]));
+    const rawLayoutNodes = orderedNodes.map((node, index) => {
+      const tempId = tempIdByRealId.get(node.id)!;
+      const plan = planByTempId.get(tempId);
+      const fallbackCluster =
+        node.nodeType === "elective" || specializationRamps.has(node.colorRamp)
+          ? "specialization"
+          : "core";
+
+      const prerequisites = [
+        ...(plan?.primaryPrerequisite ? [plan.primaryPrerequisite] : []),
+        ...(plan?.bonusPrerequisites ?? []),
+      ];
+
+      return {
+        tempId,
+        prerequisites: index === 0 ? [] : prerequisites,
+        depth: index === 0 ? 0 : Math.max(1, plan?.depth ?? (currentDepthByNodeId.get(node.id) ?? index)),
+        cluster: index === 0 ? "core" : (plan?.cluster ?? fallbackCluster),
+        nodeType: node.nodeType,
+      };
+    });
+
+    const normalizedLayoutNodes = enforceAdjacentPrerequisites(rawLayoutNodes);
+    const rewovenColorRampByTempId = assignRewovenColorRamps(normalizedLayoutNodes);
+    const positionMap = layoutForceDirected(
+      normalizedLayoutNodes.map((node) => ({
+        id: node.tempId,
+        prerequisites: node.prerequisites,
+        depth: node.depth,
+        cluster: node.cluster,
+        nodeType: node.nodeType,
+      })),
+      { width: 1200, height: 900 },
+    );
+
+    const now = new Date().toISOString();
+    const normalizedNodeByTempId = new Map(
+      normalizedLayoutNodes.map((node) => [node.tempId, node] as const),
+    );
+
+    const updatedNodes: SkillTreeNodeRow[] = orderedNodes.map((node) => {
+      const tempId = tempIdByRealId.get(node.id)!;
+      const normalizedNode = normalizedNodeByTempId.get(tempId)!;
+      const position = positionMap.get(tempId) ?? {
+        x: node.positionX,
+        y: node.positionY,
+      };
+      const prerequisiteGroups =
+        normalizedNode.prerequisites.length > 1
+          ? normalizedNode.prerequisites
+              .map((prereqTempId) => realIdByTempId.get(prereqTempId))
+              .filter((prereqId): prereqId is string => typeof prereqId === "string")
+              .map((prereqId) => [prereqId])
+          : normalizedNode.prerequisites.length === 1
+            ? [[realIdByTempId.get(normalizedNode.prerequisites[0]!)!]]
+            : [];
+
+      return {
+        ...node,
+        positionX: position.x,
+        positionY: position.y,
+        colorRamp: rewovenColorRampByTempId.get(tempId) ?? node.colorRamp,
+        aiGeneratedDescription: buildNodeLayoutMetadata({
+          description: node.description,
+          cluster: normalizedNode.cluster,
+          depth: normalizedNode.depth ?? 0,
+          prerequisiteGroups,
+        }),
+        updatedAt: now,
+      };
+    });
+
+    const edgeSet = new Set<string>();
+    const rewovenEdgeRows: SkillTreeEdgeRow[] = [];
+    for (const node of normalizedLayoutNodes) {
+      for (const [index, prereqTempId] of node.prerequisites.entries()) {
+        const sourceNodeId = realIdByTempId.get(prereqTempId);
+        const targetNodeId = realIdByTempId.get(node.tempId);
+        if (!sourceNodeId || !targetNodeId) continue;
+
+        const key = `${sourceNodeId}>${targetNodeId}`;
+        if (edgeSet.has(key)) continue;
+        edgeSet.add(key);
+
+        const edgeType: SkillTreeEdgeRow["edgeType"] =
+          index > 0
+            ? "bonus"
+            : node.cluster === "specialization" || node.nodeType === "elective"
+              ? "optional"
+              : "required";
+
+        rewovenEdgeRows.push({
+          id: crypto.randomUUID(),
+          treeId: data.treeId,
+          sourceNodeId,
+          targetNodeId,
+          edgeType,
+          createdAt: now,
+        });
+      }
+    }
+
+    await Promise.all(
+      updatedNodes.map((node) =>
+        db
+          .update(skillTreeNodes)
+          .set({
+            positionX: node.positionX,
+            positionY: node.positionY,
+            colorRamp: node.colorRamp,
+            aiGeneratedDescription: node.aiGeneratedDescription,
+            updatedAt: now,
+          })
+          .where(eq(skillTreeNodes.id, node.id)),
+      ),
+    );
+
+    await db.delete(skillTreeEdges).where(eq(skillTreeEdges.treeId, data.treeId));
+    if (rewovenEdgeRows.length > 0) {
+      await Promise.all(rewovenEdgeRows.map((edge) => db.insert(skillTreeEdges).values(edge)));
+    }
+
+    await syncSkillTreeProgressRows({
+      db,
+      treeId: data.treeId,
+      treeProfileId: tree.profileId,
+      nodeRows: updatedNodes,
+      edgeRows: rewovenEdgeRows,
+    });
+
+    const progressRows = tree.profileId
+      ? await db.query.skillTreeNodeProgress.findMany({
+          where: and(
+            eq(skillTreeNodeProgress.treeId, data.treeId),
+            eq(skillTreeNodeProgress.profileId, tree.profileId),
+          ),
+        })
+      : [];
+
+    return {
+      updated: updatedNodes.length,
+      nodes: updatedNodes,
+      edges: rewovenEdgeRows,
+      nodeProgress: progressRows,
+    };
+  });
+
 const saveTreeViewportInput = z.object({
   treeId: z.string(),
   viewportX: z.number().int(),
@@ -5312,11 +6128,25 @@ export const markNodeComplete = createServerFn({ method: "POST" })
     await Promise.all(
       outgoingEdges.map(async (edge) => {
         // Get all incoming edges to the target node
-        const incomingEdges = await db.query.skillTreeEdges.findMany({
-          where: eq(skillTreeEdges.targetNodeId, edge.targetNodeId),
-        });
+        const [incomingEdges, targetNode] = await Promise.all([
+          db.query.skillTreeEdges.findMany({
+            where: eq(skillTreeEdges.targetNodeId, edge.targetNodeId),
+          }),
+          db.query.skillTreeNodes.findFirst({
+            where: eq(skillTreeNodes.id, edge.targetNodeId),
+            columns: { id: true, aiGeneratedDescription: true },
+          }),
+        ]);
 
-        const incomingSourceIds = incomingEdges.map((e) => e.sourceNodeId);
+        if (!targetNode) return;
+
+        const prerequisiteGroups = deriveStoredPrerequisiteGroups({
+          node: targetNode,
+          incomingEdges,
+        });
+        const incomingSourceIds = Array.from(
+          new Set(prerequisiteGroups.flatMap((group) => group)),
+        );
 
         // Check if all incoming source nodes are completed/mastery for this profile
         const completedSourceRows = incomingSourceIds.length
@@ -5334,7 +6164,7 @@ export const markNodeComplete = createServerFn({ method: "POST" })
             .map((p) => p.nodeId),
         );
 
-        const allPrereqsMet = incomingSourceIds.every((id) => completedSet.has(id));
+        const allPrereqsMet = arePrerequisiteGroupsMet(prerequisiteGroups, completedSet);
 
         if (allPrereqsMet) {
           // Upsert target to available (only if currently locked)
@@ -5500,7 +6330,12 @@ export const aiExpandSkillTree = createServerFn({ method: "POST" })
           positionY: newY,
           radius: 28,
           isRequired: false,
-          aiGeneratedDescription: suggestion.description || null,
+          aiGeneratedDescription: buildNodeLayoutMetadata({
+            description: suggestion.description || null,
+            cluster: suggestion.cluster,
+            depth: suggestion.depth,
+            prerequisiteGroups: [[data.fromNodeId]],
+          }),
           createdAt: now,
           updatedAt: now,
         });
@@ -5511,7 +6346,10 @@ export const aiExpandSkillTree = createServerFn({ method: "POST" })
           treeId: data.treeId,
           sourceNodeId: data.fromNodeId,
           targetNodeId: nodeId,
-          edgeType: "required",
+          edgeType:
+            suggestion.cluster === "specialization" || suggestion.nodeType === "elective"
+              ? "optional"
+              : "required",
           createdAt: now,
         });
 
@@ -5617,7 +6455,7 @@ export const aiGenerateNodeAssignments = createServerFn({ method: "POST" })
 
     if (!parsed) throw new Error("AI_ASSIGNMENT_PARSE_FAILED");
 
-    const VALID_TYPES = new Set(["text", "file", "url", "video", "quiz", "essay_questions", "report"]);
+    const VALID_TYPES = new Set(["text", "file", "url", "video", "quiz", "essay_questions", "report", "movie"]);
     type SuggestionItem = { type: string; title: string; description: string };
     const suggestions = (parsed as unknown[])
       .filter(
@@ -5685,6 +6523,109 @@ const aiSuggestFullCurriculumInput = z.object({
   seedTopic: z.string().optional(),
 });
 
+type AdjacencyNodeShape = {
+  tempId: string;
+  prerequisites: string[];
+  depth?: number;
+  cluster?: string;
+  nodeType?: string;
+};
+
+/**
+ * Enforce local connectivity rules:
+ * - no self-links
+ * - only references to earlier nodes
+ * - prefer prerequisites from adjacent depth (difference <= 1)
+ * - keep graph connected by adding one fallback prerequisite when needed
+ */
+function enforceAdjacentPrerequisites<T extends AdjacencyNodeShape>(nodes: T[]): T[] {
+  if (nodes.length <= 1) return nodes;
+
+  const byId = new Map(nodes.map((n) => [n.tempId, n]));
+  const order = new Map(nodes.map((n, i) => [n.tempId, i]));
+  const processed: string[] = [];
+  const depthOf = (n: AdjacencyNodeShape, fallbackIndex: number) =>
+    typeof n.depth === "number" && Number.isFinite(n.depth) ? n.depth : fallbackIndex;
+  const clusterOf = (id: string) =>
+    byId.get(id)?.cluster === "specialization" ? "specialization" : "core";
+
+  return nodes.map((node, index) => {
+    const thisIndex = order.get(node.tempId) ?? index;
+    const nodeDepth = depthOf(node, thisIndex);
+    const allowBridgeBackToCore =
+      (node.cluster ?? "core") === "core" &&
+      nodeDepth >= 2 &&
+      node.nodeType !== "elective";
+
+    const adjacentPool = processed.filter((id) => {
+      const src = byId.get(id);
+      if (!src) return false;
+      const srcDepth = depthOf(src, order.get(id) ?? 0);
+      if (srcDepth >= nodeDepth) return false;
+      return nodeDepth - srcDepth <= 1;
+    });
+
+    const widerPool = processed.filter((id) => {
+      const src = byId.get(id);
+      if (!src) return false;
+      const srcDepth = depthOf(src, order.get(id) ?? 0);
+      return srcDepth < nodeDepth;
+    });
+
+    const fallbackPool = adjacentPool.length > 0 ? adjacentPool : widerPool.length > 0 ? widerPool : processed;
+
+    const scoreCandidate = (sourceId: string) => {
+      const src = byId.get(sourceId)!;
+      const srcDepth = depthOf(src, order.get(sourceId) ?? 0);
+      const depthPenalty = Math.abs((nodeDepth - srcDepth) - 1) * 100;
+      const clusterPenalty =
+        node.cluster && src.cluster && node.cluster !== src.cluster
+          ? 10
+          : 0;
+      const indexPenalty = Math.abs((order.get(sourceId) ?? 0) - thisIndex) * 0.01;
+      return depthPenalty + clusterPenalty + indexPenalty;
+    };
+
+    const uniqueRaw = Array.from(
+      new Set(
+        node.prerequisites.filter((sourceId) => {
+          if (sourceId === node.tempId) return false;
+          const src = byId.get(sourceId);
+          if (!src) return false;
+          const srcDepth = depthOf(src, order.get(sourceId) ?? 0);
+          const sourceIndex = order.get(sourceId);
+          if (typeof sourceIndex !== "number" || sourceIndex >= thisIndex) return false;
+          return srcDepth < nodeDepth && nodeDepth - srcDepth <= 1;
+        }),
+      ),
+    );
+
+    const repaired = [...uniqueRaw];
+    if (thisIndex > 0 && repaired.length === 0 && fallbackPool.length > 0) {
+      const fallback = [...fallbackPool].sort((a, b) => scoreCandidate(a) - scoreCandidate(b))[0];
+      if (fallback) repaired.push(fallback);
+    }
+
+    const sanitized = repaired
+      .sort((a, b) => scoreCandidate(a) - scoreCandidate(b))
+      .slice(0, 1);
+
+    if (allowBridgeBackToCore && sanitized[0]) {
+      const primarySourceId = sanitized[0];
+      const bridgeSourceId = repaired
+        .filter((sourceId) => sourceId !== primarySourceId)
+        .filter((sourceId) => clusterOf(sourceId) !== clusterOf(primarySourceId))
+        .sort((a, b) => scoreCandidate(a) - scoreCandidate(b))[0];
+      if (bridgeSourceId) {
+        sanitized.push(bridgeSourceId);
+      }
+    }
+
+    processed.push(node.tempId);
+    return { ...node, prerequisites: sanitized };
+  });
+}
+
 export const aiSuggestFullCurriculum = createServerFn({ method: "POST" })
   .inputValidator((data) => aiSuggestFullCurriculumInput.parse(data))
   .handler(async ({ data }) => {
@@ -5708,17 +6649,29 @@ export const aiSuggestFullCurriculum = createServerFn({ method: "POST" })
     const existingNodeTitles = existingNodes.map((n) => n.title);
 
     // b) Call generateCurriculumTree
-    const suggestions = await generateCurriculumTree({
+    const generatedSuggestions = await generateCurriculumTree({
       subject: data.subject,
       gradeLevel: data.gradeLevel,
       depth: data.depth ?? 4,
       seedTopic: data.seedTopic,
       existingNodeTitles,
     });
+    const suggestions = enforceAdjacentPrerequisites(
+      generatedSuggestions.map((s) => ({
+        ...s,
+        prerequisites: s.prerequisites,
+      })),
+    );
 
-    // c) Compute positions via layoutRadialTree
-    const layoutItems = suggestions.map((s) => ({ id: s.tempId, parentId: s.parentTempId }));
-    const positionMap = layoutRadialTree(layoutItems);
+    // c) Compute positions via force-directed layout (handles multi-prerequisite web)
+    const layoutItems = suggestions.map((s) => ({
+      id: s.tempId,
+      prerequisites: s.prerequisites,
+      depth: s.depth,
+      cluster: s.cluster,
+      nodeType: s.nodeType,
+    }));
+    const positionMap = layoutForceDirected(layoutItems);
 
     // d) Insert nodes — build tempId → real ID map first
     const tempIdToRealId = new Map<string, string>();
@@ -5747,30 +6700,55 @@ export const aiSuggestFullCurriculum = createServerFn({ method: "POST" })
           positionY: pos.y,
           radius: 28,
           isRequired: false,
-          aiGeneratedDescription: suggestion.description || null,
+          aiGeneratedDescription: buildNodeLayoutMetadata({
+            description: suggestion.description || null,
+            cluster: suggestion.cluster,
+            depth: suggestion.depth,
+            prerequisiteGroups:
+              suggestion.prerequisites.length > 1
+                ? suggestion.prerequisites
+                    .map((prereqTempId) => tempIdToRealId.get(prereqTempId))
+                    .filter((prereqId): prereqId is string => typeof prereqId === "string")
+                    .map((prereqId) => [prereqId])
+                : suggestion.prerequisites.length === 1
+                  ? [[tempIdToRealId.get(suggestion.prerequisites[0]!)!]]
+                  : [],
+          }),
           createdAt: now,
           updatedAt: now,
         });
       }),
     );
 
-    // e) Insert edges from parentTempId → tempId relationships
-    const edgeInserts = suggestions
-      .filter((s) => s.parentTempId !== null)
-      .map((s) => {
-        const sourceId = tempIdToRealId.get(s.parentTempId!);
-        const targetId = tempIdToRealId.get(s.tempId);
-        if (!sourceId || !targetId) return null;
-        return {
+    // e) Insert edges — one edge per entry in prerequisites (enables cross-links)
+    const edgeInserts: Array<{
+      id: string;
+      treeId: string;
+      sourceNodeId: string;
+      targetNodeId: string;
+      edgeType: "required" | "optional" | "bonus";
+      createdAt: string;
+    }> = [];
+    for (const suggestion of suggestions) {
+      for (const [index, prereqTempId] of suggestion.prerequisites.entries()) {
+        const sourceId = tempIdToRealId.get(prereqTempId);
+        const targetId = tempIdToRealId.get(suggestion.tempId);
+        if (!sourceId || !targetId) continue;
+        edgeInserts.push({
           id: crypto.randomUUID(),
           treeId: data.treeId,
           sourceNodeId: sourceId,
           targetNodeId: targetId,
-          edgeType: "required" as const,
+          edgeType:
+            index > 0
+              ? "bonus"
+              : suggestion.cluster === "specialization" || suggestion.nodeType === "elective"
+                ? "optional"
+                : "required",
           createdAt: now,
-        };
-      })
-      .filter((e): e is NonNullable<typeof e> => e !== null);
+        });
+      }
+    }
 
     if (edgeInserts.length > 0) {
       await Promise.all(edgeInserts.map((edge) => db.insert(skillTreeEdges).values(edge)));
@@ -6621,4 +7599,2314 @@ export const aiSuggestRewards = createServerFn({ method: "POST" })
     });
 
     return suggestions;
+  });
+
+// ─── Marking Periods ──────────────────────────────────────────────────────────
+
+export const getMarkingPeriods = createServerFn({ method: "GET" }).handler(async () => {
+  const session = await requireActiveRole(["parent", "admin"]);
+  const db = getDb();
+  const organizationId = await resolveActiveOrganizationId(
+    session.user.id,
+    session.session.activeOrganizationId,
+  );
+  const periods = await db.query.markingPeriods.findMany({
+    where: eq(markingPeriods.organizationId, organizationId),
+    orderBy: [markingPeriods.periodNumber],
+  });
+  return periods;
+});
+
+const createMarkingPeriodsInput = z.object({
+  count: z.union([z.literal(2), z.literal(3), z.literal(4)]),
+  schoolYear: z.string().min(1),
+});
+
+// Default date ranges for 2025-2026 school year
+function getDefaultPeriodDates(count: 2 | 3 | 4, schoolYear: string) {
+  const [startYearStr] = schoolYear.split("-");
+  const sy = parseInt(startYearStr ?? "2025", 10);
+  if (count === 2) {
+    return [
+      { label: "S1", title: "First Semester", start: `${sy}-09-01`, end: `${sy}-01-16` },
+      { label: "S2", title: "Second Semester", start: `${sy}-01-20`, end: `${sy + 1}-06-13` },
+    ];
+  }
+  if (count === 3) {
+    return [
+      { label: "T1", title: "First Trimester", start: `${sy}-09-01`, end: `${sy}-11-28` },
+      { label: "T2", title: "Second Trimester", start: `${sy}-12-02`, end: `${sy + 1}-03-06` },
+      { label: "T3", title: "Third Trimester", start: `${sy + 1}-03-10`, end: `${sy + 1}-06-13` },
+    ];
+  }
+  return [
+    { label: "Q1", title: "First Quarter", start: `${sy}-09-01`, end: `${sy}-11-14` },
+    { label: "Q2", title: "Second Quarter", start: `${sy}-11-17`, end: `${sy + 1}-01-30` },
+    { label: "Q3", title: "Third Quarter", start: `${sy + 1}-02-02`, end: `${sy + 1}-04-11` },
+    { label: "Q4", title: "Fourth Quarter", start: `${sy + 1}-04-14`, end: `${sy + 1}-06-13` },
+  ];
+}
+
+export const createMarkingPeriods = createServerFn({ method: "POST" })
+  .inputValidator((data) => createMarkingPeriodsInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["parent", "admin"]);
+    const db = getDb();
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+    const now = new Date().toISOString();
+    const periodDates = getDefaultPeriodDates(data.count, data.schoolYear);
+    const today = new Date().toISOString().slice(0, 10);
+    const rows = periodDates.map((p, i) => {
+      let status: "upcoming" | "active" | "completed" = "upcoming";
+      if (today > p.end) status = "completed";
+      else if (today >= p.start) status = "active";
+      return {
+        id: crypto.randomUUID(),
+        organizationId,
+        label: p.label,
+        title: p.title,
+        periodNumber: i + 1,
+        startDate: p.start,
+        endDate: p.end,
+        schoolYear: data.schoolYear,
+        status,
+        createdAt: now,
+        updatedAt: now,
+      };
+    });
+    for (const row of rows) {
+      await db.insert(markingPeriods).values(row);
+    }
+    return { success: true, periods: rows };
+  });
+
+const updateMarkingPeriodInput = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1).max(80).optional(),
+  label: z.string().min(1).max(10).optional(),
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
+  status: z.enum(["upcoming", "active", "completed"]).optional(),
+});
+
+export const updateMarkingPeriod = createServerFn({ method: "POST" })
+  .inputValidator((data) => updateMarkingPeriodInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["parent", "admin"]);
+    const db = getDb();
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+    const period = await db.query.markingPeriods.findFirst({
+      where: and(eq(markingPeriods.id, data.id), eq(markingPeriods.organizationId, organizationId)),
+    });
+    if (!period) throw new Error("NOT_FOUND");
+    await db
+      .update(markingPeriods)
+      .set({
+        ...(data.title !== undefined && { title: data.title }),
+        ...(data.label !== undefined && { label: data.label }),
+        ...(data.startDate !== undefined && { startDate: data.startDate }),
+        ...(data.endDate !== undefined && { endDate: data.endDate }),
+        ...(data.status !== undefined && { status: data.status }),
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(markingPeriods.id, data.id));
+    return { success: true };
+  });
+
+const deleteMarkingPeriodInput = z.object({ id: z.string().min(1) });
+
+export const deleteMarkingPeriod = createServerFn({ method: "POST" })
+  .inputValidator((data) => deleteMarkingPeriodInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["parent", "admin"]);
+    const db = getDb();
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+    const period = await db.query.markingPeriods.findFirst({
+      where: and(eq(markingPeriods.id, data.id), eq(markingPeriods.organizationId, organizationId)),
+    });
+    if (!period) throw new Error("NOT_FOUND");
+    await db.delete(markingPeriods).where(eq(markingPeriods.id, data.id));
+    return { success: true };
+  });
+
+const assignClassToMarkingPeriodInput = z.object({
+  classId: z.string().min(1),
+  markingPeriodId: z.string().min(1).nullable(),
+});
+
+export const assignClassToMarkingPeriod = createServerFn({ method: "POST" })
+  .inputValidator((data) => assignClassToMarkingPeriodInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["parent", "admin"]);
+    const db = getDb();
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+    const cls = await db.query.classes.findFirst({
+      where: and(eq(classes.id, data.classId), eq(classes.organizationId, organizationId)),
+    });
+    if (!cls) throw new Error("NOT_FOUND");
+    await db
+      .update(classes)
+      .set({ markingPeriodId: data.markingPeriodId, updatedAt: new Date().toISOString() })
+      .where(eq(classes.id, data.classId));
+    return { success: true };
+  });
+
+const assignAssignmentToMarkingPeriodInput = z.object({
+  assignmentId: z.string().min(1),
+  markingPeriodId: z.string().min(1).nullable(),
+});
+
+export const assignAssignmentToMarkingPeriod = createServerFn({ method: "POST" })
+  .inputValidator((data) => assignAssignmentToMarkingPeriodInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["parent", "admin"]);
+    const db = getDb();
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+    const assignment = await db.query.assignments.findFirst({
+      where: and(
+        eq(assignments.id, data.assignmentId),
+        eq(assignments.organizationId, organizationId),
+      ),
+    });
+    if (!assignment) throw new Error("NOT_FOUND");
+    await db
+      .update(assignments)
+      .set({ markingPeriodId: data.markingPeriodId, updatedAt: new Date().toISOString() })
+      .where(eq(assignments.id, data.assignmentId));
+    return { success: true };
+  });
+
+// ─── Rich Demo Seed (Phased) ──────────────────────────────────────────────────
+
+const richDemoSeedWithPinInput = z.object({
+  parentPin: z.string().regex(/^\d{4,6}$/),
+});
+
+const RICH_DEMO_SCHOOL_YEAR = "2025-2026";
+
+const RICH_DEMO_STUDENTS = [
+  { displayName: "Ava Rivers", gradeLevel: "3", performanceTier: "high" as const },
+  { displayName: "Noah Chen", gradeLevel: "5", performanceTier: "high" as const },
+  { displayName: "Mia Patel", gradeLevel: "7", performanceTier: "medium" as const },
+  { displayName: "Lucas Gomez", gradeLevel: "9", performanceTier: "medium" as const },
+  { displayName: "Sofia Kim", gradeLevel: "4", performanceTier: "high" as const },
+  { displayName: "Ethan Brooks", gradeLevel: "6", performanceTier: "low" as const },
+];
+
+const RICH_DEMO_SUBJECTS_BY_GRADE: Record<string, string[]> = {
+  "3": ["Math", "Language Arts", "Science", "Social Studies", "Art"],
+  "4": ["Math", "Language Arts", "Science", "Social Studies", "Music"],
+  "5": ["Math", "Language Arts", "Science", "Social Studies", "Coding Basics"],
+  "6": ["Math", "Language Arts", "Life Science", "World History", "Art"],
+  "7": ["Pre-Algebra", "Language Arts", "Earth Science", "Geography", "Coding"],
+  "9": ["Algebra I", "English 9", "Biology", "World History", "Elective Studio"],
+};
+
+const RICH_DEMO_MARKING_PERIODS = [
+  { label: "Q1", title: "First Quarter", periodNumber: 1, startDate: "2025-09-01", endDate: "2025-11-14", status: "completed" as const },
+  { label: "Q2", title: "Second Quarter", periodNumber: 2, startDate: "2025-11-17", endDate: "2026-01-30", status: "completed" as const },
+  { label: "Q3", title: "Third Quarter", periodNumber: 3, startDate: "2026-02-02", endDate: "2026-04-11", status: "active" as const },
+  { label: "Q4", title: "Fourth Quarter", periodNumber: 4, startDate: "2026-04-14", endDate: "2026-06-13", status: "upcoming" as const },
+];
+
+// Returns a deterministic score based on performance tier and index
+function getDemoScore(tier: "high" | "medium" | "low", seed: number): number {
+  const bases: Record<string, number> = { high: 88, medium: 76, low: 65 };
+  const variance = (seed % 5) * 3;
+  return Math.min(100, (bases[tier] ?? 75) + variance - 4);
+}
+
+function getDemoDueDate(periodIndex: number, assignmentIndex: number): string {
+  const periodStarts = ["2025-09-01", "2025-11-17", "2026-02-02", "2026-04-14"];
+  const base = new Date(periodStarts[periodIndex] ?? "2025-09-01");
+  base.setDate(base.getDate() + (assignmentIndex * 5));
+  return base.toISOString().slice(0, 10);
+}
+
+function buildRichDemoAssignments(
+  subject: string,
+  gradeLevel: string,
+  studentName: string,
+  periodLabel: string,
+): Array<{ title: string; description: string; contentType: "text" | "video" | "quiz" | "essay_questions" | "report"; contentRef: string | null; isVideo?: boolean }> {
+  const grade = parseInt(gradeLevel, 10);
+  const prefix = `${periodLabel} ·`;
+
+  if (subject === "Math" || subject === "Pre-Algebra" || subject === "Algebra I") {
+    const topics = grade <= 4
+      ? ["Number Sense", "Addition & Subtraction", "Multiplication Basics", "Fractions Intro", "Shapes & Geometry"]
+      : grade <= 6
+      ? ["Fractions & Decimals", "Order of Operations", "Ratios & Proportions", "Integers", "Basic Algebra"]
+      : ["Linear Equations", "Inequalities", "Slope & Graphing", "Systems of Equations", "Functions"];
+    const topic = topics[parseInt(periodLabel.replace(/\D/g, ""), 10) % topics.length] ?? topics[0];
+    return [
+      { title: `${prefix} ${topic} — Video Lesson`, description: `Watch and learn ${topic} for Grade ${gradeLevel}.`, contentType: "video", contentRef: JSON.stringify({ videos: [{ videoId: "dQw4w9WgXcQ", title: `${topic} Explained`, channel: "Math Academy", description: `Learn ${topic}` }] }), isVideo: true },
+      { title: `${prefix} ${topic} — Quiz`, description: `Test your knowledge of ${topic}.`, contentType: "quiz", contentRef: JSON.stringify({ questions: [{ id: "q1", question: `What is a key concept in ${topic}?`, options: ["Option A", "Option B", "Option C", "Option D"], answerIndex: 0, explanation: "Option A is correct." }, { id: "q2", question: "Solve the practice problem:", options: ["12", "14", "16", "18"], answerIndex: 1, explanation: "The answer is 14." }] }), isVideo: false },
+      { title: `${prefix} ${topic} — Practice Problems`, description: `${studentName} completes written practice for ${topic}.`, contentType: "text", contentRef: `<h2>${topic} Practice</h2><p>Complete the following problems in your notebook and submit a photo or written summary.</p><ol><li>Problem 1</li><li>Problem 2</li><li>Problem 3</li></ol>`, isVideo: false },
+    ];
+  }
+
+  if (subject === "Language Arts" || subject === "English 9") {
+    const topics = ["Reading Comprehension", "Grammar Foundations", "Writing Workshop", "Vocabulary Building", "Literary Analysis"];
+    const topic = topics[parseInt(periodLabel.replace(/\D/g, ""), 10) % topics.length] ?? topics[0];
+    return [
+      { title: `${prefix} ${topic} — Reading`, description: `Read and annotate the passage for ${topic}.`, contentType: "text", contentRef: `<h2>${topic}</h2><p>Read the following passage carefully and annotate as you go.</p><blockquote><p>Sample literary text for Grade ${gradeLevel}...</p></blockquote>`, isVideo: false },
+      { title: `${prefix} ${topic} — Essay`, description: `Write a short essay responding to the reading.`, contentType: "essay_questions", contentRef: JSON.stringify({ questions: [`What is the main idea of the passage? Support with evidence.`, `How does the author develop the theme? Give two examples.`, `What connections can you make to your own life?`] }), isVideo: false },
+      { title: `${prefix} ${topic} — Vocabulary Quiz`, description: `Demonstrate mastery of key vocabulary.`, contentType: "quiz", contentRef: JSON.stringify({ questions: [{ id: "q1", question: "What does 'annotate' mean?", options: ["To read quickly", "To add notes and comments", "To summarize", "To memorize"], answerIndex: 1, explanation: "Annotate means to add notes or comments." }] }), isVideo: false },
+    ];
+  }
+
+  if (subject === "Science" || subject === "Life Science" || subject === "Earth Science" || subject === "Biology") {
+    const topics = grade <= 5
+      ? ["Living Things", "Plant Life Cycles", "Weather & Climate", "Simple Machines", "Matter & Energy"]
+      : ["Cell Structure", "Ecosystems", "Earth's Layers", "Chemical Reactions", "Genetics Intro"];
+    const topic = topics[parseInt(periodLabel.replace(/\D/g, ""), 10) % topics.length] ?? topics[0];
+    return [
+      { title: `${prefix} ${topic} — Video Lesson`, description: `Explore ${topic} in this video lesson.`, contentType: "video", contentRef: JSON.stringify({ videos: [{ videoId: "dQw4w9WgXcQ", title: `${topic} Overview`, channel: "Science Explorer", description: `Introduction to ${topic}` }] }), isVideo: true },
+      { title: `${prefix} ${topic} — Lab Report`, description: `Document your observations for the ${topic} lab activity.`, contentType: "report", contentRef: null, isVideo: false },
+      { title: `${prefix} ${topic} — Comprehension Quiz`, description: `Check understanding of ${topic}.`, contentType: "quiz", contentRef: JSON.stringify({ questions: [{ id: "q1", question: `Which of these best describes ${topic}?`, options: ["Definition A", "Definition B", "Definition C", "Definition D"], answerIndex: 0, explanation: "Definition A is correct." }] }), isVideo: false },
+    ];
+  }
+
+  // Default for History, Geography, Electives, Art, Music, Coding
+  const topics = ["Introduction", "Core Concepts", "Case Study", "Project Work", "Review & Reflection"];
+  const topic = topics[parseInt(periodLabel.replace(/\D/g, ""), 10) % topics.length] ?? topics[0];
+  return [
+    { title: `${prefix} ${subject} — ${topic} Video`, description: `Video lesson on ${topic} for ${subject}.`, contentType: "video", contentRef: JSON.stringify({ videos: [{ videoId: "dQw4w9WgXcQ", title: `${subject}: ${topic}`, channel: "Learning Hub", description: `${subject} ${topic}` }] }), isVideo: true },
+    { title: `${prefix} ${subject} — ${topic} Essay`, description: `Write about what you learned in ${topic}.`, contentType: "essay_questions", contentRef: JSON.stringify({ questions: [`Describe the main concepts you learned in ${topic}.`, `How does this topic connect to real life?`] }), isVideo: false },
+  ];
+}
+
+// Stored intermediate state for phased seeding
+type DemoSeedState = {
+  profileIds: Record<string, string>; // displayName → id
+  markingPeriodIds: string[];           // [q1id, q2id, q3id, q4id]
+  classMap: Array<{ classId: string; profileId: string; subject: string; gradeLevel: string; mpIndex: number }>;
+  assignmentMap: Array<{ assignmentId: string; classId: string; profileId: string; subject: string; gradeLevel: string; mpIndex: number; assignmentIndex: number; contentType: string; isVideo: boolean; videoAssignmentId?: string }>;
+  treeNodeMap: Array<{
+    nodeId: string;
+    treeId: string;
+    classId: string;
+    profileId: string;
+    assignmentIds: string[];
+    depth: number;
+    cluster: "core" | "specialization";
+    nodeType: "lesson" | "milestone" | "boss" | "elective";
+    prerequisites: string[];
+    xpReward: number;
+  }>;
+};
+
+export const seedDemoPhase1 = createServerFn({ method: "POST" })
+  .inputValidator((data) => richDemoSeedWithPinInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    await verifyParentPinForSession(session.user.id, data.parentPin);
+    const db = getDb();
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+    const now = new Date().toISOString();
+
+    // Create marking periods
+    const mpIds: string[] = [];
+    for (const mp of RICH_DEMO_MARKING_PERIODS) {
+      const existing = await db.query.markingPeriods.findFirst({
+        where: and(
+          eq(markingPeriods.organizationId, organizationId),
+          eq(markingPeriods.periodNumber, mp.periodNumber),
+          eq(markingPeriods.schoolYear, RICH_DEMO_SCHOOL_YEAR),
+        ),
+      });
+      const id = existing?.id ?? crypto.randomUUID();
+      if (!existing) {
+        await db.insert(markingPeriods).values({
+          id,
+          organizationId,
+          label: mp.label,
+          title: mp.title,
+          periodNumber: mp.periodNumber,
+          startDate: mp.startDate,
+          endDate: mp.endDate,
+          schoolYear: RICH_DEMO_SCHOOL_YEAR,
+          status: mp.status,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+      mpIds.push(id);
+    }
+
+    // Create student profiles
+    const pinHash = await hashStudentPin("1111");
+    const profileIds: Record<string, string> = {};
+    for (const student of RICH_DEMO_STUDENTS) {
+      const id = crypto.randomUUID();
+      await db.insert(profiles).values({
+        id,
+        organizationId,
+        parentUserId: session.user.id,
+        displayName: student.displayName,
+        gradeLevel: student.gradeLevel,
+        pinHash,
+        status: "active",
+        createdAt: now,
+        updatedAt: now,
+      });
+      profileIds[student.displayName] = id;
+    }
+
+    return {
+      success: true,
+      markingPeriodIds: mpIds,
+      profileIds,
+      summary: { studentsCreated: RICH_DEMO_STUDENTS.length, markingPeriodsCreated: RICH_DEMO_MARKING_PERIODS.length },
+    };
+  });
+
+const seedDemoPhase2Input = z.object({
+  parentPin: z.string().regex(/^\d{4,6}$/),
+  profileIds: z.record(z.string(), z.string()),
+  markingPeriodIds: z.array(z.string()),
+});
+
+export const seedDemoPhase2 = createServerFn({ method: "POST" })
+  .inputValidator((data) => seedDemoPhase2Input.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+    const now = new Date().toISOString();
+
+    // 4 quarters → rotate subject → assign classes to marking periods
+    // Each student gets one class per subject (5 subjects). Classes tagged to Q1 for year-long.
+    type ClassEntry = { classId: string; profileId: string; subject: string; gradeLevel: string; mpIndex: number };
+    const classMap: ClassEntry[] = [];
+
+    for (const student of RICH_DEMO_STUDENTS) {
+      const profileId = data.profileIds[student.displayName];
+      if (!profileId) continue;
+      const subjects = RICH_DEMO_SUBJECTS_BY_GRADE[student.gradeLevel] ?? ["Math", "Language Arts", "Science"];
+      for (let si = 0; si < subjects.length; si++) {
+        const subject = subjects[si]!;
+        const classId = crypto.randomUUID();
+        const mpId = data.markingPeriodIds[0]; // year-long classes tagged to Q1 period
+        await db.insert(classes).values({
+          id: classId,
+          organizationId,
+          markingPeriodId: mpId ?? null,
+          title: `${student.displayName.split(" ")[0]} · Grade ${student.gradeLevel} ${subject}`,
+          description: `${subject} curriculum for ${student.displayName} — ${RICH_DEMO_SCHOOL_YEAR}`,
+          schoolYear: RICH_DEMO_SCHOOL_YEAR,
+          createdByUserId: session.user.id,
+          createdAt: now,
+          updatedAt: now,
+        });
+        await db.insert(classEnrollments).values({
+          id: crypto.randomUUID(),
+          classId,
+          profileId,
+          createdAt: now,
+        });
+        classMap.push({ classId, profileId, subject, gradeLevel: student.gradeLevel, mpIndex: 0 });
+      }
+    }
+
+    return { success: true, classMap, summary: { classesCreated: classMap.length } };
+  });
+
+const seedDemoPhase3Input = z.object({
+  parentPin: z.string().regex(/^\d{4,6}$/),
+  classMap: z.array(z.object({
+    classId: z.string(),
+    profileId: z.string(),
+    subject: z.string(),
+    gradeLevel: z.string(),
+    mpIndex: z.number(),
+  })),
+  markingPeriodIds: z.array(z.string()),
+});
+
+export const seedDemoPhase3 = createServerFn({ method: "POST" })
+  .inputValidator((data) => seedDemoPhase3Input.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+    const now = new Date().toISOString();
+
+    type AssignmentEntry = {
+      assignmentId: string;
+      classId: string;
+      profileId: string;
+      subject: string;
+      gradeLevel: string;
+      mpIndex: number;
+      assignmentIndex: number;
+      contentType: string;
+      isVideo: boolean;
+      videoAssignmentId?: string;
+    };
+    const assignmentMap: AssignmentEntry[] = [];
+
+    // Create assignments per class across 3 active marking periods (Q1, Q2, Q3)
+    const activePeriods = [0, 1, 2]; // Q1=0, Q2=1, Q3=2
+
+    for (const cls of data.classMap) {
+      let assignmentIndexGlobal = 0;
+      const studentInfo = RICH_DEMO_STUDENTS.find(s => data.classMap.some(c => c.classId === cls.classId && c.profileId === s.displayName));
+      const studentName = RICH_DEMO_STUDENTS.find(s => {
+        // find the student whose subjects include this class's subject
+        const subs = RICH_DEMO_SUBJECTS_BY_GRADE[cls.gradeLevel] ?? [];
+        return subs.includes(cls.subject);
+      })?.displayName ?? "Student";
+
+      for (const mpIdx of activePeriods) {
+        const mpId = data.markingPeriodIds[mpIdx];
+        const periodLabel = RICH_DEMO_MARKING_PERIODS[mpIdx]?.label ?? "Q1";
+        const assignmentDefs = buildRichDemoAssignments(cls.subject, cls.gradeLevel, studentName, periodLabel);
+
+        let videoAssignmentId: string | undefined;
+        for (const def of assignmentDefs) {
+          const assignmentId = crypto.randomUUID();
+          const dueAt = getDemoDueDate(mpIdx, assignmentIndexGlobal);
+          await db.insert(assignments).values({
+            id: assignmentId,
+            organizationId,
+            classId: cls.classId,
+            markingPeriodId: mpId ?? null,
+            title: def.title,
+            description: def.description,
+            contentType: def.contentType,
+            contentRef: def.contentRef,
+            linkedAssignmentId: def.contentType === "quiz" && videoAssignmentId ? videoAssignmentId : null,
+            dueAt,
+            createdByUserId: session.user.id,
+            createdAt: now,
+            updatedAt: now,
+          });
+
+          if (def.isVideo) videoAssignmentId = assignmentId;
+
+          assignmentMap.push({
+            assignmentId,
+            classId: cls.classId,
+            profileId: cls.profileId,
+            subject: cls.subject,
+            gradeLevel: cls.gradeLevel,
+            mpIndex: mpIdx,
+            assignmentIndex: assignmentIndexGlobal,
+            contentType: def.contentType,
+            isVideo: !!def.isVideo,
+            videoAssignmentId: def.contentType === "quiz" ? videoAssignmentId : undefined,
+          });
+          assignmentIndexGlobal++;
+        }
+      }
+    }
+
+    return { success: true, assignmentMap, summary: { assignmentsCreated: assignmentMap.length } };
+  });
+
+const seedDemoPhase4Input = z.object({
+  parentPin: z.string().regex(/^\d{4,6}$/),
+  classMap: z.array(z.object({
+    classId: z.string(),
+    profileId: z.string(),
+    subject: z.string(),
+    gradeLevel: z.string(),
+    mpIndex: z.number(),
+  })),
+});
+
+export const seedDemoPhase4 = createServerFn({ method: "POST" })
+  .inputValidator((data) => seedDemoPhase4Input.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+    const now = new Date().toISOString();
+
+    type SeededGraphNode = {
+      id: string;
+      title: string;
+      description: string;
+      colorRamp: "teal" | "blue" | "purple" | "amber";
+      nodeType: "lesson" | "milestone" | "boss" | "elective";
+      cluster: "core" | "specialization";
+      depth: number;
+      xpReward: number;
+      prerequisites: string[];
+      isRequired: boolean;
+      radius: number;
+    };
+    type TreeNodeEntry = {
+      nodeId: string;
+      treeId: string;
+      classId: string;
+      profileId: string;
+      assignmentIds: string[];
+      depth: number;
+      cluster: "core" | "specialization";
+      nodeType: "lesson" | "milestone" | "boss" | "elective";
+      prerequisites: string[];
+      xpReward: number;
+    };
+    const treeNodeMap: TreeNodeEntry[] = [];
+
+    const TOPIC_POOLS: Record<string, {
+      core: string[];
+      specializations: Array<{ name: string; lessons: string[] }>;
+    }> = {
+      "Math": {
+        core: [
+          "Number Sense",
+          "Operations Toolkit",
+          "Fraction Fluency",
+          "Ratios and Rates",
+          "Expressions",
+          "Equations",
+          "Geometry Foundations",
+          "Measurement Strategy",
+          "Data Analysis",
+          "Applied Problem Solving",
+          "Math Mastery Boss",
+        ],
+        specializations: [
+          { name: "Puzzle Forge", lessons: ["Pattern Hunting", "Constraint Logic", "Multi-Step Strategy", "Proof Sprint"] },
+          { name: "Data Lab", lessons: ["Graph Stories", "Outlier Detective", "Prediction Models", "Decision Workshop"] },
+          { name: "Spatial Studio", lessons: ["Transformations", "Area Design", "Volume Builds", "Optimization Challenge"] },
+          { name: "Algebra Reactor", lessons: ["Variable Machines", "Equation Systems", "Function Clues", "Model Tuning"] },
+        ],
+      },
+      "Language Arts": {
+        core: [
+          "Reading Identity",
+          "Close Reading",
+          "Vocabulary in Context",
+          "Annotation Moves",
+          "Claim Building",
+          "Paragraph Architecture",
+          "Essay Flow",
+          "Research Moves",
+          "Source Synthesis",
+          "Voice and Revision",
+          "Language Arts Capstone Boss",
+        ],
+        specializations: [
+          { name: "Writer's Room", lessons: ["Narrative Openings", "Scene Weaving", "Dialogue Control", "Revision Lab"] },
+          { name: "Research Archive", lessons: ["Source Vetting", "Note Compression", "Citation Web", "Argument Dossier"] },
+          { name: "Poetry Chamber", lessons: ["Image Mining", "Sound Craft", "Meter Experiments", "Meaning Layers"] },
+          { name: "Speaking Studio", lessons: ["Speech Blueprint", "Evidence Delivery", "Audience Signals", "Presentation Finale"] },
+        ],
+      },
+      "Science": {
+        core: [
+          "Observation Protocol",
+          "Question Design",
+          "Hypothesis Crafting",
+          "Variable Control",
+          "Experiment Setup",
+          "Data Collection",
+          "Pattern Analysis",
+          "Scientific Explanation",
+          "Systems Thinking",
+          "Real-World Application",
+          "Science Expedition Boss",
+        ],
+        specializations: [
+          { name: "Lab Mechanics", lessons: ["Tool Calibration", "Procedure Control", "Error Analysis", "Replication Trial"] },
+          { name: "Field Research", lessons: ["Ecosystem Survey", "Sample Mapping", "Trend Tracking", "Impact Story"] },
+          { name: "Engineering Bay", lessons: ["Prototype Sketches", "Design Constraints", "Stress Testing", "Iteration Loop"] },
+          { name: "Data Observatory", lessons: ["Signal vs Noise", "Model Comparison", "Prediction Tuning", "Evidence Defense"] },
+        ],
+      },
+      "default": {
+        core: [
+          "Orientation",
+          "Foundation Concepts",
+          "Guided Practice",
+          "Systems Awareness",
+          "Skill Integration",
+          "Applied Reasoning",
+          "Creative Transfer",
+          "Independent Practice",
+          "Reflection Loop",
+          "Capstone Prep",
+          "Mastery Boss",
+        ],
+        specializations: [
+          { name: "Applied Studio", lessons: ["Scenario Mapping", "Method Choice", "Complex Challenge", "Reflection Sprint"] },
+          { name: "Project Lab", lessons: ["Inquiry Launch", "Research Thread", "Build Cycle", "Presentation Loop"] },
+          { name: "Strategy Branch", lessons: ["Tactics Review", "Adaptive Moves", "Risk Check", "Boss Prep"] },
+          { name: "Creative Branch", lessons: ["Experiment Spark", "Prototype Flow", "Feedback Merge", "Showcase"] },
+        ],
+      },
+    };
+
+    const calculateXpReward = (depth: number, isBoss: boolean) => 50 + (depth * 60) + (isBoss ? 200 : 0);
+
+    for (const cls of data.classMap) {
+      const topicSet = TOPIC_POOLS[cls.subject] ?? TOPIC_POOLS["default"]!;
+      const treeId = crypto.randomUUID();
+      await db.insert(skillTrees).values({
+        id: treeId,
+        organizationId,
+        classId: cls.classId,
+        profileId: cls.profileId,
+        title: `${cls.subject} Skill Map`,
+        description: `Grade ${cls.gradeLevel} ${cls.subject} progression`,
+        gradeLevel: cls.gradeLevel,
+        subject: cls.subject,
+        schoolYear: RICH_DEMO_SCHOOL_YEAR,
+        createdByUserId: session.user.id,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const generatedNodes: SeededGraphNode[] = [];
+      const coreNodeIds: string[] = [];
+
+      for (let coreIndex = 0; coreIndex < topicSet.core.length; coreIndex++) {
+        const nodeId = crypto.randomUUID();
+        const isBoss = coreIndex === topicSet.core.length - 1;
+        const nodeType: "lesson" | "milestone" | "boss" =
+          isBoss ? "boss" : coreIndex > 0 && coreIndex % 3 === 0 ? "milestone" : "lesson";
+        coreNodeIds.push(nodeId);
+        generatedNodes.push({
+          id: nodeId,
+          title: topicSet.core[coreIndex]!,
+          description: `Core ${cls.subject} spine node ${coreIndex + 1} for Grade ${cls.gradeLevel}.`,
+          colorRamp: coreIndex % 2 === 0 ? "teal" : "blue",
+          nodeType,
+          cluster: "core",
+          depth: coreIndex,
+          xpReward: calculateXpReward(coreIndex, isBoss),
+          prerequisites: coreIndex === 0 ? [] : [coreNodeIds[coreIndex - 1]!],
+          isRequired: true,
+          radius: isBoss ? 38 : nodeType === "milestone" ? 32 : 28,
+        });
+      }
+
+      const branchAnchors = [2, 4, 6, 7];
+      const branchRegistry: Array<{ branchId: string; nodeIds: string[] }> = [];
+      for (let branchIndex = 0; branchIndex < topicSet.specializations.length; branchIndex++) {
+        const specialization = topicSet.specializations[branchIndex]!;
+        const anchorCoreIndex = branchAnchors[branchIndex] ?? Math.min(branchIndex + 2, coreNodeIds.length - 2);
+        const anchorNodeId = coreNodeIds[anchorCoreIndex]!;
+        const branchId = `branch-${branchIndex}`;
+        const branchNodeIds: string[] = [];
+
+        for (let lessonIndex = 0; lessonIndex < specialization.lessons.length; lessonIndex++) {
+          const nodeId = crypto.randomUUID();
+          branchNodeIds.push(nodeId);
+          const previousBranchNodeId = lessonIndex > 0 ? branchNodeIds[lessonIndex - 1]! : null;
+          const branchHubNodeId = lessonIndex >= 2 ? branchNodeIds[1] ?? null : null;
+          const prerequisites =
+            lessonIndex === 0
+              ? [anchorNodeId]
+              : branchHubNodeId
+                ? [branchHubNodeId]
+                : previousBranchNodeId
+                  ? [previousBranchNodeId]
+                  : [anchorNodeId];
+
+          const branchDepth =
+            branchHubNodeId
+              ? anchorCoreIndex + 3
+              : anchorCoreIndex + lessonIndex + 1;
+          generatedNodes.push({
+            id: nodeId,
+            title: `${specialization.name}: ${specialization.lessons[lessonIndex]!}`,
+            description: `Specialization branch from ${topicSet.core[anchorCoreIndex]} into ${specialization.name}.`,
+            colorRamp: branchIndex % 2 === 0 ? "purple" : "amber",
+            nodeType: "elective",
+            cluster: "specialization",
+            depth: branchDepth,
+            xpReward: calculateXpReward(branchDepth, false),
+            prerequisites,
+            isRequired: false,
+            radius: 28,
+          });
+        }
+
+        branchRegistry.push({ branchId, nodeIds: branchNodeIds });
+      }
+
+      const positionMap = layoutForceDirected(
+        generatedNodes.map((node) => ({
+          id: node.id,
+          prerequisites: node.prerequisites,
+          depth: node.depth,
+          cluster: node.cluster,
+          nodeType: node.nodeType,
+        })),
+        { width: 1200, height: 900 },
+      );
+
+      for (const node of generatedNodes) {
+        const position = positionMap.get(node.id) ?? { x: 600, y: 450 };
+        await db.insert(skillTreeNodes).values({
+          id: node.id,
+          treeId,
+          organizationId,
+          title: node.title,
+          description: node.description,
+          subject: cls.subject,
+          icon: null,
+          colorRamp: node.colorRamp,
+          nodeType: node.nodeType,
+          xpReward: node.xpReward,
+          positionX: position.x,
+          positionY: position.y,
+          radius: node.radius,
+          isRequired: node.isRequired,
+          aiGeneratedDescription: buildNodeLayoutMetadata({
+            description: node.description,
+            cluster: node.cluster,
+            depth: node.depth,
+            prerequisiteGroups: node.prerequisites.length > 0 ? [node.prerequisites] : [],
+          }),
+          createdAt: now,
+          updatedAt: now,
+        });
+
+        for (const prerequisiteId of node.prerequisites) {
+          await db.insert(skillTreeEdges).values({
+            id: crypto.randomUUID(),
+            treeId,
+            sourceNodeId: prerequisiteId,
+            targetNodeId: node.id,
+            edgeType: node.cluster === "specialization" ? "optional" : "required",
+            createdAt: now,
+          });
+        }
+
+        treeNodeMap.push({
+          nodeId: node.id,
+          treeId,
+          classId: cls.classId,
+          profileId: cls.profileId,
+          assignmentIds: [],
+          depth: node.depth,
+          cluster: node.cluster,
+          nodeType: node.nodeType,
+          prerequisites: node.prerequisites,
+          xpReward: node.xpReward,
+        });
+      }
+    }
+
+    return { success: true, treeNodeMap, summary: { treesCreated: data.classMap.length } };
+  });
+
+const seedDemoPhase5Input = z.object({
+  parentPin: z.string().regex(/^\d{4,6}$/),
+  treeNodeMap: z.array(z.object({
+    nodeId: z.string(),
+    treeId: z.string(),
+    classId: z.string(),
+    profileId: z.string(),
+    assignmentIds: z.array(z.string()),
+    depth: z.number(),
+    cluster: z.enum(["core", "specialization"]),
+    nodeType: z.enum(["lesson", "milestone", "boss", "elective"]),
+    prerequisites: z.array(z.string()),
+    xpReward: z.number(),
+  })),
+  assignmentMap: z.array(z.object({
+    assignmentId: z.string(),
+    classId: z.string(),
+    profileId: z.string(),
+    subject: z.string(),
+    gradeLevel: z.string(),
+    mpIndex: z.number(),
+    assignmentIndex: z.number(),
+    contentType: z.string(),
+    isVideo: z.boolean(),
+    videoAssignmentId: z.string().optional(),
+  })),
+  classMap: z.array(z.object({
+    classId: z.string(),
+    profileId: z.string(),
+    subject: z.string(),
+    gradeLevel: z.string(),
+    mpIndex: z.number(),
+  })),
+});
+
+export const seedDemoPhase5 = createServerFn({ method: "POST" })
+  .inputValidator((data) => seedDemoPhase5Input.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+    const now = new Date().toISOString();
+
+    const complexityScoreByContentType: Record<string, number> = {
+      text: 1,
+      video: 1,
+      url: 2,
+      file: 2,
+      quiz: 3,
+      essay_questions: 5,
+      report: 6,
+    };
+    const pairsForTargets = (targetNodeIds: string[], assignmentIds: string[]) => {
+      const localPairs: Array<{ nodeId: string; assignmentId: string; orderIndex: number }> = [];
+      if (targetNodeIds.length === 0 || assignmentIds.length === 0) {
+        return localPairs;
+      }
+
+      const nodeOrderCounts = new Map<string, number>();
+      for (let index = 0; index < assignmentIds.length; index++) {
+        const nodeId = targetNodeIds[index % targetNodeIds.length]!;
+        const orderIndex = nodeOrderCounts.get(nodeId) ?? 0;
+        localPairs.push({
+          nodeId,
+          assignmentId: assignmentIds[index]!,
+          orderIndex,
+        });
+        nodeOrderCounts.set(nodeId, orderIndex + 1);
+      }
+
+      return localPairs;
+    };
+
+    const nodesByClass = new Map<string, typeof data.treeNodeMap>();
+    for (const node of data.treeNodeMap) {
+      const existing = nodesByClass.get(node.classId) ?? [];
+      existing.push(node);
+      nodesByClass.set(node.classId, existing);
+    }
+
+    const assignmentsByClass = new Map<string, typeof data.assignmentMap>();
+    for (const assignment of data.assignmentMap) {
+      const existing = assignmentsByClass.get(assignment.classId) ?? [];
+      existing.push(assignment);
+      assignmentsByClass.set(assignment.classId, existing);
+    }
+
+    let linksCreated = 0;
+    for (const [classId, classNodes] of nodesByClass) {
+      const classAssignments = assignmentsByClass.get(classId) ?? [];
+      if (classAssignments.length === 0 || classNodes.length === 0) continue;
+
+      const rankedNodes = [...classNodes].sort((a, b) => {
+        const aScore = (a.depth * 10) + (a.cluster === "specialization" ? 18 : 0) + (a.nodeType === "boss" ? 24 : 0);
+        const bScore = (b.depth * 10) + (b.cluster === "specialization" ? 18 : 0) + (b.nodeType === "boss" ? 24 : 0);
+        return bScore - aScore;
+      });
+      const rankedAssignments = [...classAssignments].sort((a, b) => {
+        const aScore = complexityScoreByContentType[a.contentType] ?? 2;
+        const bScore = complexityScoreByContentType[b.contentType] ?? 2;
+        return bScore - aScore || b.assignmentIndex - a.assignmentIndex;
+      });
+
+      const hardNodes = rankedNodes
+        .filter((node) => node.depth >= 5 || node.cluster === "specialization" || node.nodeType === "boss")
+        .map((node) => node.nodeId);
+      const mediumNodes = rankedNodes
+        .filter((node) => node.depth >= 3 && node.depth <= 6 && node.cluster === "core")
+        .map((node) => node.nodeId);
+      const easyNodes = [...rankedNodes]
+        .reverse()
+        .filter((node) => node.depth <= 4 && node.cluster === "core")
+        .map((node) => node.nodeId);
+
+      const hardAssignments = rankedAssignments
+        .filter((assignment) => (complexityScoreByContentType[assignment.contentType] ?? 2) >= 5)
+        .map((assignment) => assignment.assignmentId);
+      const mediumAssignments = rankedAssignments
+        .filter((assignment) => {
+          const score = complexityScoreByContentType[assignment.contentType] ?? 2;
+          return score >= 3 && score < 5;
+        })
+        .map((assignment) => assignment.assignmentId);
+      const easyAssignments = rankedAssignments
+        .filter((assignment) => (complexityScoreByContentType[assignment.contentType] ?? 2) < 3)
+        .map((assignment) => assignment.assignmentId);
+
+      const pairs = [
+        ...pairsForTargets(hardNodes.length ? hardNodes : rankedNodes.map((node) => node.nodeId), hardAssignments),
+        ...pairsForTargets(mediumNodes.length ? mediumNodes : rankedNodes.map((node) => node.nodeId), mediumAssignments),
+        ...pairsForTargets(easyNodes.length ? easyNodes : [...rankedNodes].reverse().map((node) => node.nodeId), easyAssignments),
+      ];
+
+      for (const chunk of chunkIds(pairs.map((pair) => pair.assignmentId), 50)) {
+        const chunkPairs = pairs.filter((pair) => chunk.includes(pair.assignmentId));
+        for (const pair of chunkPairs) {
+          await db.insert(skillTreeNodeAssignments).values({
+            id: crypto.randomUUID(),
+            nodeId: pair.nodeId,
+            assignmentId: pair.assignmentId,
+            orderIndex: pair.orderIndex,
+            createdAt: now,
+          });
+          linksCreated++;
+        }
+      }
+    }
+
+    return { success: true, summary: { nodeAssignmentLinksCreated: linksCreated } };
+  });
+
+const seedDemoPhase6Input = z.object({
+  parentPin: z.string().regex(/^\d{4,6}$/),
+  assignmentMap: z.array(z.object({
+    assignmentId: z.string(),
+    classId: z.string(),
+    profileId: z.string(),
+    subject: z.string(),
+    gradeLevel: z.string(),
+    mpIndex: z.number(),
+    assignmentIndex: z.number(),
+    contentType: z.string(),
+    isVideo: z.boolean(),
+    videoAssignmentId: z.string().optional(),
+  })),
+  treeNodeMap: z.array(z.object({
+    nodeId: z.string(),
+    treeId: z.string(),
+    classId: z.string(),
+    profileId: z.string(),
+    assignmentIds: z.array(z.string()),
+    depth: z.number(),
+    cluster: z.enum(["core", "specialization"]),
+    nodeType: z.enum(["lesson", "milestone", "boss", "elective"]),
+    prerequisites: z.array(z.string()),
+    xpReward: z.number(),
+  })),
+});
+
+export const seedDemoPhase6 = createServerFn({ method: "POST" })
+  .inputValidator((data) => seedDemoPhase6Input.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+    const organizationId = await resolveActiveOrganizationId(session.user.id, session.session.activeOrganizationId);
+    const now = new Date().toISOString();
+
+    let submissionsCreated = 0;
+    let progressCreated = 0;
+
+    // Determine performance tier per profileId by looking up student
+    const profileTiers = new Map<string, "high" | "medium" | "low">();
+    const orgProfiles = await db.query.profiles.findMany({
+      where: eq(profiles.organizationId, organizationId),
+      columns: { id: true, displayName: true },
+    });
+    for (const p of orgProfiles) {
+      const studentDef = RICH_DEMO_STUDENTS.find(s => s.displayName === p.displayName);
+      if (studentDef) profileTiers.set(p.id, studentDef.performanceTier);
+    }
+
+    // Create submissions for Q1 (mpIndex=0) and Q2 (mpIndex=1) — fully graded
+    // Q3 (mpIndex=2) — mix: submitted or graded
+    const submissionAssignments = data.assignmentMap.filter(a =>
+      (a.mpIndex === 0 || a.mpIndex === 1 || a.mpIndex === 2) &&
+      a.contentType !== "video" // videos don't get submissions
+    );
+
+    const assignmentChunks = chunkIds(submissionAssignments.map(a => a.assignmentId), 30);
+    for (const chunk of assignmentChunks) {
+      const chunkAssignments = submissionAssignments.filter(a => chunk.includes(a.assignmentId));
+      for (const a of chunkAssignments) {
+        const tier = profileTiers.get(a.profileId) ?? "medium";
+        const score = getDemoScore(tier, a.assignmentIndex);
+        const isQ3 = a.mpIndex === 2;
+        const isGraded = !isQ3 || (a.assignmentIndex % 3 !== 2); // some Q3 not yet graded
+        const submittedOffset = a.mpIndex * 60 + a.assignmentIndex * 3;
+        const submittedAt = new Date(2025, 8, 1);
+        submittedAt.setDate(submittedAt.getDate() + submittedOffset);
+
+        let feedbackJson: string | null = null;
+        if (isGraded && (a.contentType === "essay_questions" || a.contentType === "report")) {
+          feedbackJson = JSON.stringify({
+            strengths: ["Good analysis", "Clear writing"],
+            improvements: ["Add more detail", "Cite sources"],
+            overallFeedback: `Well done ${tier === "high" ? "— excellent work!" : "— keep working on it."}`,
+          });
+        }
+
+        await db.insert(submissions).values({
+          id: crypto.randomUUID(),
+          organizationId,
+          assignmentId: a.assignmentId,
+          profileId: a.profileId,
+          submittedByUserId: session.user.id,
+          textResponse: a.contentType === "text" ? "Student response text submitted." : null,
+          status: isGraded ? "graded" : "submitted",
+          score: isGraded ? score : null,
+          submittedAt: submittedAt.toISOString(),
+          feedbackJson,
+          reviewedAt: isGraded ? new Date(submittedAt.getTime() + 86400000 * 2).toISOString() : null,
+          createdAt: now,
+          updatedAt: now,
+        });
+        submissionsCreated++;
+      }
+    }
+
+    // Create graph-aware node progress for each skill web.
+    const orgTrees = await db.query.skillTrees.findMany({
+      where: eq(skillTrees.organizationId, organizationId),
+      columns: { id: true, profileId: true },
+    });
+    for (const tree of orgTrees) {
+      if (!tree.profileId) continue;
+      const treeNodes = await db.query.skillTreeNodes.findMany({
+        where: eq(skillTreeNodes.treeId, tree.id),
+        columns: { id: true, nodeType: true, xpReward: true, createdAt: true },
+      });
+      const treeEdges = await db.query.skillTreeEdges.findMany({
+        where: eq(skillTreeEdges.treeId, tree.id),
+        columns: { sourceNodeId: true, targetNodeId: true, edgeType: true },
+      });
+      if (treeNodes.length === 0) continue;
+
+      const nodeById = new Map(treeNodes.map((node) => [node.id, node]));
+      const parentMap = new Map<string, string[]>();
+      const childMap = new Map<string, string[]>();
+      const inDegree = new Map<string, number>();
+
+      for (const node of treeNodes) {
+        parentMap.set(node.id, []);
+        childMap.set(node.id, []);
+        inDegree.set(node.id, 0);
+      }
+
+      for (const edge of treeEdges) {
+        if (!isProgressGatingEdgeType(edge.edgeType)) continue;
+        const parents = parentMap.get(edge.targetNodeId);
+        if (parents) parents.push(edge.sourceNodeId);
+        const children = childMap.get(edge.sourceNodeId);
+        if (children) children.push(edge.targetNodeId);
+        inDegree.set(edge.targetNodeId, (inDegree.get(edge.targetNodeId) ?? 0) + 1);
+      }
+
+      const roots = treeNodes
+        .filter((node) => (inDegree.get(node.id) ?? 0) === 0)
+        .map((node) => node.id);
+      const traversalQueue = [...roots];
+      const depthByNodeId = new Map<string, number>(roots.map((rootId) => [rootId, 0]));
+      const workingInDegree = new Map(inDegree);
+      const topoOrder: string[] = [];
+
+      while (traversalQueue.length > 0) {
+        const currentNodeId = traversalQueue.shift()!;
+        topoOrder.push(currentNodeId);
+        const currentDepth = depthByNodeId.get(currentNodeId) ?? 0;
+
+        for (const childId of childMap.get(currentNodeId) ?? []) {
+          depthByNodeId.set(childId, Math.max(depthByNodeId.get(childId) ?? 0, currentDepth + 1));
+          const nextDegree = (workingInDegree.get(childId) ?? 0) - 1;
+          workingInDegree.set(childId, nextDegree);
+          if (nextDegree === 0) {
+            traversalQueue.push(childId);
+          }
+        }
+      }
+
+      for (const node of treeNodes) {
+        if (!depthByNodeId.has(node.id)) {
+          depthByNodeId.set(node.id, 0);
+          topoOrder.push(node.id);
+        }
+      }
+
+      const specializationRoots = treeNodes
+        .filter((node) => node.nodeType === "elective")
+        .filter((node) => {
+          const parents = parentMap.get(node.id) ?? [];
+          return parents.every((parentId) => (nodeById.get(parentId)?.nodeType ?? "lesson") !== "elective");
+        })
+        .sort((a, b) => (depthByNodeId.get(a.id) ?? 0) - (depthByNodeId.get(b.id) ?? 0));
+
+      const branchKeyByNodeId = new Map<string, string>();
+      const resolveBranchKey = (nodeId: string): string => {
+        const cached = branchKeyByNodeId.get(nodeId);
+        if (cached) return cached;
+        const node = nodeById.get(nodeId);
+        if (!node || node.nodeType !== "elective") {
+          branchKeyByNodeId.set(nodeId, "");
+          return "";
+        }
+
+        const directParents = parentMap.get(nodeId) ?? [];
+        const electiveParents = directParents.filter(
+          (parentId) => (nodeById.get(parentId)?.nodeType ?? "lesson") === "elective",
+        );
+        if (electiveParents.length === 0) {
+          branchKeyByNodeId.set(nodeId, nodeId);
+          return nodeId;
+        }
+
+        const branchKey = resolveBranchKey(electiveParents[0]!);
+        branchKeyByNodeId.set(nodeId, branchKey);
+        return branchKey;
+      };
+
+      const branchNodes = new Map<string, string[]>();
+      for (const node of treeNodes) {
+        if (node.nodeType !== "elective") continue;
+        const branchKey = resolveBranchKey(node.id);
+        const existing = branchNodes.get(branchKey) ?? [];
+        existing.push(node.id);
+        branchNodes.set(branchKey, existing);
+      }
+
+      for (const [branchKey, branchNodeIds] of branchNodes) {
+        branchNodeIds.sort((a, b) => {
+          const depthDelta = (depthByNodeId.get(a) ?? 0) - (depthByNodeId.get(b) ?? 0);
+          return depthDelta !== 0 ? depthDelta : a.localeCompare(b);
+        });
+        branchNodes.set(branchKey, branchNodeIds);
+      }
+
+      const statusByNodeId = new Map<string, "locked" | "available" | "in_progress" | "complete" | "mastery">();
+      const completedAtByNodeId = new Map<string, string>();
+      const unlocksNode = (nodeId: string) =>
+        (parentMap.get(nodeId) ?? []).every((parentId) => {
+          const status = statusByNodeId.get(parentId);
+          return status === "complete" || status === "mastery";
+        });
+      const stampCompletion = (nodeId: string, status: "complete" | "mastery", orderSeed: number) => {
+        statusByNodeId.set(nodeId, status);
+        completedAtByNodeId.set(nodeId, new Date(2025, 8, 10 + (orderSeed * 3)).toISOString());
+      };
+
+      const coreNodes = topoOrder.filter((nodeId) => (nodeById.get(nodeId)?.nodeType ?? "lesson") !== "elective");
+      for (let index = 0; index < coreNodes.length; index++) {
+        const nodeId = coreNodes[index]!;
+        const depth = depthByNodeId.get(nodeId) ?? 0;
+        if (depth <= 4 && unlocksNode(nodeId)) {
+          const status = depth > 0 && depth % 4 === 0 ? "mastery" : "complete";
+          stampCompletion(nodeId, status, index);
+        }
+      }
+
+      const branchOrder = specializationRoots
+        .map((root) => root.id)
+        .filter((rootId) => branchNodes.has(rootId));
+
+      const completedBranch = branchOrder[0];
+      const progressingBranch = branchOrder[1];
+
+      if (completedBranch) {
+        const completedBranchNodes = branchNodes.get(completedBranch) ?? [];
+        let completions = 0;
+        for (const nodeId of completedBranchNodes) {
+          if (!unlocksNode(nodeId) || completions >= 2) break;
+          stampCompletion(nodeId, completions === 1 ? "mastery" : "complete", coreNodes.length + completions);
+          completions++;
+        }
+      }
+
+      if (progressingBranch) {
+        const progressingBranchNodes = branchNodes.get(progressingBranch) ?? [];
+        const firstUnlocked = progressingBranchNodes.find((nodeId) => unlocksNode(nodeId));
+        if (firstUnlocked) {
+          statusByNodeId.set(firstUnlocked, "in_progress");
+        }
+      }
+
+      for (const nodeId of topoOrder) {
+        if (statusByNodeId.has(nodeId)) continue;
+        if (unlocksNode(nodeId)) {
+          statusByNodeId.set(nodeId, "available");
+        } else {
+          statusByNodeId.set(nodeId, "locked");
+        }
+      }
+
+      for (const node of treeNodes) {
+        const status = statusByNodeId.get(node.id) ?? "locked";
+        const completedAt = completedAtByNodeId.get(node.id) ?? null;
+        const xpEarned =
+          status === "mastery" ? node.xpReward + Math.round(node.xpReward * 0.25)
+          : status === "complete" ? node.xpReward
+          : status === "in_progress" ? Math.max(40, Math.round(node.xpReward * 0.45))
+          : 0;
+
+        await db.insert(skillTreeNodeProgress).values({
+          id: crypto.randomUUID(),
+          nodeId: node.id,
+          profileId: tree.profileId,
+          treeId: tree.id,
+          status,
+          xpEarned,
+          completedAt,
+          masteryAt: status === "mastery" ? completedAt : null,
+          updatedAt: now,
+        });
+        progressCreated++;
+      }
+    }
+
+    return { success: true, summary: { submissionsCreated, progressCreated } };
+  });
+
+const seedDemoPhase7Input = z.object({
+  parentPin: z.string().regex(/^\d{4,6}$/),
+  profileIds: z.record(z.string(), z.string()),
+  assignmentMap: z.array(z.object({
+    assignmentId: z.string(),
+    classId: z.string(),
+    profileId: z.string(),
+    subject: z.string(),
+    gradeLevel: z.string(),
+    mpIndex: z.number(),
+    assignmentIndex: z.number(),
+    contentType: z.string(),
+    isVideo: z.boolean(),
+    videoAssignmentId: z.string().optional(),
+  })),
+});
+
+export const seedDemoPhase7 = createServerFn({ method: "POST" })
+  .inputValidator((data) => seedDemoPhase7Input.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+    const organizationId = await resolveActiveOrganizationId(session.user.id, session.session.activeOrganizationId);
+    const now = new Date().toISOString();
+
+    const REWARD_TIERS_TEMPLATE = [
+      { tierNumber: 1, xpThreshold: 500, title: "First Star", icon: "⭐", rewardType: "treat", estimatedValue: "Ice cream outing" },
+      { tierNumber: 2, xpThreshold: 1500, title: "Silver Scholar", icon: "🥈", rewardType: "activity", estimatedValue: "Movie night" },
+      { tierNumber: 3, xpThreshold: 3000, title: "Gold Champion", icon: "🏆", rewardType: "item", estimatedValue: "$15 book store gift card" },
+      { tierNumber: 4, xpThreshold: 5000, title: "Platinum Legend", icon: "💎", rewardType: "experience", estimatedValue: "Day trip of choice" },
+      { tierNumber: 5, xpThreshold: 8000, title: "Master Scholar", icon: "🎓", rewardType: "experience", estimatedValue: "Special family experience", isBonusTier: true },
+    ];
+
+    let rewardTracksCreated = 0;
+    let weekPlanCreated = 0;
+
+    for (const student of RICH_DEMO_STUDENTS) {
+      const profileId = data.profileIds[student.displayName];
+      if (!profileId) continue;
+
+      // Calculate XP from node progress for this profile
+      const progressRows = await db.query.skillTreeNodeProgress.findMany({
+        where: and(
+          eq(skillTreeNodeProgress.profileId, profileId),
+        ),
+        columns: { xpEarned: true },
+      });
+      const totalXp = progressRows.reduce((sum, r) => sum + r.xpEarned, 0);
+
+      // Create reward track
+      const trackId = crypto.randomUUID();
+      await db.insert(rewardTracks).values({
+        id: trackId,
+        organizationId,
+        profileId,
+        createdByUserId: session.user.id,
+        title: `${student.displayName.split(" ")[0]}'s 2025-2026 Adventure Track`,
+        description: `Earn XP by completing lessons and skill trees throughout the school year!`,
+        isActive: true,
+        schoolYear: RICH_DEMO_SCHOOL_YEAR,
+        startedAt: "2025-09-01",
+        totalXpGoal: 8000,
+        createdAt: now,
+        updatedAt: now,
+      });
+      rewardTracksCreated++;
+
+      // Create tiers
+      const tierIds: string[] = [];
+      for (const tier of REWARD_TIERS_TEMPLATE) {
+        const tierId = crypto.randomUUID();
+        tierIds.push(tierId);
+        await db.insert(rewardTiers).values({
+          id: tierId,
+          trackId,
+          organizationId,
+          tierNumber: tier.tierNumber,
+          xpThreshold: tier.xpThreshold,
+          title: tier.title,
+          description: tier.estimatedValue,
+          icon: tier.icon,
+          rewardType: tier.rewardType,
+          estimatedValue: tier.estimatedValue,
+          isBonusTier: tier.isBonusTier ?? false,
+          createdAt: now,
+          updatedAt: now,
+        });
+
+        // Create claims for unlocked tiers
+        const isUnlocked = totalXp >= tier.xpThreshold;
+        if (isUnlocked) {
+          const claimStatus =
+            tier.tierNumber === 1 ? "delivered" :
+            tier.tierNumber === 2 ? "claimed" :
+            "unclaimed";
+          await db.insert(rewardClaims).values({
+            id: crypto.randomUUID(),
+            tierId,
+            trackId,
+            profileId,
+            organizationId,
+            status: claimStatus,
+            claimedAt: claimStatus !== "unclaimed" ? new Date(2025, 10 + tier.tierNumber, 1).toISOString() : null,
+            deliveredAt: claimStatus === "delivered" ? new Date(2025, 10 + tier.tierNumber, 3).toISOString() : null,
+            deliveredByUserId: claimStatus === "delivered" ? session.user.id : null,
+            parentNote: claimStatus === "delivered" ? "Enjoy your reward!" : null,
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
+      }
+
+      // XP snapshot
+      await db.insert(rewardTrackXpSnapshots).values({
+        id: crypto.randomUUID(),
+        trackId,
+        profileId,
+        xpEarned: totalXp,
+        lastUpdatedAt: now,
+      });
+
+      // Week plan — schedule Q3 assignments over next 2 weeks
+      const profileAssignments = data.assignmentMap.filter(a => a.profileId === profileId && a.mpIndex === 2 && !a.isVideo);
+      const planAssignments = profileAssignments.slice(0, 10);
+      const today = new Date();
+      for (let i = 0; i < planAssignments.length; i++) {
+        const schedDate = new Date(today);
+        schedDate.setDate(today.getDate() + Math.floor(i / 2) + 1);
+        await db.insert(weekPlan).values({
+          id: crypto.randomUUID(),
+          organizationId,
+          profileId,
+          assignmentId: planAssignments[i]!.assignmentId,
+          scheduledDate: schedDate.toISOString().slice(0, 10),
+          orderIndex: i % 2,
+          createdAt: now,
+        });
+        weekPlanCreated++;
+      }
+    }
+
+    return { success: true, summary: { rewardTracksCreated, weekPlanCreated } };
+  });
+
+// ─── Ensure Demo Account ──────────────────────────────────────────────────────
+
+export const ensureDemoAccount = createServerFn({ method: "GET" }).handler(async () => {
+  const db = getDb();
+  const now = new Date().toISOString();
+
+  // Check if demo user already exists and is fully set up
+  const existingByUsername = await db.query.users.findFirst({
+    where: eq(users.username, "demo"),
+  });
+  if (existingByUsername?.passwordHash && existingByUsername.parentPin) {
+    return { created: false, userId: existingByUsername.id };
+  }
+
+  // Partial demo account — fix it in place rather than recreating
+  if (existingByUsername) {
+    const updates: Partial<typeof existingByUsername> = { updatedAt: now };
+    if (!existingByUsername.passwordHash) {
+      updates.passwordHash = await hashPassword("demo1234");
+    }
+    if (!existingByUsername.parentPin) {
+      updates.parentPin = await hashParentPin("1234");
+      updates.parentPinLength = 4;
+    }
+    await db.update(users).set(updates).where(eq(users.id, existingByUsername.id));
+    return { created: false, userId: existingByUsername.id };
+  }
+
+  // Check for a partial/broken demo account created by email (no username set)
+  const existingByEmail = await db.query.users.findFirst({
+    where: eq(users.email, "demo@proorca.demo"),
+  });
+
+  // Delete broken email-only record so we can recreate cleanly
+  if (existingByEmail) {
+    await db.delete(users).where(eq(users.id, existingByEmail.id));
+  }
+
+  // Insert the demo user directly (auth.api.signUpEmail requires HTTP context)
+  const demoUserId = crypto.randomUUID();
+  const [passwordHash, parentPinHash] = await Promise.all([
+    hashPassword("demo1234"),
+    hashParentPin("1234"),
+  ]);
+  await db.insert(users).values({
+    id: demoUserId,
+    email: "demo@proorca.demo",
+    emailVerified: true,
+    username: "demo",
+    passwordHash,
+    parentPin: parentPinHash,
+    parentPinLength: 4,
+    name: "Demo Parent",
+    role: "user",
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  // Create the organization
+  const orgId = crypto.randomUUID();
+  const orgSlug = `demo-org-${orgId.slice(0, 8)}`;
+  await db.insert(organizations).values({
+    id: orgId,
+    name: "Demo Home Academy",
+    slug: orgSlug,
+    ownerUserId: demoUserId,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  // Create membership
+  await db.insert(memberships).values({
+    id: crypto.randomUUID(),
+    organizationId: orgId,
+    userId: demoUserId,
+    role: "parent",
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  return { created: true, userId: demoUserId, organizationId: orgId };
+});
+
+// ── Curriculum Builder Wizard ─────────────────────────────────────────────────
+
+export const wizardGetIntakeData = createServerFn({ method: "GET" }).handler(async () => {
+  const session = await requireActiveRole(["parent", "admin"]);
+  const db = getDb();
+
+  const organizationId = await resolveActiveOrganizationId(
+    session.user.id,
+    session.session.activeOrganizationId,
+  );
+
+  const profileRows = await db.query.profiles.findMany({
+    where: and(
+      eq(profiles.organizationId, organizationId),
+      eq(profiles.status, "active"),
+    ),
+    orderBy: [desc(profiles.createdAt)],
+  });
+
+  return {
+    profiles: profileRows.map((p) => ({
+      id: p.id,
+      displayName: p.displayName,
+      gradeLevel: p.gradeLevel ?? "",
+    })),
+  };
+});
+
+const wizardSpineInput = z.object({
+  subject: z.string().min(1),
+  gradeLevel: z.string().min(1),
+  courseLength: z.string().min(1),
+  interests: z.string().default(""),
+});
+
+export const wizardGenerateSpine = createServerFn({ method: "POST" })
+  .inputValidator((data) => wizardSpineInput.parse(data))
+  .handler(async ({ data }) => {
+    await requireActiveRole(["admin", "parent"]);
+    const nodes = await generateCurriculumSpine(data);
+    return { nodes };
+  });
+
+const spineNodeShape = z.object({
+  tempId: z.string(),
+  title: z.string(),
+  description: z.string().default(""),
+  icon: z.string().default("📚"),
+  colorRamp: z.string().default("teal"),
+  nodeType: z.string().default("milestone"),
+  cluster: z.string().default("core"),
+  depth: z.number().default(0),
+  isRequired: z.boolean().optional(),
+  xpReward: z.number().default(150),
+  prerequisites: z.array(z.string()).default([]),
+  suggestedAssignments: z
+    .array(z.object({ type: z.string(), title: z.string() }))
+    .default([]),
+});
+
+const wizardWebInput = z.object({
+  subject: z.string().min(1),
+  gradeLevel: z.string().min(1),
+  courseLength: z.string().min(1),
+  interests: z.string().default(""),
+  spineNodes: z.array(spineNodeShape).min(1),
+});
+
+export const wizardGenerateWeb = createServerFn({ method: "POST" })
+  .inputValidator((data) => wizardWebInput.parse(data))
+  .handler(async ({ data }) => {
+    await requireActiveRole(["admin", "parent"]);
+
+    // Generate lesson/elective nodes that branch off the spine
+    const generatedWebNodes = await generateCurriculumWebFromSpine({
+      subject: data.subject,
+      gradeLevel: data.gradeLevel,
+      courseLength: data.courseLength,
+      interests: data.interests,
+      spineNodes: data.spineNodes.map((n) => ({
+        tempId: n.tempId,
+        title: n.title,
+        nodeType: n.nodeType,
+        depth: n.depth,
+        prerequisites: n.prerequisites,
+      })),
+    });
+    // Sanitize: remove self-references and forward references, allow up to 2
+    // prerequisites (needed for boss reconvergence nodes). Do NOT enforce
+    // strict depth-gap=1 — the new zone-based prompts generate clean graphs.
+    const allKnownIds = new Set([
+      ...data.spineNodes.map((n) => n.tempId),
+      ...generatedWebNodes.map((n) => n.tempId),
+    ]);
+    const nodeOrder = new Map<string, number>([
+      ...data.spineNodes.map((n, i) => [n.tempId, i] as [string, number]),
+      ...generatedWebNodes.map((n, i) => [n.tempId, data.spineNodes.length + i] as [string, number]),
+    ]);
+    const webNodes = generatedWebNodes.map((node) => {
+      const myOrder = nodeOrder.get(node.tempId) ?? 9999;
+      const cleanPrereqs = Array.from(new Set(
+        node.prerequisites.filter(
+          (p) => p !== node.tempId && allKnownIds.has(p) && (nodeOrder.get(p) ?? 9999) < myOrder,
+        ),
+      )).slice(0, 2); // allow up to 2 for reconvergence nodes
+      return { ...node, prerequisites: cleanPrereqs.length > 0 ? cleanPrereqs : node.prerequisites.slice(0, 1) };
+    });
+
+    // Merge spine + web into a single flat list
+    const combined = [
+      ...data.spineNodes.map((n) => ({ ...n, isRequired: n.isRequired ?? true })),
+      ...webNodes.map((n) => ({
+        tempId: n.tempId,
+        title: n.title,
+        description: n.description,
+        icon: n.icon,
+        colorRamp: n.colorRamp,
+        nodeType: n.nodeType as string,
+        cluster: n.cluster as string,
+        depth: n.depth,
+        isRequired: n.isRequired,
+        xpReward: n.xpReward,
+        prerequisites: n.prerequisites,
+        suggestedAssignments: n.suggestedAssignments,
+      })),
+    ];
+
+    // Force-directed layout over the full graph
+    const posMap = layoutForceDirected(
+      combined.map((n) => ({
+        id: n.tempId,
+        prerequisites: n.prerequisites,
+        depth: n.depth,
+        cluster: n.cluster,
+        nodeType: n.nodeType,
+      })),
+    );
+
+    const nodes = combined.map((n) => {
+      const pos = posMap.get(n.tempId) ?? { x: 600, y: 450 };
+      return { ...n, x: pos.x, y: pos.y };
+    });
+
+    // Build a deduplicated edge list for preview rendering
+    const edgeSet = new Set<string>();
+    const edges: Array<{ source: string; target: string }> = [];
+    for (const node of nodes) {
+      for (const prereqId of node.prerequisites) {
+        const key = `${prereqId}>${node.tempId}`;
+        if (!edgeSet.has(key) && posMap.has(prereqId)) {
+          edgeSet.add(key);
+          edges.push({ source: prereqId, target: node.tempId });
+        }
+      }
+    }
+
+    return { nodes, edges };
+  });
+
+const wizardCommitInput = z.object({
+  profileId: z.string().min(1),
+  classTitle: z.string().min(1),
+  treeTitle: z.string().min(1),
+  subject: z.string().min(1),
+  gradeLevel: z.string().min(1),
+  schoolYear: z.string().optional(),
+  nodes: z
+    .array(
+      z.object({
+        tempId: z.string(),
+        title: z.string(),
+        description: z.string().default(""),
+        icon: z.string().default("📚"),
+        cluster: z.enum(["core", "specialization"]).optional(),
+        depth: z.number().int().nonnegative().optional(),
+        colorRamp: z.string().default("blue"),
+        nodeType: z.string().default("lesson"),
+        xpReward: z.number().default(100),
+        isRequired: z.boolean().optional(),
+        prerequisites: z.array(z.string()).default([]),
+        x: z.number().default(600),
+        y: z.number().default(450),
+        suggestedAssignments: z
+          .array(z.object({ type: z.string(), title: z.string() }))
+          .default([]),
+      }),
+    )
+    .min(1),
+  generatedAssignments: z
+    .array(
+      z.object({
+        nodeId: z.string(),
+        contentType: z.enum(["text", "video", "quiz", "essay_questions", "report", "movie"]),
+        title: z.string(),
+        description: z.string().default(""),
+        contentRef: z.string().default(""),
+      }),
+    )
+    .default([]),
+});
+
+const assignmentPrefsShape = z.object({
+  // Lesson/elective
+  readingPerNode: z.boolean().default(true),
+  videosPerLesson: z.number().int().min(0).max(3).default(1),
+  // Chapter (milestone)
+  chapterIntroVideo: z.boolean().default(true),
+  quizzesPerChapter: z.number().int().min(0).max(3).default(1),
+  essaysPerChapter: z.number().int().min(0).max(2).default(0),
+  // Boss (capstone)
+  quizzesPerBoss: z.number().int().min(0).max(5).default(2),
+  essaysPerBoss: z.number().int().min(0).max(3).default(1),
+  papersPerBoss: z.number().int().min(0).max(2).default(0),
+  includeProjects: z.boolean().default(false),
+  // Movie
+  includeMovies: z.boolean().default(false),
+  otherInstructions: z.string().default(""),
+});
+
+const wizardAssignmentsInput = z.object({
+  subject: z.string().min(1),
+  gradeLevel: z.string().min(1),
+  prefs: assignmentPrefsShape,
+  node: z.object({
+    tempId: z.string(),
+    title: z.string(),
+    description: z.string().default(""),
+    nodeType: z.string().default("lesson"),
+  }),
+});
+
+export const wizardGenerateAssignments = createServerFn({ method: "POST" })
+  .inputValidator((data) => wizardAssignmentsInput.parse(data))
+  .handler(async ({ data }) => {
+    await requireActiveRole(["admin", "parent"]);
+    const generated = await generateAssignmentsForNode({
+      subject: data.subject,
+      gradeLevel: data.gradeLevel,
+      node: data.node,
+      prefs: data.prefs as AssignmentPrefs,
+    });
+    return { assignments: generated };
+  });
+
+const COMMIT_VALID_NODE_TYPES = new Set(["lesson", "milestone", "boss", "branch", "elective"]);
+const COMMIT_VALID_COLOR_RAMPS = new Set(["blue", "teal", "purple", "amber", "coral", "green"]);
+
+const wizardChapterInput = z.object({
+  subject: z.string().min(1),
+  gradeLevel: z.string().min(1),
+  milestoneId: z.string().min(1),
+  milestoneTitle: z.string().min(1),
+  milestoneDescription: z.string().default(""),
+  milestoneDepth: z.number().default(1),
+  existingTitles: z.array(z.string()).default([]),
+});
+
+export const wizardGenerateChapterCluster = createServerFn({ method: "POST" })
+  .inputValidator((data) => wizardChapterInput.parse(data))
+  .handler(async ({ data }) => {
+    await requireActiveRole(["admin", "parent"]);
+    const nodes = await generateChapterCluster(data);
+    return { nodes };
+  });
+
+const wizardBranchInput = z.object({
+  subject: z.string().min(1),
+  gradeLevel: z.string().min(1),
+  lessonId: z.string().min(1),
+  lessonTitle: z.string().min(1),
+  lessonDescription: z.string().default(""),
+  lessonDepth: z.number().default(2),
+  milestoneTitle: z.string().min(1),
+  existingTitles: z.array(z.string()).default([]),
+});
+
+export const wizardGenerateBranchCluster = createServerFn({ method: "POST" })
+  .inputValidator((data) => wizardBranchInput.parse(data))
+  .handler(async ({ data }) => {
+    await requireActiveRole(["admin", "parent"]);
+    const nodes = await generateBranchCluster(data);
+    return { nodes };
+  });
+
+const wizardLayoutInput = z.object({
+  nodes: z.array(
+    z.object({
+      tempId: z.string(),
+      prerequisites: z.array(z.string()).default([]),
+      depth: z.number().default(0),
+      cluster: z.string().default("core"),
+      nodeType: z.string().default("lesson"),
+    }),
+  ).min(1),
+});
+
+export const wizardLayoutNodes = createServerFn({ method: "POST" })
+  .inputValidator((data) => wizardLayoutInput.parse(data))
+  .handler(async ({ data }) => {
+    await requireActiveRole(["admin", "parent"]);
+    const posMap = layoutForceDirected(
+      data.nodes.map((n) => ({
+        id: n.tempId,
+        prerequisites: n.prerequisites,
+        depth: n.depth,
+        cluster: n.cluster,
+        nodeType: n.nodeType,
+      })),
+    );
+    const edges: Array<{ source: string; target: string }> = [];
+    const edgeSet = new Set<string>();
+    for (const node of data.nodes) {
+      for (const prereqId of node.prerequisites) {
+        const key = `${prereqId}>${node.tempId}`;
+        if (!edgeSet.has(key) && posMap.has(prereqId)) {
+          edgeSet.add(key);
+          edges.push({ source: prereqId, target: node.tempId });
+        }
+      }
+    }
+    const positions: Record<string, { x: number; y: number }> = {};
+    for (const [id, pos] of posMap.entries()) {
+      positions[id] = pos;
+    }
+    return { positions, edges };
+  });
+
+export const wizardCommitCurriculum = createServerFn({ method: "POST" })
+  .inputValidator((data) => wizardCommitInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+    const now = new Date().toISOString();
+
+    // Verify the profile belongs to this org
+    const profile = await db.query.profiles.findFirst({
+      where: and(
+        eq(profiles.id, data.profileId),
+        eq(profiles.organizationId, organizationId),
+        eq(profiles.status, "active"),
+      ),
+    });
+    if (!profile) throw new Error("PROFILE_NOT_FOUND");
+
+    // 1. Class
+    const classId = crypto.randomUUID();
+    await db.insert(classes).values({
+      id: classId,
+      organizationId,
+      title: data.classTitle,
+      schoolYear: data.schoolYear ?? null,
+      createdByUserId: session.user.id,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    // 2. Enrollment
+    await db.insert(classEnrollments).values({
+      id: crypto.randomUUID(),
+      classId,
+      profileId: data.profileId,
+      createdAt: now,
+    });
+
+    // 3. Skill tree
+    const treeId = crypto.randomUUID();
+    await db.insert(skillTrees).values({
+      id: treeId,
+      organizationId,
+      classId,
+      profileId: data.profileId,
+      title: data.treeTitle,
+      gradeLevel: data.gradeLevel,
+      subject: data.subject,
+      schoolYear: data.schoolYear ?? null,
+      createdByUserId: session.user.id,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    // Nodes arriving from the wizard are already sanitized by wizardGenerateWeb.
+    // Just remove any remaining self-refs or forward-refs without re-flattening.
+    const commitOrder = new Map(data.nodes.map((n, i) => [n.tempId, i]));
+    const normalizedCommitNodes = data.nodes.map((node) => {
+      const myOrder = commitOrder.get(node.tempId) ?? 9999;
+      const cleanPrereqs = Array.from(new Set(
+        node.prerequisites.filter(
+          (p) => p !== node.tempId && commitOrder.has(p) && (commitOrder.get(p) ?? 9999) < myOrder,
+        ),
+      )).slice(0, 2);
+      return { ...node, prerequisites: cleanPrereqs };
+    });
+
+    // 4. Nodes — allocate real IDs upfront so edges can reference them
+    const tempToReal = new Map<string, string>();
+    for (const node of normalizedCommitNodes) tempToReal.set(node.tempId, crypto.randomUUID());
+
+    await Promise.all(
+      normalizedCommitNodes.map((node) => {
+        const safeType = COMMIT_VALID_NODE_TYPES.has(node.nodeType)
+          ? (node.nodeType as "lesson" | "milestone" | "boss" | "branch" | "elective")
+          : "lesson";
+        const safeRamp = COMMIT_VALID_COLOR_RAMPS.has(node.colorRamp)
+          ? node.colorRamp
+          : "blue";
+        const cluster =
+          node.cluster === "specialization" || safeType === "elective"
+            ? "specialization"
+            : "core";
+        const radius =
+          node.nodeType === "boss"
+            ? 32
+            : node.nodeType === "milestone"
+              ? 28
+              : node.nodeType === "elective"
+                ? 22
+                : 24;
+
+        return db.insert(skillTreeNodes).values({
+          id: tempToReal.get(node.tempId)!,
+          treeId,
+          organizationId,
+          title: node.title,
+          description: node.description || null,
+          icon: node.icon || null,
+          colorRamp: safeRamp,
+          nodeType: safeType,
+          xpReward: Math.min(1000, Math.max(0, node.xpReward)),
+          positionX: Math.round(node.x),
+          positionY: Math.round(node.y),
+          radius,
+          isRequired: node.isRequired ?? (node.cluster === "core" && node.nodeType !== "elective"),
+          aiGeneratedDescription: buildNodeLayoutMetadata({
+            description: node.description || null,
+            cluster,
+            depth: node.depth ?? 0,
+            prerequisiteGroups:
+              node.prerequisites.length > 1
+                ? node.prerequisites
+                    .map((prereqTempId) => tempToReal.get(prereqTempId))
+                    .filter((prereqId): prereqId is string => typeof prereqId === "string")
+                    .map((prereqId) => [prereqId])
+                : node.prerequisites.length === 1
+                  ? [[tempToReal.get(node.prerequisites[0]!)!]]
+                  : [],
+          }),
+          createdAt: now,
+          updatedAt: now,
+        });
+      }),
+    );
+
+    // 5. Edges — one per prerequisite, deduped
+    const edgeSet = new Set<string>();
+    const edgeRows: Array<{
+      id: string;
+      treeId: string;
+      sourceNodeId: string;
+      targetNodeId: string;
+      edgeType: "required" | "optional" | "bonus";
+      createdAt: string;
+    }> = [];
+
+    for (const node of normalizedCommitNodes) {
+      const targetId = tempToReal.get(node.tempId);
+      if (!targetId) continue;
+      const isSpecializationLane =
+        node.cluster === "specialization" ||
+        node.nodeType === "elective" ||
+        ["purple", "amber", "coral", "green"].includes(node.colorRamp);
+      for (const [index, prereq] of node.prerequisites.entries()) {
+        const sourceId = tempToReal.get(prereq);
+        if (!sourceId) continue;
+        const key = `${sourceId}>${targetId}`;
+        if (edgeSet.has(key)) continue;
+        edgeSet.add(key);
+        edgeRows.push({
+          id: crypto.randomUUID(),
+          treeId,
+          sourceNodeId: sourceId,
+          targetNodeId: targetId,
+          edgeType:
+            index > 0
+              ? "bonus"
+              : isSpecializationLane
+                ? "optional"
+                : "required",
+          createdAt: now,
+        });
+      }
+    }
+
+    if (edgeRows.length > 0) {
+      await Promise.all(edgeRows.map((e) => db.insert(skillTreeEdges).values(e)));
+    }
+
+    // 6. Generated assignments — create real assignment rows and link to nodes
+    if (data.generatedAssignments.length > 0) {
+      // Group by nodeId
+      const byNode = new Map<string, typeof data.generatedAssignments>();
+      for (const a of data.generatedAssignments) {
+        const realNodeId = tempToReal.get(a.nodeId);
+        if (!realNodeId) continue;
+        const key = a.nodeId;
+        if (!byNode.has(key)) byNode.set(key, []);
+        byNode.get(key)!.push(a);
+      }
+
+      for (const [tempNodeId, nodeAssignments] of byNode.entries()) {
+        const realNodeId = tempToReal.get(tempNodeId);
+        if (!realNodeId) continue;
+        for (let i = 0; i < nodeAssignments.length; i++) {
+          const a = nodeAssignments[i];
+          const assignmentId = crypto.randomUUID();
+          await db.insert(assignments).values({
+            id: assignmentId,
+            organizationId,
+            classId,
+            title: a.title,
+            description: a.description || null,
+            contentType: a.contentType,
+            contentRef: a.contentRef || null,
+            createdByUserId: session.user.id,
+            createdAt: now,
+            updatedAt: now,
+          });
+          await db.insert(skillTreeNodeAssignments).values({
+            id: crypto.randomUUID(),
+            nodeId: realNodeId,
+            assignmentId,
+            orderIndex: i,
+            createdAt: now,
+          });
+        }
+      }
+    }
+
+    return {
+      classId,
+      treeId,
+      nodeCount: normalizedCommitNodes.length,
+      edgeCount: edgeRows.length,
+      assignmentCount: data.generatedAssignments.length,
+    };
+  });
+
+// ── Node content population ───────────────────────────────────────────────────
+
+const LLM_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+
+/** Generate a short HTML reading passage using the Workers AI LLM. */
+async function generateReadingPassageHtml(input: {
+  topic: string;
+  subject: string;
+  gradeLevel: string;
+  xpReward: number;
+  description?: string;
+}): Promise<string> {
+  const wordTarget = input.xpReward >= 500 ? 220 : input.xpReward >= 200 ? 150 : 100;
+  const prompt = [
+    `Write a ${wordTarget}-word educational reading for a grade-${input.gradeLevel} student learning "${input.topic}" in ${input.subject}.`,
+    input.description ? `Context: ${input.description}` : "",
+    "Use HTML tags <h2>, <p>, <ul>, <li> only. No markdown, no code fences.",
+    "Return only the HTML fragment.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const result = await env.AI.run(LLM_MODEL, {
+    messages: [
+      { role: "system", content: "You are an educational content writer. Output only HTML." },
+      { role: "user", content: prompt },
+    ],
+    max_tokens: 700,
+  });
+
+  const raw =
+    typeof result === "string"
+      ? result
+      : typeof (result as Record<string, unknown>).response === "string"
+        ? ((result as Record<string, unknown>).response as string)
+        : "";
+
+  const text = raw.trim();
+  return text || `<h2>${input.topic}</h2><p>Read about ${input.topic} in ${input.subject} and take notes in your own words.</p>`;
+}
+
+/** Build a JSON essay-questions or HTML report prompt (no AI needed). */
+function buildReflectionPrompt(input: {
+  topic: string;
+  subject: string;
+  xpReward: number;
+  nodeType: string;
+  description?: string;
+}): { contentType: "essay_questions" | "report"; contentRef: string } {
+  const isReport = input.nodeType === "boss" || input.xpReward >= 400;
+
+  if (isReport) {
+    const html = [
+      `<h2>Research Report: ${input.topic}</h2>`,
+      `<p>Write a 2–3 paragraph report about <strong>${input.topic}</strong> in ${input.subject}.</p>`,
+      "<h3>Your report should address:</h3>",
+      "<ul>",
+      `<li>What is ${input.topic} and why does it matter?</li>`,
+      "<li>Key facts or examples from your reading and research</li>",
+      `<li>How this topic connects to other things you have learned in ${input.subject}</li>`,
+      "</ul>",
+      input.description ? `<p><em>Hint: ${input.description}</em></p>` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+    return { contentType: "report", contentRef: html };
+  }
+
+  return {
+    contentType: "essay_questions",
+    contentRef: JSON.stringify({
+      questions: [
+        `What are the most important ideas you learned about ${input.topic}?`,
+        `How does ${input.topic} connect to something you already know?`,
+        input.xpReward >= 250
+          ? `If you had to teach ${input.topic} to a friend, how would you explain it?`
+          : null,
+      ].filter(Boolean),
+    }),
+  };
+}
+
+const populateWebNodeContentInput = z.object({
+  nodeId: z.string().min(1),
+  classId: z.string().min(1),
+});
+
+export const populateWebNodeContent = createServerFn({ method: "POST" })
+  .inputValidator((data) => populateWebNodeContentInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    // ── Fetch node, tree, class ───────────────────────────────────────────────
+    const [node, classRow] = await Promise.all([
+      db.query.skillTreeNodes.findFirst({
+        where: and(
+          eq(skillTreeNodes.id, data.nodeId),
+          eq(skillTreeNodes.organizationId, organizationId),
+        ),
+      }),
+      db.query.classes.findFirst({
+        where: and(eq(classes.id, data.classId), eq(classes.organizationId, organizationId)),
+      }),
+    ]);
+    if (!node) throw new Error("NODE_NOT_FOUND");
+    if (!classRow) throw new Error("CLASS_NOT_FOUND");
+
+    const tree = await db.query.skillTrees.findFirst({
+      where: and(eq(skillTrees.id, node.treeId), eq(skillTrees.organizationId, organizationId)),
+    });
+    if (!tree) throw new Error("TREE_NOT_FOUND");
+
+    const subject = node.subject ?? tree.subject ?? "General Studies";
+    const gradeLevel = tree.gradeLevel ?? "mixed";
+    const now = new Date().toISOString();
+
+    // Question count scales with XP reward
+    const questionCount = node.xpReward >= 400 ? 5 : node.xpReward >= 200 ? 4 : 3;
+
+    const createdIds: string[] = [];
+    let orderIndex = 0;
+
+    // ── Helper: insert assignment + link to node ──────────────────────────────
+    async function insertAndLink(params: {
+      title: string;
+      description: string;
+      contentType: AssignmentContentType;
+      contentRef: string | null;
+      linkedAssignmentId?: string;
+    }): Promise<string> {
+      const assignmentId = crypto.randomUUID();
+      await db.insert(assignments).values({
+        id: assignmentId,
+        organizationId,
+        classId: data.classId,
+        title: params.title,
+        description: params.description || null,
+        contentType: params.contentType,
+        contentRef: params.contentRef ?? null,
+        linkedAssignmentId: params.linkedAssignmentId ?? null,
+        dueAt: null,
+        createdByUserId: session.user.id,
+        createdAt: now,
+        updatedAt: now,
+      });
+      await db.insert(skillTreeNodeAssignments).values({
+        id: crypto.randomUUID(),
+        nodeId: data.nodeId,
+        assignmentId,
+        orderIndex: orderIndex++,
+        createdAt: now,
+      });
+      createdIds.push(assignmentId);
+      return assignmentId;
+    }
+
+    // ── 1. Reading passage — every node gets one ─────────────────────────────
+    let readingHtml: string;
+    try {
+      readingHtml = await generateReadingPassageHtml({
+        topic: node.title,
+        subject,
+        gradeLevel,
+        xpReward: node.xpReward,
+        description: node.description ?? undefined,
+      });
+    } catch {
+      readingHtml = `<h2>${node.title}</h2><p>Explore ${node.title} in ${subject} through your own research and reading.</p>`;
+    }
+    const readingId = await insertAndLink({
+      title: `Read: ${node.title}`,
+      description: `Background reading for ${node.title}.`,
+      contentType: "text",
+      contentRef: readingHtml,
+    });
+
+    // ── 2. Video — lesson, milestone, branch, elective ───────────────────────
+    let videoAssignmentId: string | undefined;
+    let transcript: string | null = null;
+
+    if (node.nodeType !== "boss") {
+      const ytKey = env.YOUTUBE_API_KEY;
+      if (ytKey) {
+        try {
+          const searchQuery = `${node.title} ${subject} grade ${gradeLevel}`;
+          const videos = await searchYoutubeForVideos(searchQuery, ytKey);
+          const top = videos[0];
+          if (top) {
+            videoAssignmentId = await insertAndLink({
+              title: `Watch: ${top.title}`,
+              description: `Video lesson covering ${node.title}.`,
+              contentType: "video",
+              contentRef: JSON.stringify({
+                videos: [{ videoId: top.videoId, title: top.title, channel: top.channel, description: top.description }],
+              }),
+            });
+            const transcriptResult = await fetchYoutubeTranscriptWithMeta(top.videoId);
+            transcript = transcriptResult.transcript;
+          }
+        } catch {
+          // YouTube unavailable — continue without video
+        }
+      }
+    }
+
+    // ── 3. Quiz — lesson, milestone, boss ────────────────────────────────────
+    if (node.nodeType === "lesson" || node.nodeType === "milestone" || node.nodeType === "boss") {
+      try {
+        const quiz = await generateQuizDraft({
+          topic: node.title,
+          gradeLevel,
+          questionCount,
+          transcript: transcript ?? undefined,
+          sourceText: (!transcript && node.description) ? node.description : undefined,
+        });
+        await insertAndLink({
+          title: `Quiz: ${node.title}`,
+          description: `Check your understanding of ${node.title}.`,
+          contentType: "quiz",
+          contentRef: JSON.stringify(quiz),
+          linkedAssignmentId: videoAssignmentId,
+        });
+      } catch {
+        // Quiz generation failed — that's OK
+      }
+    }
+
+    // ── 4. Essay / Report — milestone, boss, elective ────────────────────────
+    if (node.nodeType === "milestone" || node.nodeType === "boss" || node.nodeType === "elective") {
+      const { contentType: reflectionType, contentRef: reflectionRef } = buildReflectionPrompt({
+        topic: node.title,
+        subject,
+        xpReward: node.xpReward,
+        nodeType: node.nodeType,
+        description: node.description ?? undefined,
+      });
+      const isReport = reflectionType === "report";
+      await insertAndLink({
+        title: isReport ? `Report: ${node.title}` : `Reflect: ${node.title}`,
+        description: isReport
+          ? `Write a research report about ${node.title}.`
+          : `Write a short reflection on what you learned about ${node.title}.`,
+        contentType: reflectionType,
+        contentRef: reflectionRef,
+        linkedAssignmentId: readingId,
+      });
+    }
+
+    // ── Return freshly created assignments ────────────────────────────────────
+    const created = createdIds.length
+      ? await db.query.assignments.findMany({ where: inArray(assignments.id, createdIds) })
+      : [];
+
+    return { nodeId: data.nodeId, assignments: created };
   });
