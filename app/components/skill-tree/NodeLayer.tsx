@@ -420,9 +420,31 @@ export function NodeLayer({
           </>
         ) : null;
 
-        // Label
+        // Label — split into two lines at a word boundary instead of hard-truncating
         const labelFill = isLocked ? "#b0aea6" : "#1e293b";
-        const titleText = node.title.length > 16 ? node.title.slice(0, 15) + "…" : node.title;
+        const MAX_CHARS = 18;
+        let titleLine1 = node.title;
+        let titleLine2: string | null = null;
+        if (node.title.length > MAX_CHARS) {
+          // Try to break at a space near the middle
+          const mid = Math.floor(node.title.length / 2);
+          const spaceAfter = node.title.indexOf(" ", mid);
+          const spaceBefore = node.title.lastIndexOf(" ", mid);
+          const breakIdx =
+            spaceAfter !== -1 && (spaceBefore === -1 || spaceAfter - mid <= mid - spaceBefore)
+              ? spaceAfter
+              : spaceBefore !== -1
+              ? spaceBefore
+              : MAX_CHARS;
+          titleLine1 = node.title.slice(0, breakIdx).trim();
+          const remainder = node.title.slice(breakIdx).trim();
+          titleLine2 = remainder.length > MAX_CHARS ? remainder.slice(0, MAX_CHARS - 1) + "…" : remainder;
+        }
+        const labelLineHeight = 13;
+        const labelLines = titleLine2 ? [titleLine1, titleLine2] : [titleLine1];
+        // Base label offset: small fixed gap after the node shape + ring clearance
+        const labelGap = 9;
+        const labelBaseY = cy + r + labelGap;
 
         const isDimmed = (dimmedNodeIds?.size ?? 0) > 0 && (dimmedNodeIds?.has(node.id) ?? false);
 
@@ -461,27 +483,30 @@ export function NodeLayer({
             {startMarker}
             {endMarker}
 
-            {/* Title label */}
-            <text
-              x={cx}
-              y={cy + r + (isEndNode ? 24 : 12)}
-              fontSize={isOptional ? 10 : 11}
-              textAnchor="middle"
-              fill={labelFill}
-              fontWeight={isSelected ? "700" : "500"}
-              style={{ pointerEvents: "none", userSelect: "none" }}
-            >
-              {titleText}
-            </text>
+            {/* Title label (1–2 lines) */}
+            {labelLines.map((line, i) => (
+              <text
+                key={i}
+                x={cx}
+                y={isEndNode ? labelBaseY + 12 + i * labelLineHeight : labelBaseY + i * labelLineHeight}
+                fontSize={isOptional ? 10 : 11}
+                textAnchor="middle"
+                fill={labelFill}
+                fontWeight={isSelected ? "700" : "500"}
+                style={{ pointerEvents: "none", userSelect: "none" }}
+              >
+                {line}
+              </text>
+            ))}
 
             {/* XP label */}
             {node.xpReward > 0 && !isLocked ? (
               <text
                 x={cx}
-                y={cy + r + (isEndNode ? 36 : 24)}
+                y={(isEndNode ? labelBaseY + 12 : labelBaseY) + labelLines.length * labelLineHeight + 2}
                 fontSize={isOptional ? 9 : 10}
                 textAnchor="middle"
-                fill="#888780"
+                fill="#9ca3af"
                 style={{ pointerEvents: "none", userSelect: "none" }}
               >
                 {node.xpReward} XP

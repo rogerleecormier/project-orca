@@ -601,19 +601,7 @@ export function EdgeLayer({
               </g>
             ) : null}
 
-            {(edge.edgeType === "optional" || edge.edgeType === "bonus") && !editMode ? (
-              <text
-                x={route.labelPoint.x}
-                y={route.labelPoint.y}
-                fontSize={8}
-                textAnchor="middle"
-                fill={baseColor}
-                opacity={0.7}
-                style={{ pointerEvents: "none", userSelect: "none" }}
-              >
-                {edge.edgeType === "bonus" ? "↩" : "+XP"}
-              </text>
-            ) : null}
+            {null /* optional/bonus edge labels removed — they overlapped node text */}
 
             {isSelected && editMode && onDeleteEdge ? (
               <g
