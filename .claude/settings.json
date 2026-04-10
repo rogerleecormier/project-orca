@@ -42,7 +42,8 @@
       "Bash(pnpm drizzle-kit:*)",
       "Bash(pnpm deploy:*)",
       "Bash(pnpm run:*)",
-      "Bash(node -e ':*)"
+      "Bash(node -e ':*)",
+      "Bash(ls -lh /run/media/rogerleecormier/Storage/dev/project-orca/app/components/*.tsx)"
     ],
     "additionalDirectories": [
       "/tmp"

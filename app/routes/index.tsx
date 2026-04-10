@@ -486,7 +486,9 @@ function HeaderLoginPanel() {
 
 function LandingHeader() {
   return (
-    <header className="skill-map-home-header sticky top-0 z-30 backdrop-blur">
+    <header className="skill-map-home-header relative sticky top-0 z-30 backdrop-blur">
+      {/* Sandy wave bar */}
+      <div className="orca-sand-bar absolute inset-x-0 top-0" aria-hidden="true" />
       <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
         {/* Logo */}
         <div className="flex items-center gap-2">
@@ -518,9 +520,12 @@ function HeroSection() {
           <span className="orca-icon-chip mb-6 flex w-fit" aria-hidden="true">
             <OrcaMark className="h-10 w-10" alt="" />
           </span>
-          <p className="text-sm font-semibold uppercase tracking-[0.28em] text-cyan-700">
-            Project Orca - ProOrca
-          </p>
+          <div className="flex items-center gap-3">
+            <p className="text-sm font-semibold uppercase tracking-[0.28em] text-cyan-700">
+              Project Orca · ProOrca
+            </p>
+            <span className="orca-sand-dot" aria-hidden="true" />
+          </div>
           <h1 className="skill-map-display mt-4 max-w-3xl text-4xl font-semibold tracking-tight text-slate-900 sm:text-5xl lg:text-[3.65rem]">
             Plan school like a skill map, not a spreadsheet.
           </h1>
@@ -537,6 +542,7 @@ function HeroSection() {
                 {item}
               </span>
             ))}
+            <span className="orca-sand-chip">Edge-native</span>
           </div>
           <div className="mt-8 flex flex-wrap items-center gap-3">
             <Link
@@ -570,9 +576,12 @@ function AiSpotlightSection() {
     <section className="mx-auto max-w-6xl px-4 py-20 sm:px-6">
       <div className="grid gap-12 lg:grid-cols-2 lg:gap-16 lg:items-center">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.25em] text-cyan-700">
-            AI Workspace
-          </p>
+          <div className="flex items-center gap-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.25em] text-cyan-700">
+              AI Workspace
+            </p>
+            <span className="orca-sand-dot" aria-hidden="true" />
+          </div>
           <h2 className="mt-3 text-3xl font-bold tracking-tight text-slate-900">
             Builder, planner chat, and assignment generation in one flow
           </h2>
@@ -891,7 +900,7 @@ function ProgressSpotlightSection() {
             <div className="rounded-2xl border border-violet-200/60 bg-gradient-to-br from-slate-900 via-violet-950 to-indigo-950 p-4 shadow-sm">
               <p className="text-xs font-semibold uppercase tracking-wide text-violet-400">Reward Track</p>
               <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-800">
-                <div className="h-full w-[38%] rounded-full bg-gradient-to-r from-cyan-500 to-violet-500" />
+                <div className="h-full w-[38%] rounded-full" style={{ background: "linear-gradient(90deg, var(--orca-sea-bright), var(--orca-sand))" }} />
               </div>
               <div className="mt-1 text-[10px] text-violet-200">1,580 / 5,000 XP</div>
               <div className="mt-3 flex gap-2">
@@ -911,9 +920,12 @@ function ProgressSpotlightSection() {
           </div>
 
           <div className="order-1 lg:order-2">
-            <p className="text-xs font-semibold uppercase tracking-[0.25em] text-amber-600">
-              Outcomes
-            </p>
+            <div className="flex items-center gap-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.25em] text-amber-600">
+                Outcomes
+              </p>
+              <span className="orca-sand-chip">XP + Rewards</span>
+            </div>
             <h2 className="mt-3 text-3xl font-bold tracking-tight text-slate-900">
               Grade, release, and reward without leaving the platform
             </h2>
@@ -1001,7 +1013,10 @@ function HowItWorksSection() {
         <div className="mt-12 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
           {HOW_IT_WORKS.map((item) => (
             <div key={item.step} className="skill-map-step-card rounded-2xl p-5">
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-sm font-bold text-white">
+              <div
+                className="flex h-9 w-9 items-center justify-center rounded-xl text-sm font-bold text-white"
+                style={{ background: "linear-gradient(135deg, var(--orca-sea), var(--orca-sand-muted))" }}
+              >
                 {item.step}
               </div>
               <h3 className="mt-4 font-semibold text-slate-900">{item.title}</h3>
@@ -1017,7 +1032,8 @@ function HowItWorksSection() {
 function CtaSection() {
   return (
     <section className="skill-map-section-alt border-t border-slate-200 px-4 py-20 text-center sm:px-6">
-      <div className="skill-map-panel mx-auto max-w-xl rounded-[2rem] px-6 py-10">
+      <div className="skill-map-panel orca-sand-hero mx-auto max-w-xl rounded-[2rem] px-6 py-10">
+        <div className="orca-sand-bar mb-6" aria-hidden="true" />
         <span className="orca-icon-chip mx-auto mb-5 flex w-fit" aria-hidden="true">
           <OrcaMark className="h-8 w-8" alt="" />
         </span>
@@ -1042,6 +1058,7 @@ function CtaSection() {
           </Link>
         </div>
         <p className="mt-2 text-xs text-slate-500">Demo parent PIN: <strong>1234</strong></p>
+        <div className="orca-sand-bar mt-6" aria-hidden="true" />
       </div>
     </section>
   );

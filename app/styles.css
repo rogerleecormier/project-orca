@@ -25,6 +25,15 @@ html {
   --orca-body-font: "Trebuchet MS", "Lucida Sans Unicode", "Lucida Grande", sans-serif;
   --orca-page-padding-x: clamp(1rem, 2.4vw, 2.25rem);
   --orca-page-padding-y: clamp(1rem, 2.2vw, 2rem);
+
+  /* Sandy / warm-shore accent palette */
+  --orca-sand: #c8a96e;
+  --orca-sand-light: #e8d5a8;
+  --orca-sand-pale: #f5edd8;
+  --orca-sand-muted: #a8895a;
+  --orca-sand-glow: rgba(200, 169, 110, 0.18);
+  --orca-sand-border: rgba(200, 169, 110, 0.32);
+  --orca-sand-strong: rgba(200, 169, 110, 0.42);
 }
 
 body.orca-theme {
@@ -49,7 +58,8 @@ body.orca-theme.orca-role-admin {
   background:
     radial-gradient(circle at 12% 8%, rgba(45, 122, 188, 0.18), transparent 32%),
     radial-gradient(circle at 86% 2%, rgba(109, 191, 223, 0.14), transparent 32%),
-    linear-gradient(180deg, #f4faff 0%, #e8f4fd 100%);
+    radial-gradient(circle at 50% 100%, rgba(200, 169, 110, 0.06), transparent 28%),
+    linear-gradient(180deg, #f3f9ff 0%, #e6f2fb 100%);
 }
 
 body.orca-theme.orca-role-student {
@@ -64,33 +74,57 @@ body.orca-theme.orca-role-student {
   background:
     radial-gradient(circle at 10% 6%, rgba(77, 170, 212, 0.2), transparent 30%),
     radial-gradient(circle at 88% 10%, rgba(129, 210, 233, 0.2), transparent 34%),
-    linear-gradient(180deg, #f6fcff 0%, #e5f5ff 100%);
+    radial-gradient(circle at 50% 96%, rgba(200, 169, 110, 0.08), transparent 26%),
+    linear-gradient(180deg, #f5fbff 0%, #e0f3ff 100%);
 }
+
+/* ── Sandy accent utilities ──────────────────────────────────────────────── */
+
+.orca-sand-accent {
+  background: linear-gradient(135deg, var(--orca-sand-pale), rgba(232, 213, 168, 0.6));
+  border: 1px solid var(--orca-sand-border);
+  color: var(--orca-sand-muted);
+}
+
+.orca-sand-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.65rem;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--orca-sand-pale), rgba(232, 213, 168, 0.5));
+  border: 1px solid var(--orca-sand-border);
+  color: #7a5c2e;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.orca-sand-bar {
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--orca-sand), var(--orca-sand-light), transparent);
+  border-radius: 999px;
+  opacity: 0.7;
+}
+
+.orca-sand-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--orca-sand);
+  flex-shrink: 0;
+  box-shadow: 0 0 4px var(--orca-sand-strong);
+}
+
+/* ── Role-variant sidebar: parent (deep navy) ────────────────────────────── */
 
 .orca-shell-parent .orca-shell-sidebar,
 .orca-shell-admin .orca-shell-sidebar {
   background:
     radial-gradient(circle at 20% 12%, rgba(111, 197, 231, 0.28), transparent 36%),
-    linear-gradient(185deg, rgba(28, 71, 110, 0.9), rgba(39, 94, 137, 0.88)) !important;
+    linear-gradient(185deg, rgba(18, 52, 88, 0.97), rgba(28, 74, 112, 0.95)) !important;
   border-right-color: rgba(114, 176, 220, 0.28) !important;
   color: #dcefff;
-}
-
-.orca-shell-parent .orca-shell-sidebar .text-slate-900,
-.orca-shell-admin .orca-shell-sidebar .text-slate-900 {
-  color: #eff8ff !important;
-}
-
-.orca-shell-parent .orca-shell-sidebar .text-slate-700,
-.orca-shell-admin .orca-shell-sidebar .text-slate-700 {
-  color: #c8e6fb !important;
-}
-
-.orca-shell-parent .orca-shell-sidebar .text-slate-600,
-.orca-shell-admin .orca-shell-sidebar .text-slate-600,
-.orca-shell-parent .orca-shell-sidebar .text-slate-500,
-.orca-shell-admin .orca-shell-sidebar .text-slate-500 {
-  color: #9fc8e4 !important;
 }
 
 .orca-shell-parent .orca-shell-sidebar .hover\:bg-slate-100:hover,
@@ -106,36 +140,27 @@ body.orca-theme.orca-role-student {
 .orca-shell-parent .orca-shell-header,
 .orca-shell-admin .orca-shell-header {
   background:
-    linear-gradient(180deg, rgba(239, 249, 255, 0.94), rgba(225, 241, 253, 0.9)) !important;
-  border-bottom-color: rgba(112, 166, 204, 0.36) !important;
+    linear-gradient(180deg, rgba(235, 246, 255, 0.96), rgba(218, 238, 252, 0.92)) !important;
+  border-bottom-color: rgba(112, 166, 204, 0.4) !important;
 }
 
 .orca-shell-parent .orca-shell-main,
 .orca-shell-admin .orca-shell-main {
   background:
     radial-gradient(circle at 15% 10%, rgba(84, 165, 215, 0.18), transparent 28%),
-    radial-gradient(circle at 90% 8%, rgba(156, 220, 241, 0.16), transparent 34%),
-    linear-gradient(180deg, #edf7ff 0%, #dff0fb 100%) !important;
+    radial-gradient(circle at 90% 8%, rgba(156, 220, 241, 0.14), transparent 34%),
+    radial-gradient(circle at 50% 95%, rgba(200, 169, 110, 0.06), transparent 30%),
+    linear-gradient(180deg, #eaf6ff 0%, #daedf8 100%) !important;
 }
+
+/* ── Role-variant sidebar: student (light sky + sandy warmth) ────────────── */
 
 .orca-shell-student .orca-shell-sidebar {
   background:
-    radial-gradient(circle at 20% 14%, rgba(112, 219, 240, 0.28), transparent 34%),
-    linear-gradient(185deg, rgba(236, 251, 255, 0.96), rgba(205, 242, 255, 0.92)) !important;
-  border-right-color: rgba(109, 196, 228, 0.36) !important;
-}
-
-.orca-shell-student .orca-shell-sidebar .text-slate-900 {
-  color: #0f3e61 !important;
-}
-
-.orca-shell-student .orca-shell-sidebar .text-slate-700 {
-  color: #1f5f88 !important;
-}
-
-.orca-shell-student .orca-shell-sidebar .text-slate-600,
-.orca-shell-student .orca-shell-sidebar .text-slate-500 {
-  color: #4684aa !important;
+    radial-gradient(circle at 20% 14%, rgba(112, 219, 240, 0.32), transparent 34%),
+    radial-gradient(circle at 80% 82%, rgba(200, 169, 110, 0.12), transparent 28%),
+    linear-gradient(185deg, rgba(230, 248, 255, 0.98), rgba(197, 238, 255, 0.94)) !important;
+  border-right-color: rgba(109, 196, 228, 0.4) !important;
 }
 
 .orca-shell-student .orca-shell-sidebar .hover\:bg-slate-100:hover {
@@ -148,15 +173,17 @@ body.orca-theme.orca-role-student {
 
 .orca-shell-student .orca-shell-header {
   background:
-    linear-gradient(180deg, rgba(242, 254, 255, 0.93), rgba(222, 248, 255, 0.88)) !important;
-  border-bottom-color: rgba(126, 212, 239, 0.38) !important;
+    linear-gradient(180deg, rgba(240, 253, 255, 0.96), rgba(218, 246, 255, 0.9)) !important;
+  border-bottom-color: rgba(126, 212, 239, 0.44) !important;
+  box-shadow: 0 1px 0 rgba(200, 169, 110, 0.1) !important;
 }
 
 .orca-shell-student .orca-shell-main {
   background:
     radial-gradient(circle at 15% 10%, rgba(90, 206, 235, 0.22), transparent 26%),
-    radial-gradient(circle at 88% 6%, rgba(137, 226, 242, 0.24), transparent 32%),
-    linear-gradient(180deg, #effbff 0%, #daf4ff 100%) !important;
+    radial-gradient(circle at 88% 6%, rgba(137, 226, 242, 0.2), transparent 32%),
+    radial-gradient(circle at 50% 95%, rgba(200, 169, 110, 0.07), transparent 30%),
+    linear-gradient(180deg, #edfbff 0%, #d5f2ff 100%) !important;
 }
 
 .orca-theme h1,
@@ -575,4 +602,203 @@ body.orca-theme.orca-role-student .skill-map-action-card::after {
   .skill-map-preview {
     min-height: 380px;
   }
+}
+
+/* ── Sandy accent decorators ─────────────────────────────────────────────── */
+
+/* A subtle sandy top-border stripe to distinguish role views */
+.orca-shell-student .orca-shell-sidebar::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, var(--orca-sand-light), var(--orca-sand), var(--orca-sand-light), transparent);
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.orca-shell-parent .orca-shell-sidebar::after,
+.orca-shell-admin .orca-shell-sidebar::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, rgba(200, 169, 110, 0.5), rgba(200, 169, 110, 0.8), rgba(200, 169, 110, 0.5), transparent);
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* Sandy divider rule used between sections */
+.orca-sand-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--orca-sand-border), transparent);
+  margin: 0.25rem 0;
+}
+
+/* Warm sandy glow card — for highlighted sections */
+.orca-sand-glow-card {
+  background:
+    linear-gradient(145deg, rgba(245, 237, 216, 0.7), rgba(232, 213, 168, 0.35));
+  border: 1px solid var(--orca-sand-border);
+  box-shadow: 0 2px 12px rgba(200, 169, 110, 0.12);
+}
+
+/* Sand-kissed hero variant — landing page or welcome panels */
+.orca-sand-hero {
+  background:
+    radial-gradient(circle at 85% 15%, rgba(200, 169, 110, 0.12), transparent 38%),
+    radial-gradient(circle at 10% 85%, rgba(200, 169, 110, 0.08), transparent 30%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.97), rgba(245, 250, 255, 0.96)) !important;
+}
+
+/* Sandy pulsing dot for "active now" indicators */
+.orca-sand-pulse {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--orca-sand);
+  box-shadow: 0 0 0 2px var(--orca-sand-pale);
+  animation: orca-sand-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes orca-sand-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px var(--orca-sand-pale); }
+  50% { box-shadow: 0 0 0 5px rgba(200, 169, 110, 0.15); }
+}
+
+/* Role identity badge shown in sidebar footer */
+.orca-role-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.orca-role-badge-parent {
+  background: rgba(200, 169, 110, 0.2);
+  border: 1px solid rgba(200, 169, 110, 0.38);
+  color: #7a5c2e;
+}
+
+.orca-role-badge-student {
+  background: rgba(56, 189, 224, 0.16);
+  border: 1px solid rgba(56, 189, 224, 0.32);
+  color: #1a6285;
+}
+
+.orca-role-badge-admin {
+  background: rgba(200, 169, 110, 0.2);
+  border: 1px solid rgba(200, 169, 110, 0.38);
+  color: #7a5c2e;
+}
+
+/* Page section accent bar — sandy line above section headers */
+.orca-section-accent {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.orca-section-accent::before {
+  content: "";
+  display: block;
+  width: 3px;
+  height: 1.1em;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--orca-sand), var(--orca-sand-light));
+  flex-shrink: 0;
+}
+
+/* Skeleton / shimmer loading placeholder */
+.orca-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(200, 169, 110, 0.06) 0%,
+    rgba(200, 169, 110, 0.14) 50%,
+    rgba(200, 169, 110, 0.06) 100%
+  );
+  background-size: 200% 100%;
+  animation: orca-shimmer 1.8s ease-in-out infinite;
+}
+
+@keyframes orca-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* ── Sidebar text overrides (must come after global .orca-theme rules) ────── */
+/* These need to be declared last so they win the !important cascade          */
+
+.orca-shell-parent .orca-shell-sidebar .text-slate-900,
+.orca-shell-admin .orca-shell-sidebar .text-slate-900 {
+  color: #eff8ff !important;
+}
+
+.orca-shell-parent .orca-shell-sidebar .text-slate-700,
+.orca-shell-admin .orca-shell-sidebar .text-slate-700 {
+  color: #c8e6fb !important;
+}
+
+.orca-shell-parent .orca-shell-sidebar .text-slate-600,
+.orca-shell-admin .orca-shell-sidebar .text-slate-600,
+.orca-shell-parent .orca-shell-sidebar .text-slate-500,
+.orca-shell-admin .orca-shell-sidebar .text-slate-500 {
+  color: #9fc8e4 !important;
+}
+
+.orca-shell-parent .orca-shell-sidebar .text-cyan-700,
+.orca-shell-parent .orca-shell-sidebar .text-cyan-900,
+.orca-shell-admin .orca-shell-sidebar .text-cyan-700,
+.orca-shell-admin .orca-shell-sidebar .text-cyan-900 {
+  color: #a8d8f5 !important;
+}
+
+.orca-shell-parent .orca-shell-sidebar .text-slate-400,
+.orca-shell-admin .orca-shell-sidebar .text-slate-400 {
+  color: #7baed0 !important;
+}
+
+/* Icon chip inside dark parent sidebar */
+.orca-shell-parent .orca-shell-sidebar .orca-icon-chip,
+.orca-shell-admin .orca-shell-sidebar .orca-icon-chip {
+  background: rgba(255, 255, 255, 0.14) !important;
+  border-color: rgba(255, 255, 255, 0.22) !important;
+  color: #ddf0ff !important;
+}
+
+/* Role badge inside dark parent sidebar */
+.orca-shell-parent .orca-shell-sidebar .orca-role-badge-parent,
+.orca-shell-admin .orca-shell-sidebar .orca-role-badge-admin {
+  background: rgba(200, 169, 110, 0.22) !important;
+  border-color: rgba(200, 169, 110, 0.45) !important;
+  color: #f0d89a !important;
+}
+
+.orca-shell-student .orca-shell-sidebar .text-slate-900 {
+  color: #0f3e61 !important;
+}
+
+.orca-shell-student .orca-shell-sidebar .text-slate-700 {
+  color: #1f5f88 !important;
+}
+
+.orca-shell-student .orca-shell-sidebar .text-slate-600,
+.orca-shell-student .orca-shell-sidebar .text-slate-500,
+.orca-shell-student .orca-shell-sidebar .text-slate-400 {
+  color: #4684aa !important;
+}
+
+.orca-shell-student .orca-shell-sidebar .text-cyan-700,
+.orca-shell-student .orca-shell-sidebar .text-cyan-900 {
+  color: #1a6080 !important;
 }

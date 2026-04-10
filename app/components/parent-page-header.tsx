@@ -16,7 +16,14 @@ export function ParentPageHeader({
 }: ParentPageHeaderProps) {
   return (
     <section className="orca-hero orca-wave rounded-[28px] border border-slate-200 bg-white/90 p-6 shadow-sm sm:p-7">
-      <p className="text-xs uppercase tracking-[0.24em] text-cyan-700">{eyebrow}</p>
+      {/* Sandy accent bar across top */}
+      <div className="orca-sand-bar mb-4" aria-hidden="true" />
+
+      <div className="flex items-center gap-2">
+        <p className="text-xs uppercase tracking-[0.24em] text-cyan-700">{eyebrow}</p>
+        <span className="orca-sand-dot" aria-hidden="true" />
+      </div>
+
       <div className="mt-3 flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-3">

@@ -295,7 +295,7 @@ export function AppShell({
       <div className="relative mx-auto flex min-h-screen w-full max-w-[1400px] overflow-x-clip">
         {/* Sidebar */}
         <aside
-          className={`orca-shell-sidebar fixed inset-y-0 left-0 z-40 w-72 border-r border-slate-200 bg-white/90 p-5 shadow-xl backdrop-blur transition-transform md:static md:translate-x-0 md:shadow-none ${
+          className={`orca-shell-sidebar relative flex flex-col fixed inset-y-0 left-0 z-40 w-72 border-r border-slate-200 bg-white/90 p-5 shadow-xl backdrop-blur transition-transform md:static md:translate-x-0 md:shadow-none ${
             sidebarOpen ? "translate-x-0" : "-translate-x-full"
           }`}
         >
@@ -308,6 +308,20 @@ export function AppShell({
               <h1 className="text-2xl font-semibold text-slate-900">ProOrca</h1>
             </div>
             <p className="mt-2 text-sm text-slate-600">Edge-native homeschool command center</p>
+            <div className="mt-3">
+              <span
+                className={
+                  activeRole === "student"
+                    ? "orca-role-badge orca-role-badge-student"
+                    : activeRole === "admin"
+                    ? "orca-role-badge orca-role-badge-admin"
+                    : "orca-role-badge orca-role-badge-parent"
+                }
+              >
+                {activeRole === "student" ? "🎓" : activeRole === "admin" ? "🛠️" : "🏠"}
+                {" "}{activeRole === "student" ? "Student View" : activeRole === "admin" ? "Admin View" : "Parent View"}
+              </span>
+            </div>
           </div>
 
           <nav className="space-y-1">
@@ -432,6 +446,16 @@ export function AppShell({
               </Link>
             ) : null}
           </nav>
+
+          {/* Sandy accent footer divider */}
+          <div className="mt-auto pt-6">
+            <div className="orca-sand-divider" />
+            <p className="mt-3 text-[0.65rem] text-slate-500 opacity-70">
+              {isStudentSession
+                ? "Focus, learn, grow 🌊"
+                : "Plan · Track · Teach 🐋"}
+            </p>
+          </div>
         </aside>
 
         {sidebarOpen ? (
@@ -443,7 +467,12 @@ export function AppShell({
         ) : null}
 
         <div className="flex min-w-0 w-full flex-1 flex-col md:ml-0">
-          <header className="orca-shell-header sticky top-0 z-20 border-b border-slate-200 bg-white/85 px-4 py-3 backdrop-blur md:px-8">
+          <header className="orca-shell-header relative sticky top-0 z-20 border-b border-slate-200 bg-white/85 px-4 py-3 backdrop-blur md:px-8">
+            {/* Sandy role accent line */}
+            <div
+              className="orca-sand-bar absolute inset-x-0 top-0"
+              aria-hidden="true"
+            />
             <div className="flex flex-wrap items-center gap-3">
               <button
                 className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 md:hidden"

@@ -122,9 +122,12 @@ export function ParentDashboard({
       <section className="skill-map-panel rounded-[2rem] p-6">
         <div className="grid gap-6 xl:grid-cols-[minmax(320px,380px)_minmax(0,1fr)]">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-cyan-700">
-              Home Map
-            </p>
+            <div className="orca-section-accent">
+              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-cyan-700">
+                Home Map
+              </p>
+              <span className="orca-sand-chip">Quick launch</span>
+            </div>
             <h2 className="skill-map-display mt-3 text-3xl font-semibold text-slate-900">
               Parent quick actions, laid out like a route board
             </h2>
@@ -166,7 +169,10 @@ export function ParentDashboard({
               to="/curriculum-builder"
               className="group mt-4 block rounded-[1.6rem] border border-cyan-200 bg-gradient-to-r from-cyan-50/90 via-white to-sky-50/90 p-5 transition hover:shadow-sm"
             >
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-700">AI Curriculum Builder</p>
+              <div className="flex items-center gap-2">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-700">AI Curriculum Builder</p>
+                <span className="orca-sand-dot" aria-hidden="true" />
+              </div>
               <h3 className="mt-2 flex items-center gap-2 text-lg font-semibold text-slate-900">
                 <span aria-hidden="true">✦</span>
                 Build a full curriculum in minutes
@@ -174,27 +180,34 @@ export function ParentDashboard({
               <p className="mt-2 text-sm text-slate-600">
                 Generate course structures, skill maps, and learning paths with one guided flow.
               </p>
-              <p className="mt-3 text-sm font-medium text-cyan-900">Launch Builder →</p>
+              <div className="mt-3 flex items-center gap-2">
+                <p className="text-sm font-medium text-cyan-900">Launch Builder →</p>
+              </div>
             </Link>
           </div>
         </div>
       </section>
 
       <section className="skill-map-panel orca-wave rounded-[2rem] p-6">
+        <div className="orca-sand-bar mb-5" aria-hidden="true" />
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <p className="text-xs uppercase tracking-[0.2em] text-cyan-700">Parent View</p>
-            <h2 className="mt-2 text-xl font-semibold text-slate-900">
+            <div className="orca-section-accent">
+              <p className="text-xs uppercase tracking-[0.2em] text-cyan-700">Parent View</p>
+            </div>
+            <h2 className="text-xl font-semibold text-slate-900">
               Student Progress Overview
             </h2>
             <p className="mt-2 text-sm text-slate-600">
               Choose a student to view completion metrics for each assigned class.
             </p>
           </div>
-          <span className="rounded-full bg-cyan-50 px-3 py-1 text-xs font-medium text-cyan-700">
-            {parentStudents.length}{" "}
-            {parentStudents.length === 1 ? "student" : "students"}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="orca-sand-chip">
+              {parentStudents.length}{" "}
+              {parentStudents.length === 1 ? "student" : "students"}
+            </span>
+          </div>
         </div>
 
         {parentStudents.length === 0 ? (
@@ -286,8 +299,11 @@ export function ParentDashboard({
                       </div>
                       <div className="mt-2 h-2 w-full rounded-full bg-slate-200">
                         <div
-                          className="h-2 rounded-full bg-cyan-500"
-                          style={{ width: `${metric.completionPercent}%` }}
+                          className="h-2 rounded-full"
+                          style={{
+                            width: `${metric.completionPercent}%`,
+                            background: "linear-gradient(90deg, var(--orca-sea), var(--orca-sand))",
+                          }}
                         />
                       </div>
                       <div className="mt-3 grid gap-2 text-sm text-slate-600 sm:grid-cols-3">

@@ -130,7 +130,7 @@ export function NodeLayer({
               fill={fillColor}
               fillOpacity={shapeOpacity}
               stroke={nodeColor}
-              strokeWidth={isDragging || isSelected ? 4 : 3}
+              strokeWidth={isDragging || isSelected ? 2.5 : 1.8}
               strokeDasharray={isOptional ? "5 4" : undefined}
             />
           );
@@ -141,7 +141,7 @@ export function NodeLayer({
               fill={fillColor}
               fillOpacity={shapeOpacity}
               stroke={nodeColor}
-              strokeWidth={isDragging || isSelected ? 4 : 3}
+              strokeWidth={isDragging || isSelected ? 2.5 : 1.8}
               strokeDasharray={isOptional ? "5 4" : undefined}
             />
           );
@@ -154,7 +154,7 @@ export function NodeLayer({
               fill={fillColor}
               fillOpacity={shapeOpacity}
               stroke={nodeColor}
-              strokeWidth={isDragging || isSelected ? 3 : 2}
+              strokeWidth={isDragging || isSelected ? 2 : 1.4}
               strokeDasharray={isOptional ? "4 3" : undefined}
             />
           );
@@ -202,11 +202,11 @@ export function NodeLayer({
           <circle
             cx={cx}
             cy={cy}
-            r={r + 6}
+            r={r + 4}
             fill="none"
             stroke={nodeColor}
-            strokeWidth={1.5}
-            opacity={0.4}
+            strokeWidth={1}
+            opacity={0.35}
             style={{ animation: "pulse-ring 2s ease-out infinite" }}
           />
         ) : null;
@@ -216,10 +216,10 @@ export function NodeLayer({
           <circle
             cx={cx}
             cy={cy}
-            r={r + 8}
+            r={r + 5}
             fill="none"
             stroke="#0e7490"
-            strokeWidth={2.5}
+            strokeWidth={1.5}
             opacity={0.7}
           />
         ) : null;
@@ -227,12 +227,12 @@ export function NodeLayer({
         const roleHaloColor = isEndNode ? "#2a77af" : "#67b9df";
         const roleHalo = isStartNode || isEndNode ? (
           <polygon
-            points={starPoints(cx, cy, r + 16, r + 8)}
+            points={starPoints(cx, cy, r + 9, r + 4)}
             fill={roleHaloColor}
-            fillOpacity={isLocked ? 0.12 : 0.16}
+            fillOpacity={isLocked ? 0.08 : 0.11}
             stroke={roleHaloColor}
-            strokeWidth={1.5}
-            opacity={0.95}
+            strokeWidth={1}
+            opacity={0.9}
           />
         ) : null;
 
@@ -348,11 +348,11 @@ export function NodeLayer({
         // Chapter (milestone) nodes get a distinctive outer accent ring to mark them as entry points
         const chapterRing = node.nodeType === "milestone" && !isSelected && !isConnectSource ? (
           <polygon
-            points={hexagonPoints(cx, cy, r + 8)}
+            points={hexagonPoints(cx, cy, r + 5)}
             fill="none"
             stroke={nodeColor}
-            strokeWidth={1.5}
-            opacity={isLocked ? 0.15 : 0.35}
+            strokeWidth={0.9}
+            opacity={isLocked ? 0.1 : 0.25}
             strokeDasharray="4 3"
           />
         ) : null;
@@ -361,19 +361,19 @@ export function NodeLayer({
         const forkRing = isForkNode ? (
           <>
             <polygon
-              points={diamondPoints(cx, cy, r + 12)}
+              points={diamondPoints(cx, cy, r + 7)}
               fill="none"
               stroke="#ef9f27"
-              strokeWidth={2}
-              opacity={0.4}
+              strokeWidth={1}
+              opacity={0.35}
               strokeDasharray="5 4"
             />
             <polygon
-              points={diamondPoints(cx, cy, r + 8)}
+              points={diamondPoints(cx, cy, r + 4)}
               fill="none"
               stroke="#ef9f27"
-              strokeWidth={1.5}
-              opacity={0.75}
+              strokeWidth={0.9}
+              opacity={0.6}
               strokeDasharray="5 3"
             />
           </>
@@ -464,7 +464,7 @@ export function NodeLayer({
             {/* Title label */}
             <text
               x={cx}
-              y={cy + r + (isEndNode ? 26 : 14)}
+              y={cy + r + (isEndNode ? 24 : 12)}
               fontSize={isOptional ? 10 : 11}
               textAnchor="middle"
               fill={labelFill}
@@ -478,7 +478,7 @@ export function NodeLayer({
             {node.xpReward > 0 && !isLocked ? (
               <text
                 x={cx}
-                y={cy + r + (isEndNode ? 39 : 27)}
+                y={cy + r + (isEndNode ? 36 : 24)}
                 fontSize={isOptional ? 9 : 10}
                 textAnchor="middle"
                 fill="#888780"

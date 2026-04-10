@@ -1022,10 +1022,10 @@ export function layoutForceDirected(
 
   const W         = options?.width  ?? 1800;
   const H         = options?.height ?? 1400;
-  const NODE_SEP  = Math.max(options?.minNodeDistance ?? 130, 130); // horizontal gap between same-layer nodes
-  const RANK_SEP  = 150;  // vertical gap between layers (spine)
-  const BRANCH_SEP = 110; // tighter vertical gap within branch subtrees
-  const FORK_EXTRA = 40;  // extra Y gap before fork decision points
+  const NODE_SEP  = Math.max(options?.minNodeDistance ?? 160, 160); // horizontal gap between same-layer nodes
+  const RANK_SEP  = 190;  // vertical gap between layers (spine)
+  const BRANCH_SEP = 140; // tighter vertical gap within branch subtrees
+  const FORK_EXTRA = 50;  // extra Y gap before fork decision points
   const PAD_X     = 100;
   const PAD_Y     = 100;
   const CENTER_X  = W / 2;

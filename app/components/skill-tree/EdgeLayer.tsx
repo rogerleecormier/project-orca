@@ -16,26 +16,26 @@ export const RAMP_COLORS: Record<string, string> = {
 // Edge type visual config
 const EDGE_STYLE = {
   required: {
-    strokeWidth: 2.4,
-    opacity: 0.86,
+    strokeWidth: 1.6,
+    opacity: 0.78,
     dasharray: undefined as string | undefined,
     colorOverride: undefined as string | undefined,
   },
   optional: {
-    strokeWidth: 1.5,
-    opacity: 0.72,
+    strokeWidth: 1.1,
+    opacity: 0.6,
     dasharray: "8 6",
     colorOverride: undefined as string | undefined,
   },
   bonus: {
-    strokeWidth: 1.2,
-    opacity: 0.56,
+    strokeWidth: 0.9,
+    opacity: 0.48,
     dasharray: "4 5",
     colorOverride: undefined as string | undefined,
   },
   fork: {
-    strokeWidth: 2.1,
-    opacity: 0.8,
+    strokeWidth: 1.5,
+    opacity: 0.72,
     dasharray: "10 5",
     colorOverride: "#ef9f27",
   },
