@@ -18,6 +18,8 @@ import {
   seedDemoPhase7,
   updateMarkingPeriod,
   updateParentSettings,
+  updateSchoolWeekDays,
+  updateTimezone,
   DEMO_SEED_PREVIEW,
   RICH_DEMO_SEED_PREVIEW,
 } from "../server/functions";
@@ -423,6 +425,18 @@ function SettingsPage() {
   const [profileError, setProfileError] = useState<string | null>(null);
   const [profileSuccess, setProfileSuccess] = useState<string | null>(null);
 
+  const [schoolWeekDays, setSchoolWeekDays] = useState<4 | 5 | 6 | 7>(data.schoolWeekDays ?? 5);
+  const [weekDaysSaving, setWeekDaysSaving] = useState(false);
+  const [weekDaysSuccess, setWeekDaysSuccess] = useState<string | null>(null);
+  const [weekDaysError, setWeekDaysError] = useState<string | null>(null);
+
+  const [timezone, setTimezone] = useState<string>(
+    data.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+  );
+  const [timezoneSaving, setTimezoneSaving] = useState(false);
+  const [timezoneSuccess, setTimezoneSuccess] = useState<string | null>(null);
+  const [timezoneError, setTimezoneError] = useState<string | null>(null);
+
   const [currentPin, setCurrentPin] = useState("");
   const [newPin, setNewPin] = useState("");
   const [confirmPin, setConfirmPin] = useState("");
@@ -460,6 +474,40 @@ function SettingsPage() {
       }
     } finally {
       setProfileSaving(false);
+    }
+  };
+
+  const saveSchoolWeekDays = async (days: 4 | 5 | 6 | 7) => {
+    setWeekDaysSaving(true);
+    setWeekDaysError(null);
+    setWeekDaysSuccess(null);
+    try {
+      await updateSchoolWeekDays({ data: { schoolWeekDays: days } });
+      setSchoolWeekDays(days);
+      setWeekDaysSuccess("School week updated.");
+      setTimeout(() => setWeekDaysSuccess(null), 2500);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setWeekDaysError(`Could not update school week setting. (${msg})`);
+    } finally {
+      setWeekDaysSaving(false);
+    }
+  };
+
+  const saveTimezone = async (tz: string) => {
+    setTimezoneSaving(true);
+    setTimezoneError(null);
+    setTimezoneSuccess(null);
+    try {
+      await updateTimezone({ data: { timezone: tz } });
+      setTimezone(tz);
+      setTimezoneSuccess("Timezone updated.");
+      setTimeout(() => setTimezoneSuccess(null), 2500);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setTimezoneError(`Could not update timezone. (${msg})`);
+    } finally {
+      setTimezoneSaving(false);
     }
   };
 
@@ -582,6 +630,117 @@ function SettingsPage() {
             {pinSaving ? "Updating..." : "Update Parent PIN"}
           </button>
         </article>
+      </section>
+
+      {/* School Week Settings */}
+      <section className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+        <h2 className="text-xl font-semibold text-slate-900">School Week</h2>
+        <p className="mt-2 text-sm text-slate-600">
+          Choose how many days per week your student attends school. The weekly planner and AI schedule generator will use this setting to distribute assignments.
+        </p>
+        <div className="mt-5 grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {([4, 5, 6, 7] as const).map((days) => {
+            const labels: Record<number, string> = {
+              4: "4 Days",
+              5: "5 Days",
+              6: "6 Days",
+              7: "7 Days",
+            };
+            const descs: Record<number, string> = {
+              4: "Mon – Thu",
+              5: "Mon – Fri",
+              6: "Mon – Sat",
+              7: "Mon – Sun",
+            };
+            const isSelected = schoolWeekDays === days;
+            return (
+              <button
+                key={days}
+                type="button"
+                disabled={weekDaysSaving}
+                onClick={() => void saveSchoolWeekDays(days)}
+                className={`flex flex-col items-center rounded-2xl border-2 px-4 py-4 transition ${
+                  isSelected
+                    ? "border-cyan-500 bg-cyan-50 text-cyan-800"
+                    : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
+                } disabled:opacity-60`}
+              >
+                <span className="text-2xl font-bold">{days}</span>
+                <span className="text-sm font-medium mt-0.5">{labels[days]}</span>
+                <span className="text-xs text-slate-500 mt-0.5">{descs[days]}</span>
+                {isSelected && (
+                  <span className="mt-2 rounded-full bg-cyan-600 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">
+                    Active
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+        {weekDaysSaving && (
+          <p className="mt-3 text-xs text-slate-500">Saving…</p>
+        )}
+        {weekDaysSuccess && (
+          <p className="mt-3 text-xs font-medium text-emerald-600">{weekDaysSuccess}</p>
+        )}
+        {weekDaysError && (
+          <p className="mt-3 text-xs font-medium text-rose-600">{weekDaysError}</p>
+        )}
+      </section>
+
+      {/* Timezone Settings */}
+      <section className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+        <h2 className="text-xl font-semibold text-slate-900">Timezone</h2>
+        <p className="mt-2 text-sm text-slate-600">
+          Set your local timezone so the weekly planner shows the correct dates. Your browser's timezone has been pre-filled.
+        </p>
+        <div className="mt-5 flex flex-col sm:flex-row gap-3 items-start sm:items-end">
+          <div className="flex-1">
+            <label className="block text-sm font-medium text-slate-700 mb-1">Timezone</label>
+            <select
+              value={timezone}
+              disabled={timezoneSaving}
+              onChange={(e) => setTimezone(e.target.value)}
+              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800 focus:border-cyan-400 focus:outline-none"
+            >
+              {[
+                "America/New_York",
+                "America/Chicago",
+                "America/Denver",
+                "America/Phoenix",
+                "America/Los_Angeles",
+                "America/Anchorage",
+                "Pacific/Honolulu",
+                "America/Puerto_Rico",
+                "Europe/London",
+                "Europe/Paris",
+                "Europe/Berlin",
+                "Europe/Helsinki",
+                "Asia/Dubai",
+                "Asia/Kolkata",
+                "Asia/Bangkok",
+                "Asia/Shanghai",
+                "Asia/Tokyo",
+                "Australia/Sydney",
+                "Pacific/Auckland",
+              ].map((tz) => (
+                <option key={tz} value={tz}>
+                  {tz.replace(/_/g, " ")}
+                </option>
+              ))}
+            </select>
+          </div>
+          <button
+            type="button"
+            disabled={timezoneSaving}
+            onClick={() => void saveTimezone(timezone)}
+            className="rounded-xl bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700 disabled:opacity-50"
+          >
+            {timezoneSaving ? "Saving…" : "Save Timezone"}
+          </button>
+        </div>
+        {timezoneSuccess && <p className="mt-3 text-xs font-medium text-emerald-600">{timezoneSuccess}</p>}
+        {timezoneError && <p className="mt-3 text-xs font-medium text-rose-600">{timezoneError}</p>}
       </section>
 
       <MarkingPeriodsCard initialPeriods={data.markingPeriods} />

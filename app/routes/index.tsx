@@ -52,9 +52,9 @@ function IndexRoute() {
 
 const FEATURES = [
   {
-    title: "AI Lesson Planner",
+    title: "AI Curriculum Builder",
     description:
-      "Chat with an AI assistant to plan lessons, generate assignment ideas, and build a full week of curriculum in minutes—tailored to each student's grade and subject.",
+      "Launch a full multi-course curriculum or a single course flow, then let AI generate the spine, branches, layout, and assignments in the background.",
     accentClass: "border-cyan-200 bg-cyan-50/80 text-cyan-900",
     iconClass: "bg-cyan-100 text-cyan-700",
     icon: (
@@ -76,9 +76,9 @@ const FEATURES = [
     ),
   },
   {
-    title: "Skill Maps",
+    title: "Skill Maps + Builder Mode",
     description:
-      "Visualize your curriculum as an RPG-style skill tree. Students unlock skills, earn XP, and progress through mastery levels—making learning feel like an adventure.",
+      "Build node-based learning paths with lesson, milestone, boss, branch, and elective nodes. Parents can auto-layout, AI-expand, and auto-populate content per node.",
     accentClass: "border-violet-200 bg-violet-50/80 text-violet-900",
     iconClass: "bg-violet-100 text-violet-700",
     icon: (
@@ -96,9 +96,9 @@ const FEATURES = [
     ),
   },
   {
-    title: "AI Quiz & Assignment Generation",
+    title: "Assignment Studio",
     description:
-      "Generate quizzes, essay prompts, and full assignment sets from any topic or YouTube video—with AI grading and per-student feedback built in.",
+      "Create text, file, URL, video, quiz, essay, report, and movie assignments. Generate linked quizzes from readings or saved video transcripts when available.",
     accentClass: "border-emerald-200 bg-emerald-50/80 text-emerald-900",
     iconClass: "bg-emerald-100 text-emerald-700",
     icon: (
@@ -123,7 +123,7 @@ const FEATURES = [
   {
     title: "Week Planner",
     description:
-      "Drag and drop assignments onto a weekly calendar. Plan ahead and keep every student's schedule organized with a visual overview of the whole week.",
+      "Schedule with drag-and-drop across a 4–7 day week. Pull from recommended skill-map assignments or the pending pool, then save or auto-generate a full week plan.",
     accentClass: "border-sky-200 bg-sky-50/80 text-sky-900",
     iconClass: "bg-sky-100 text-sky-700",
     icon: (
@@ -139,9 +139,9 @@ const FEATURES = [
     ),
   },
   {
-    title: "Gradebook & Progress Tracking",
+    title: "Gradebook + Release Flow",
     description:
-      "Review submissions, score work with AI assistance, and track completion and average scores across every class—all in one place.",
+      "Filter and sort submissions, export CSV, auto-score quizzes, use AI scoring for written work, and release graded results back to students.",
     accentClass: "border-amber-200 bg-amber-50/80 text-amber-900",
     iconClass: "bg-amber-100 text-amber-700",
     icon: (
@@ -159,7 +159,7 @@ const FEATURES = [
   {
     title: "Reward Tracks",
     description:
-      "Set up battle-pass style reward milestones for each student. As they earn XP on Skill Maps, reward tiers unlock automatically — from small treats to big experiences.",
+      "Track XP snapshots from skill-map progress and auto-unlock claimable tiers. Students claim rewards, parents deliver them, and pending claims stay visible in-app.",
     accentClass: "border-amber-200 bg-amber-50/80 text-amber-900",
     iconClass: "bg-amber-100 text-amber-700",
     icon: (
@@ -182,9 +182,9 @@ const FEATURES = [
     ),
   },
   {
-    title: "Home Pod — Multi-Family Support",
+    title: "Home Pod + Role Switching",
     description:
-      "Run a co-op or learning pod? Home Pod lets multiple parent accounts collaborate under one organization, each managing their own students.",
+      "Support multi-family organizations with parent admin controls, plus quick parent/student workspace switching with profile selection and PIN confirmation.",
     accentClass: "border-rose-200 bg-rose-50/80 text-rose-900",
     iconClass: "bg-rose-100 text-rose-700",
     icon: (
@@ -199,32 +199,74 @@ const FEATURES = [
       </svg>
     ),
   },
+  {
+    title: "Student Workspace",
+    description:
+      "Give students a focused dashboard with assignments, submission flow, today’s plan, skill-map progress, and reward-track claiming in one place.",
+    accentClass: "border-indigo-200 bg-indigo-50/80 text-indigo-900",
+    iconClass: "bg-indigo-100 text-indigo-700",
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" className="h-6 w-6" aria-hidden="true">
+        <path
+          d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7 8a7 7 0 0 1 14 0"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    ),
+  },
+  {
+    title: "Templates",
+    description:
+      "Save strong assignment setups as templates and quickly reuse them across classes to keep planning consistent and fast.",
+    accentClass: "border-slate-200 bg-slate-50/80 text-slate-900",
+    iconClass: "bg-slate-200 text-slate-700",
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" className="h-6 w-6" aria-hidden="true">
+        <path
+          d="M4 5a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5Z"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M8 11h8M8 14h5"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+        />
+      </svg>
+    ),
+  },
 ] as const;
 
 const HOW_IT_WORKS = [
   {
     step: "1",
-    title: "Set up your school",
+    title: "Create your workspace",
     description:
-      "Create your account, add students, and build classes for each subject. Takes minutes.",
+      "Set up students, classes, school year settings, timezone, and weekly school-day count.",
   },
   {
     step: "2",
-    title: "Plan with AI",
+    title: "Generate curriculum and assignments",
     description:
-      "Chat with the AI lesson planner to generate assignments, quizzes, and full skill trees tailored to each student.",
+      "Use AI builder and assignment tools to create course structures, skill maps, and linked learning activities.",
   },
   {
     step: "3",
-    title: "Students learn, level up, and earn rewards",
+    title: "Schedule and run the week",
     description:
-      "Students complete assignments, unlock skill nodes, and earn XP. As milestones are hit, reward tiers unlock automatically—with celebration animations and a claim flow built in.",
+      "Drag assignments into the planner or auto-generate a week, then track daily progress in student view.",
   },
   {
     step: "4",
-    title: "Track and grade effortlessly",
+    title: "Grade, release, and reward",
     description:
-      "The gradebook aggregates submissions, and AI grading gives you scored feedback without the manual work.",
+      "Review submissions, publish results, and let XP progress unlock reward-track tiers students can claim.",
   },
 ] as const;
 
@@ -260,6 +302,23 @@ function HeaderLoginPanel() {
       setOpen(false);
     } catch {
       setError("Invalid username or password.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const submitDemo = async () => {
+    setError(null);
+    setLoading(true);
+    try {
+      await loginAsParent({ data: { username: "demo", password: "demo1234" } });
+      const options = await getStudentSelectionOptions();
+      setProfiles(options.profiles);
+      setRoleModalError(null);
+      setRoleModalOpen(true);
+      setOpen(false);
+    } catch {
+      setError("Demo account not available. Seed it from Settings → Content Controls.");
     } finally {
       setLoading(false);
     }
@@ -337,7 +396,7 @@ function HeaderLoginPanel() {
         onClick={() => setOpen((v) => !v)}
         className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 transition"
       >
-        Sign In
+        Sign In / Demo
       </button>
 
       {open ? (
@@ -385,15 +444,16 @@ function HeaderLoginPanel() {
             >
               {loading ? "Signing in…" : "Sign In"}
             </button>
-            <p className="mt-3 text-xs text-slate-600">
-              No account?{" "}
-              <Link
-                to="/register"
-                className="font-medium text-cyan-700 hover:underline"
-                onClick={() => setOpen(false)}
-              >
-                Create one
-              </Link>
+            <button
+              type="button"
+              onClick={() => void submitDemo()}
+              disabled={loading}
+              className="mt-2 w-full rounded-xl border border-cyan-300 bg-cyan-50 px-4 py-2 text-sm font-medium text-cyan-700 hover:bg-cyan-100 disabled:opacity-60 transition"
+            >
+              Try Demo Account
+            </button>
+            <p className="mt-1 text-center text-xs text-slate-500">
+              Demo parent PIN: <strong>1234</strong>
             </p>
             {error ? (
               <p className="mt-2 text-xs font-medium text-rose-700">{error}</p>
@@ -442,12 +502,6 @@ function LandingHeader() {
 
         {/* Actions */}
         <div className="flex items-center gap-3">
-          <Link
-            to="/register"
-            className="hidden rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition sm:block"
-          >
-            Get Started
-          </Link>
           <HeaderLoginPanel />
         </div>
       </div>
@@ -483,10 +537,10 @@ function HeroSection() {
         </p>
         <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
           <Link
-            to="/register"
-            className="rounded-xl bg-slate-900 px-6 py-3 text-sm font-semibold text-white hover:bg-slate-800 transition shadow-sm"
+            to="/login"
+            className="rounded-xl border border-cyan-300 bg-cyan-50 px-6 py-3 text-sm font-semibold text-cyan-700 hover:bg-cyan-100 transition shadow-sm"
           >
-            Start for Free
+            Try Demo Account
           </Link>
           <Link
             to="/login"
@@ -495,6 +549,7 @@ function HeroSection() {
             Sign In
           </Link>
         </div>
+        <p className="mt-2 text-xs text-slate-500">Demo parent PIN: <strong>1234</strong></p>
       </div>
     </section>
   );
@@ -504,25 +559,24 @@ function AiSpotlightSection() {
   return (
     <section className="mx-auto max-w-6xl px-4 py-20 sm:px-6">
       <div className="grid gap-12 lg:grid-cols-2 lg:gap-16 lg:items-center">
-        {/* Text */}
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.25em] text-cyan-700">
-            AI-Powered Planning
+            AI Workspace
           </p>
           <h2 className="mt-3 text-3xl font-bold tracking-tight text-slate-900">
-            Your personal curriculum co-pilot
+            Builder, planner chat, and assignment generation in one flow
           </h2>
           <p className="mt-4 text-slate-600 leading-relaxed">
-            ProOrca's AI lesson planner works like a conversation. Describe what you want to cover,
-            your student's grade level, and the subject—and get back a ready-to-use assignment,
-            quiz, or full week of lessons.
+            ProOrca supports both guided curriculum generation and chat-driven planning. Start from
+            grade, subject, duration, and preferences, then generate structure and assignments that
+            are ready to schedule.
           </p>
           <ul className="mt-6 space-y-3">
             {[
-              "Chat-based lesson planning tailored to each student",
-              "One-click quiz generation from any topic or YouTube video",
-              "AI grading with per-student strengths and feedback",
-              "Full curriculum skeleton generation for Skill Maps",
+              "Full curriculum mode and single-course mode",
+              "Assignment recipe controls (videos, quizzes, essays, reports)",
+              "Chat suggestions can jump directly into Assignments",
+              "Quiz generation from readings and saved video transcript context",
             ].map((item) => (
               <li key={item} className="flex items-start gap-3 text-sm text-slate-700">
                 <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-cyan-100 text-cyan-700">
@@ -542,15 +596,14 @@ function AiSpotlightSection() {
           </ul>
         </div>
 
-        {/* Visual mock */}
         <div className="rounded-2xl border border-slate-200 bg-white/90 p-5 shadow-sm">
           <div className="flex items-center gap-2 border-b border-slate-100 pb-3 mb-4">
             <span className="orca-icon-chip" aria-hidden="true">
               <OrcaMark className="h-5 w-5" alt="" />
             </span>
-            <p className="text-sm font-semibold text-slate-900">AI Lesson Planner</p>
+            <p className="text-sm font-semibold text-slate-900">Lesson Planner Chat</p>
             <span className="ml-auto rounded-full bg-cyan-50 px-2 py-0.5 text-xs font-medium text-cyan-700">
-              Live
+              Suggestion Ready
             </span>
           </div>
           <div className="space-y-3">
@@ -559,7 +612,7 @@ function AiSpotlightSection() {
                 P
               </div>
               <div className="rounded-2xl rounded-tl-none bg-slate-100 px-4 py-2.5 text-sm text-slate-700 max-w-[85%]">
-                Create a 3rd grade science lesson on the water cycle with a short quiz at the end.
+                Suggest a grade 6 history assignment and include one quiz checkpoint.
               </div>
             </div>
             <div className="flex gap-3 flex-row-reverse">
@@ -567,17 +620,19 @@ function AiSpotlightSection() {
                 <OrcaMark className="h-4 w-4" alt="" />
               </span>
               <div className="rounded-2xl rounded-tr-none border border-cyan-200 bg-cyan-50/80 px-4 py-2.5 text-sm text-cyan-900 max-w-[85%]">
-                <p className="font-medium">The Water Cycle — Grade 3</p>
+                <p className="font-medium">ASSIGNMENT_SUGGESTION</p>
                 <p className="mt-1 text-xs text-cyan-700">
-                  Covers evaporation, condensation, and precipitation. Includes a 5-question
-                  multiple-choice quiz with answer keys.
+                  title="Check for Understanding: Ancient Trade Networks"
+                </p>
+                <p className="mt-1 text-xs text-cyan-700">
+                  type=quiz description="Complete a short 5-question checkpoint."
                 </p>
                 <button
                   className="mt-2 rounded-lg bg-slate-900 px-3 py-1 text-xs font-medium text-white opacity-80"
                   tabIndex={-1}
                   aria-hidden="true"
                 >
-                  + Create Assignment
+                  + Add to Assignments
                 </button>
               </div>
             </div>
@@ -589,69 +644,88 @@ function AiSpotlightSection() {
 }
 
 function SkillTreeSpotlightSection() {
+  const statusFill: Record<string, string> = {
+    locked: "#d3d1c7",
+    available: "#378add",
+    in_progress: "#7f77dd",
+    complete: "#1d9e75",
+    mastery: "#ef9f27",
+  };
+
   const nodes = [
-    { label: "Intro to Fractions", x: "50%", y: "10%", status: "mastery" },
-    { label: "Equivalent Fractions", x: "25%", y: "38%", status: "complete" },
-    { label: "Comparing Fractions", x: "72%", y: "38%", status: "in_progress" },
-    { label: "Adding Fractions", x: "12%", y: "68%", status: "available" },
-    { label: "Mixed Numbers", x: "44%", y: "68%", status: "locked" },
-    { label: "Boss: Fraction Challenge", x: "72%", y: "82%", status: "locked" },
+    { id: "n1", label: "Climate Zones", type: "lesson", status: "mastery", x: 170, y: 70, r: 18, icon: "C", xp: 120 },
+    { id: "n2", label: "Atmosphere", type: "milestone", status: "complete", x: 90, y: 138, r: 24, icon: "A", xp: 220 },
+    { id: "n3", label: "Ocean Currents", type: "branch", status: "in_progress", x: 258, y: 140, r: 18, icon: "O", xp: 160 },
+    { id: "n4", label: "Storm Lab", type: "elective", status: "available", x: 54, y: 226, r: 14, icon: "S", xp: 140 },
+    { id: "n5", label: "Forecast Models", type: "lesson", status: "locked", x: 170, y: 228, r: 18, icon: "F", xp: 180 },
+    { id: "n6", label: "Climate Systems", type: "boss", status: "locked", x: 262, y: 268, r: 24, icon: "★", xp: 420 },
   ] as const;
 
-  const statusStyles: Record<string, string> = {
-    mastery: "border-amber-400 bg-amber-50 text-amber-900",
-    complete: "border-emerald-400 bg-emerald-50 text-emerald-900",
-    in_progress: "border-cyan-400 bg-cyan-50 text-cyan-900",
-    available: "border-slate-400 bg-white text-slate-700",
-    locked: "border-slate-200 bg-slate-50 text-slate-400",
-  };
-
-  const statusDot: Record<string, string> = {
-    mastery: "bg-amber-400",
-    complete: "bg-emerald-400",
-    in_progress: "bg-cyan-400",
-    available: "bg-slate-400",
-    locked: "bg-slate-200",
-  };
+  const edgeStyle = {
+    required: { stroke: "#378add", width: 3.5, dash: undefined },
+    optional: { stroke: "#7f77dd", width: 2, dash: "9 5" },
+    bonus: { stroke: "#d3d1c7", width: 1.5, dash: "4 5" },
+  } as const;
 
   return (
     <section className="border-y border-slate-200 bg-slate-50/70 py-20">
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
         <div className="grid gap-12 lg:grid-cols-2 lg:gap-16 lg:items-center">
-          {/* Visual mock */}
           <div className="order-2 lg:order-1">
-            <div className="relative h-72 rounded-2xl border border-slate-200 bg-white/90 shadow-sm overflow-hidden">
-              {/* SVG edges */}
-              <svg className="absolute inset-0 h-full w-full" aria-hidden="true">
-                <line x1="50%" y1="18%" x2="25%" y2="34%" stroke="#cbd5e1" strokeWidth="1.5" strokeDasharray="4 3" />
-                <line x1="50%" y1="18%" x2="72%" y2="34%" stroke="#67e8f9" strokeWidth="1.5" />
-                <line x1="25%" y1="46%" x2="12%" y2="64%" stroke="#d1d5db" strokeWidth="1.5" strokeDasharray="4 3" />
-                <line x1="72%" y1="46%" x2="44%" y2="64%" stroke="#d1d5db" strokeWidth="1.5" strokeDasharray="4 3" />
-                <line x1="72%" y1="46%" x2="72%" y2="78%" stroke="#d1d5db" strokeWidth="1.5" strokeDasharray="4 3" />
+            <div className="relative rounded-2xl border border-slate-200 bg-white/90 p-3 shadow-sm overflow-hidden">
+              <div className="absolute left-3 top-3 rounded-lg border border-slate-200 bg-white/95 px-2 py-1 text-[10px] text-slate-600">
+                Builder Mode · E edit · C connect · N new node
+              </div>
+              <svg viewBox="0 0 320 320" className="mt-6 h-[300px] w-full" aria-hidden="true">
+                <line x1="170" y1="70" x2="90" y2="138" stroke={edgeStyle.required.stroke} strokeWidth={edgeStyle.required.width} />
+                <line x1="170" y1="70" x2="258" y2="140" stroke={edgeStyle.optional.stroke} strokeWidth={edgeStyle.optional.width} strokeDasharray={edgeStyle.optional.dash} />
+                <line x1="90" y1="138" x2="54" y2="226" stroke={edgeStyle.bonus.stroke} strokeWidth={edgeStyle.bonus.width} strokeDasharray={edgeStyle.bonus.dash} />
+                <line x1="258" y1="140" x2="170" y2="228" stroke={edgeStyle.bonus.stroke} strokeWidth={edgeStyle.bonus.width} strokeDasharray={edgeStyle.bonus.dash} />
+                <line x1="258" y1="140" x2="262" y2="268" stroke={edgeStyle.bonus.stroke} strokeWidth={edgeStyle.bonus.width} strokeDasharray={edgeStyle.bonus.dash} />
+
+                {nodes.map((node) => {
+                  if (node.type === "milestone") {
+                    const points = "90,112 112,125 112,151 90,164 68,151 68,125";
+                    return (
+                      <g key={node.id}>
+                        <polygon points={points} fill={statusFill[node.status]} stroke="#378add" strokeWidth="3" />
+                        <path d="M81 139 L88 146 L100 131" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" />
+                        <text x="90" y="179" textAnchor="middle" className="fill-slate-600 text-[10px]">{node.label} · {node.xp} XP</text>
+                      </g>
+                    );
+                  }
+                  if (node.type === "boss") {
+                    const points = "262,244 286,268 262,292 238,268";
+                    return (
+                      <g key={node.id}>
+                        <polygon points={points} fill={statusFill[node.status]} stroke="#378add" strokeWidth="3" fillOpacity="0.35" />
+                        <text x="262" y="268" textAnchor="middle" dominantBaseline="central" className="fill-white text-[14px]">★</text>
+                        <text x="262" y="304" textAnchor="middle" className="fill-slate-600 text-[10px]">{node.label} · {node.xp} XP</text>
+                      </g>
+                    );
+                  }
+                  return (
+                    <g key={node.id}>
+                      <circle cx={node.x} cy={node.y} r={node.r + (node.status === "available" ? 6 : 0)} fill="none" stroke="#378add" strokeWidth="1.5" opacity={node.status === "available" ? "0.4" : "0"} />
+                      <circle cx={node.x} cy={node.y} r={node.r} fill={statusFill[node.status]} fillOpacity={node.status === "locked" ? "0.35" : "1"} stroke="#378add" strokeWidth={node.status === "mastery" ? "3" : "2"} />
+                      {node.status === "mastery" || node.status === "complete" ? (
+                        <path d={`M ${node.x - 6} ${node.y} L ${node.x - 2} ${node.y + 5} L ${node.x + 8} ${node.y - 6}`} fill="none" stroke="white" strokeWidth="2.4" strokeLinecap="round" />
+                      ) : (
+                        <text x={node.x} y={node.y} textAnchor="middle" dominantBaseline="central" className="fill-white text-[11px] font-semibold">{node.icon}</text>
+                      )}
+                      <text x={node.x} y={node.y + node.r + 16} textAnchor="middle" className="fill-slate-600 text-[10px]">{node.label} · {node.xp} XP</text>
+                    </g>
+                  );
+                })}
               </svg>
 
-              {nodes.map((node) => (
-                <div
-                  key={node.label}
-                  className={`absolute -translate-x-1/2 -translate-y-1/2 rounded-xl border px-2.5 py-1.5 text-xs font-medium shadow-sm whitespace-nowrap ${statusStyles[node.status]}`}
-                  style={{ left: node.x, top: node.y }}
-                >
-                  <span
-                    className={`mr-1.5 inline-block h-1.5 w-1.5 rounded-full ${statusDot[node.status]}`}
-                    aria-hidden="true"
-                  />
-                  {node.label}
-                </div>
-              ))}
-
-              {/* Legend */}
-              <div className="absolute bottom-3 right-3 flex flex-col gap-1 rounded-xl border border-slate-200 bg-white/90 p-2 text-xs">
+              <div className="absolute bottom-3 right-3 flex flex-col gap-1 rounded-xl border border-slate-200 bg-white/90 p-2 text-xs shadow-sm">
                 {[
                   { label: "Mastery", dot: "bg-amber-400" },
                   { label: "Complete", dot: "bg-emerald-400" },
-                  { label: "In Progress", dot: "bg-cyan-400" },
-                  { label: "Available", dot: "bg-slate-400" },
-                  { label: "Locked", dot: "bg-slate-200" },
+                  { label: "In Progress", dot: "bg-violet-500" },
+                  { label: "Available", dot: "bg-blue-500" },
+                  { label: "Locked", dot: "bg-stone-400" },
                 ].map((item) => (
                   <div key={item.label} className="flex items-center gap-1.5 text-slate-600">
                     <span className={`h-2 w-2 rounded-full ${item.dot}`} aria-hidden="true" />
@@ -659,28 +733,28 @@ function SkillTreeSpotlightSection() {
                   </div>
                 ))}
               </div>
+
             </div>
           </div>
 
-          {/* Text */}
           <div className="order-1 lg:order-2">
             <p className="text-xs font-semibold uppercase tracking-[0.25em] text-violet-700">
               Skill Maps
             </p>
             <h2 className="mt-3 text-3xl font-bold tracking-tight text-slate-900">
-              Curriculum as an adventure map
+              Visual progression with builder controls and student-state tracking
             </h2>
             <p className="mt-4 text-slate-600 leading-relaxed">
-              Skill Maps turn your curriculum into a visual, node-based progression tree. Students
-              unlock skills in sequence, earn XP for each completed node, and can see exactly
-              where they are in their learning journey.
+              Parent view and student view share the same map with role-specific tools. Parents can
+              edit structure, connect dependencies, and link assignments. Students see progress
+              state changes and XP-driven momentum.
             </p>
             <ul className="mt-6 space-y-3">
               {[
-                "Node types: lesson, milestone, boss challenge, elective, and branch",
-                "AI generates a full curriculum skeleton in one click",
-                "Each node links to real assignments — not just checkboxes",
-                "Students see locked → available → in progress → mastery",
+                "Statuses: locked, available, in progress, complete, mastery",
+                "Node types: lesson, milestone, boss, branch, elective",
+                "Zoom controls, minimap, viewport save, and keyboard shortcuts",
+                "Node completion unlocks downstream paths and updates XP",
               ].map((item) => (
                 <li key={item} className="flex items-start gap-3 text-sm text-slate-700">
                   <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-violet-100 text-violet-700">
@@ -705,55 +779,33 @@ function SkillTreeSpotlightSection() {
   );
 }
 
-function RewardTrackSpotlightSection() {
-  const tiers = [
-    { icon: "🍦", label: "Ice Cream Trip", xp: 500, status: "delivered" },
-    { icon: "🎮", label: "Game Night", xp: 1000, status: "claimed" },
-    { icon: "🎨", label: "Art Supplies", xp: 1500, status: "unlocked" },
-    { icon: "🏕️", label: "Camping Trip", xp: 2500, status: "locked" },
-    { icon: "🌎", label: "Big Adventure", xp: 5000, status: "locked" },
-  ] as const;
-
-  const cardStyle: Record<string, React.CSSProperties> = {
-    delivered: { background: "linear-gradient(135deg, #fbbf24, #d97706)", border: "2px solid #f59e0b" },
-    claimed: { background: "#ede9fe", border: "2px solid #a78bfa" },
-    unlocked: { background: "#fff", border: "2px solid #22d3ee" },
-    locked: { background: "#f8fafc", border: "1.5px solid #e2e8f0" },
-  };
-
-  const labelColor: Record<string, string> = {
-    delivered: "text-white",
-    claimed: "text-violet-800",
-    unlocked: "text-slate-800",
-    locked: "text-slate-400",
-  };
+function PlannerSpotlightSection() {
+  const days = ["Mon", "Tue", "Wed", "Thu", "Fri"] as const;
 
   return (
     <section className="mx-auto max-w-6xl px-4 py-20 sm:px-6">
       <div className="grid gap-12 lg:grid-cols-2 lg:gap-16 lg:items-center">
-        {/* Text */}
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.25em] text-amber-600">
-            Reward Tracks
+          <p className="text-xs font-semibold uppercase tracking-[0.25em] text-sky-700">
+            Week Planner
           </p>
           <h2 className="mt-3 text-3xl font-bold tracking-tight text-slate-900">
-            Real-world rewards for real learning
+            Drag, auto-plan, and save a realistic school week
           </h2>
           <p className="mt-4 text-slate-600 leading-relaxed">
-            Set up a battle-pass style reward track for each student. As they earn XP by completing
-            Skill Map nodes, milestone tiers unlock automatically — from a small treat to a big
-            family experience. Students see their progress in real time and claim rewards with
-            a single tap.
+            The planner combines recommended assignments from active skill-map nodes with the full
+            pending assignment pool. Place items manually with drag-and-drop, or generate a week
+            automatically and then tweak before saving.
           </p>
           <ul className="mt-6 space-y-3">
             {[
-              "10 customizable tiers per track — treats, activities, screen time, experiences",
-              "AI suggests tier ideas based on student name and grade level",
-              "Unlock celebrations with confetti animations when a tier is reached",
-              "Parent confirms delivery — full claim history for every student",
+              "Supports 4, 5, 6, or 7-day school weeks from settings",
+              "Profile-specific schedule with timezone-aware week range",
+              "Recommended panel + all pending pool in the same workspace",
+              "Save current layout or regenerate a full plan with AI",
             ].map((item) => (
               <li key={item} className="flex items-start gap-3 text-sm text-slate-700">
-                <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-700">
+                <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sky-700">
                   <svg viewBox="0 0 16 16" fill="none" className="h-3 w-3" aria-hidden="true">
                     <path
                       d="M3 8l3.5 3.5L13 4"
@@ -770,75 +822,197 @@ function RewardTrackSpotlightSection() {
           </ul>
         </div>
 
-        {/* Visual mock */}
-        <div className="rounded-2xl border border-violet-200 bg-gradient-to-br from-violet-50 to-amber-50 p-4 shadow-sm sm:p-5">
-          {/* Header */}
-          <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm sm:p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
             <div className="flex min-w-0 items-center gap-2">
-              <span aria-hidden="true">🏆</span>
-              <p className="truncate text-sm font-semibold text-slate-800">Emma's Reward Track</p>
+              <span aria-hidden="true">🗓️</span>
+              <p className="truncate text-sm font-semibold text-slate-800">Week Planner · Grade 6</p>
             </div>
-            <span className="shrink-0 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-xs font-semibold text-amber-700">
-              ⭐ 1,580 XP
+            <span className="shrink-0 rounded-full border border-cyan-200 bg-cyan-50 px-2.5 py-0.5 text-xs font-semibold text-cyan-700">
+              5-day week
             </span>
           </div>
 
-          {/* Progress bar */}
-          <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-slate-200">
-            <div
-              className="h-full rounded-full transition-all"
-              style={{ width: "31%", background: "linear-gradient(90deg, #a78bfa, #fbbf24)" }}
-            />
-          </div>
-
-          {/* Tier row */}
-          <div className="mt-4 flex max-w-full gap-2 overflow-x-auto pb-1 snap-x snap-mandatory">
-            {tiers.map((tier, i) => (
-              <div key={tier.label} className="flex shrink-0 snap-start items-center gap-2">
+          <div className="mt-3 space-y-3">
+            <div className="grid grid-cols-5 gap-1.5">
+              {days.map((day, i) => (
                 <div
-                  className="flex flex-col items-center justify-center rounded-xl p-2 text-center"
-                  style={{ width: 64, height: 82, ...cardStyle[tier.status] }}
+                  key={day}
+                  className={`flex min-h-[116px] flex-col rounded-xl border p-2 ${i === 2 ? "border-cyan-300 bg-cyan-50/30" : "border-slate-200 bg-white/80"}`}
                 >
-                  <span style={{ fontSize: 26, opacity: tier.status === "locked" ? 0.35 : 1 }}>
-                    {tier.icon}
-                  </span>
-                  <p
-                    className={`mt-1 w-full text-center leading-tight ${labelColor[tier.status]}`}
-                    style={{ fontSize: 9, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}
-                  >
-                    {tier.label}
-                  </p>
-                  {tier.status === "delivered" && (
-                    <p className="mt-0.5 text-white" style={{ fontSize: 8 }}>✓ Got it!</p>
-                  )}
-                  {tier.status === "claimed" && (
-                    <p className="mt-0.5 text-violet-600" style={{ fontSize: 8 }}>Waiting…</p>
-                  )}
-                  {tier.status === "unlocked" && (
-                    <span
-                      className="mt-1 rounded-full bg-cyan-500 px-1.5 text-white"
-                      style={{ fontSize: 8, fontWeight: 600 }}
-                    >
-                      Claim!
-                    </span>
-                  )}
-                  {tier.status === "locked" && (
-                    <p className="mt-0.5 text-slate-400" style={{ fontSize: 8 }}>
-                      {tier.xp.toLocaleString()} XP
-                    </p>
-                  )}
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-1">
+                    <p className={`text-[10px] font-semibold uppercase tracking-wide ${i === 2 ? "text-cyan-700" : "text-slate-500"}`}>{day}</p>
+                    {i === 2 ? (
+                      <span className="rounded-full bg-cyan-600 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-white">
+                        Today
+                      </span>
+                    ) : null}
+                  </div>
+                  {i === 0 ? (
+                    <div className="mt-1.5 rounded-md border border-slate-200 bg-slate-50 px-1.5 py-1 text-[10px] text-slate-700">
+                      Reading
+                    </div>
+                  ) : null}
+                  {i === 2 ? (
+                    <div className="mt-1.5 rounded-md border border-rose-200 bg-rose-50 px-1.5 py-1 text-[10px] text-rose-900">
+                      Quiz
+                    </div>
+                  ) : null}
+                  {i === 4 ? (
+                    <div className="mt-1.5 rounded-md border border-violet-200 bg-violet-50 px-1.5 py-1 text-[10px] text-violet-900">
+                      Essay
+                    </div>
+                  ) : null}
+                  {i === 1 || i === 3 ? (
+                    <p className="mt-2 text-[11px] text-slate-400 italic">Drop here</p>
+                  ) : null}
                 </div>
-                {i < tiers.length - 1 ? (
-                  <span className="shrink-0 text-slate-300" style={{ fontSize: 11 }}>→</span>
-                ) : null}
+              ))}
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white/90 shadow-sm overflow-hidden">
+              <div className="px-3 py-2 border-b border-slate-100 flex items-center gap-2">
+                <span className="h-2 w-2 rounded-full bg-cyan-500 animate-pulse" />
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">In Progress</span>
+                <span className="text-slate-300 text-xs">·</span>
+                <p className="text-xs font-semibold text-slate-800 truncate">Earth Science</p>
+                <span className="text-[10px] text-slate-400 ml-auto">Lesson</span>
               </div>
-            ))}
+              <div className="px-3 py-1.5 bg-slate-50/60 border-b border-slate-100">
+                <p className="text-[10px] text-slate-400 uppercase tracking-wide font-medium">Node</p>
+                <p className="text-xs font-semibold text-slate-600 truncate">Atmosphere Systems</p>
+              </div>
+              <div className="p-2 grid gap-2 sm:grid-cols-3">
+                <div className="group rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-left text-rose-800">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide opacity-60">Quiz</p>
+                  <p className="mt-0.5 text-xs font-medium leading-tight">Atmospheric Pressure Check</p>
+                  <p className="mt-0.5 text-[10px] opacity-50 truncate">Earth Science</p>
+                </div>
+                <div className="group rounded-xl border border-cyan-200 bg-cyan-50 px-3 py-2 text-left text-cyan-800">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide opacity-60">Video</p>
+                  <p className="mt-0.5 text-xs font-medium leading-tight">Jet Stream Demonstration</p>
+                  <p className="mt-0.5 text-[10px] opacity-50 truncate">Earth Science</p>
+                </div>
+                <div className="group rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-left text-violet-800">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide opacity-60">Essay</p>
+                  <p className="mt-0.5 text-xs font-medium leading-tight">Explain Global Wind Belts</p>
+                  <p className="mt-0.5 text-[10px] opacity-50 truncate">Earth Science</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-white/90 px-3 py-2">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">All Assignments Pool</p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <span className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] text-slate-700">Reading · Air Masses</span>
+                <span className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] text-slate-700">Quiz · Wind Patterns</span>
+                <span className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] text-slate-700">Report · Local Climate</span>
+              </div>
+            </div>
           </div>
 
-          {/* Summary */}
-          <p className="mt-2 text-xs text-slate-500">
-            1,580 / 5,000 XP · 2/5 rewards
+          <p className="mt-3 text-xs text-slate-500">
+            Recommended and pool items can both be dragged into calendar slots before save.
           </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ProgressSpotlightSection() {
+  const tiers = [
+    { icon: "🍦", label: "Tier 1", status: "delivered" },
+    { icon: "🎮", label: "Tier 2", status: "claimed" },
+    { icon: "🎨", label: "Tier 3", status: "unlocked" },
+    { icon: "🏕️", label: "Tier 4", status: "locked" },
+  ] as const;
+
+  const tierStyle: Record<string, string> = {
+    delivered: "border-amber-500 text-white",
+    claimed: "border-violet-400 bg-violet-100 text-violet-900",
+    unlocked: "border-cyan-400 bg-white text-slate-800",
+    locked: "border-slate-200 bg-slate-100/80 text-slate-400",
+  };
+
+  return (
+    <section className="border-y border-slate-200 bg-slate-50/70 py-20">
+      <div className="mx-auto max-w-6xl px-4 sm:px-6">
+        <div className="grid gap-12 lg:grid-cols-2 lg:gap-16 lg:items-center">
+          <div className="order-2 lg:order-1 space-y-4">
+            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Gradebook</p>
+              <div className="mt-2 overflow-hidden rounded-lg border border-slate-200">
+                <div className="grid grid-cols-[1.2fr_.9fr_.8fr_.8fr] bg-slate-50 px-2 py-1.5 text-[10px] font-semibold text-slate-500">
+                  <span>Student</span><span>Assignment</span><span>Score</span><span>Status</span>
+                </div>
+                <div className="grid grid-cols-[1.2fr_.9fr_.8fr_.8fr] px-2 py-1.5 text-[10px] text-slate-700">
+                  <span>Maya</span><span>Atmosphere Quiz</span><span><span className="inline-block rounded px-1.5 py-0.5 bg-emerald-50 text-emerald-800 font-semibold">92/100</span></span><span>released</span>
+                </div>
+                <div className="grid grid-cols-[1.2fr_.9fr_.8fr_.8fr] border-t border-slate-100 px-2 py-1.5 text-[10px] text-slate-700">
+                  <span>Leo</span><span>Wind Belt Essay</span><span><span className="inline-block rounded px-1.5 py-0.5 bg-amber-50 text-amber-800 font-semibold">Needs grade</span></span><span>submitted</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-violet-200/60 bg-gradient-to-br from-slate-900 via-violet-950 to-indigo-950 p-4 shadow-sm">
+              <p className="text-xs font-semibold uppercase tracking-wide text-violet-400">Reward Track</p>
+              <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-800">
+                <div className="h-full w-[38%] rounded-full bg-gradient-to-r from-cyan-500 to-violet-500" />
+              </div>
+              <div className="mt-1 text-[10px] text-violet-200">1,580 / 5,000 XP</div>
+              <div className="mt-3 flex gap-2">
+                {tiers.map((tier) => (
+                  <div
+                    key={tier.label}
+                    className={`w-16 rounded-lg border px-1 py-1.5 text-center text-[10px] ${tierStyle[tier.status]} ${tier.status === "delivered" ? "bg-gradient-to-br from-amber-400 to-amber-600" : ""}`}
+                  >
+                    <div className="text-base leading-none">{tier.icon}</div>
+                    <div className="mt-1">{tier.label}</div>
+                    {tier.status === "claimed" ? <div className="mt-0.5 text-[9px] text-violet-700">Pending…</div> : null}
+                    {tier.status === "unlocked" ? <div className="mt-0.5 text-[9px] text-cyan-600">Claim!</div> : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="order-1 lg:order-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.25em] text-amber-600">
+              Outcomes
+            </p>
+            <h2 className="mt-3 text-3xl font-bold tracking-tight text-slate-900">
+              Grade, release, and reward without leaving the platform
+            </h2>
+            <p className="mt-4 text-slate-600 leading-relaxed">
+              Quiz submissions can be auto-scored instantly, written responses can be scored with
+              AI assistance, and parents control when graded work is released to students. XP then
+              drives reward-track unlocks and claim/delivery workflows.
+            </p>
+            <ul className="mt-6 space-y-3">
+              {[
+                "Gradebook filters, sorting, and CSV export",
+                "AI scoring for written submissions with strengths and improvements",
+                "Student claim flow + parent delivery confirmation",
+                "Pending reward badges surfaced in parent navigation",
+              ].map((item) => (
+                <li key={item} className="flex items-start gap-3 text-sm text-slate-700">
+                  <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-700">
+                    <svg viewBox="0 0 16 16" fill="none" className="h-3 w-3" aria-hidden="true">
+                      <path
+                        d="M3 8l3.5 3.5L13 4"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </span>
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </div>
         </div>
       </div>
     </section>
@@ -922,10 +1096,10 @@ function CtaSection() {
         </p>
         <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
           <Link
-            to="/register"
-            className="rounded-xl bg-slate-900 px-6 py-3 text-sm font-semibold text-white hover:bg-slate-800 transition shadow-sm"
+            to="/login"
+            className="rounded-xl border border-cyan-300 bg-cyan-50 px-6 py-3 text-sm font-semibold text-cyan-700 hover:bg-cyan-100 transition shadow-sm"
           >
-            Create Free Account
+            Try Demo Account
           </Link>
           <Link
             to="/login"
@@ -934,6 +1108,7 @@ function CtaSection() {
             Sign In
           </Link>
         </div>
+        <p className="mt-2 text-xs text-slate-500">Demo parent PIN: <strong>1234</strong></p>
       </div>
     </section>
   );
@@ -965,7 +1140,8 @@ function LandingPage() {
         <HeroSection />
         <AiSpotlightSection />
         <SkillTreeSpotlightSection />
-        <RewardTrackSpotlightSection />
+        <PlannerSpotlightSection />
+        <ProgressSpotlightSection />
         <FeaturesGrid />
         <HowItWorksSection />
         <CtaSection />

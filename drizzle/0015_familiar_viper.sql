@@ -1,0 +1,1 @@
+ALTER TABLE `organizations` ADD `school_week_days` integer DEFAULT 5 NOT NULL;

@@ -25,11 +25,27 @@ export type ModalAssignment = {
   classId?: string | null;
 };
 
+type AssignmentClassOption = {
+  id: string;
+  title: string;
+};
+
+type AssignmentLessonOption = {
+  id: string;
+  classId: string;
+  title: string;
+  nodeType: string;
+  treeTitle: string | null;
+};
+
 type Mode = "view" | "quick-edit" | "edit";
 
 type Props = {
   assignment: ModalAssignment;
   allAssignments?: ModalAssignment[];
+  classOptions?: AssignmentClassOption[];
+  lessonOptions?: AssignmentLessonOption[];
+  initialNodeId?: string | null;
   /** If false, Edit buttons are hidden and the modal is always read-only */
   canEdit?: boolean;
   onClose: () => void;
@@ -234,6 +250,9 @@ function AssignmentContentView({ assignment, allAssignments }: { assignment: Mod
 export function AssignmentModal({
   assignment: initialAssignment,
   allAssignments = [],
+  classOptions = [],
+  lessonOptions = [],
+  initialNodeId = null,
   canEdit = true,
   onClose,
   onSaved,
@@ -249,6 +268,8 @@ export function AssignmentModal({
   const [description, setDescription] = useState(assignment.description ?? "");
   const [contentRef, setContentRef] = useState(assignment.contentRef ?? "");
   const [linkedAssignmentId, setLinkedAssignmentId] = useState(assignment.linkedAssignmentId ?? "");
+  const [classId, setClassId] = useState(assignment.classId ?? classOptions[0]?.id ?? "");
+  const [linkedNodeId, setLinkedNodeId] = useState(initialNodeId ?? "");
   const parsedDue = parseDueAt(assignment.dueAt);
   const [dueDate, setDueDate] = useState(parsedDue.dueDate);
   const [dueTime, setDueTime] = useState(parsedDue.dueTime);
@@ -297,6 +318,8 @@ export function AssignmentModal({
       await updateAssignmentRecord({
         data: {
           assignmentId: assignment.id,
+          classId: classOptions.length > 0 ? (classId || undefined) : undefined,
+          nodeId: lessonOptions.length > 0 ? (linkedNodeId || null) : undefined,
           title: title.trim(),
           description: description.trim() || undefined,
           contentRef: buildContentRef(),
@@ -310,6 +333,7 @@ export function AssignmentModal({
         description: description.trim() || null,
         contentRef: buildContentRef() ?? null,
         linkedAssignmentId: linkedAssignmentId || null,
+        classId: classId || assignment.classId || null,
         dueAt,
       };
       setAssignment(updated);
@@ -482,11 +506,15 @@ export function AssignmentModal({
               moviePlatforms={moviePlatforms}
               movieCustomPlatform={movieCustomPlatform}
               linkedAssignmentId={linkedAssignmentId}
+              classId={classId}
+              linkedNodeId={linkedNodeId}
               dueDate={dueDate}
               dueTime={dueTime}
               includeTime={includeTime}
               saving={saving}
               allAssignments={allAssignments}
+              classOptions={classOptions}
+              lessonOptions={lessonOptions}
               onContentRefChange={setContentRef}
               onQuizTitleChange={setQuizTitle}
               onQuizQuestionsChange={setQuizQuestions}
@@ -496,6 +524,16 @@ export function AssignmentModal({
               onMoviePlatformsChange={setMoviePlatforms}
               onMovieCustomPlatformChange={setMovieCustomPlatform}
               onLinkedAssignmentChange={setLinkedAssignmentId}
+              onClassIdChange={(nextClassId) => {
+                setClassId(nextClassId);
+                if (
+                  linkedNodeId &&
+                  !lessonOptions.some((lesson) => lesson.classId === nextClassId && lesson.id === linkedNodeId)
+                ) {
+                  setLinkedNodeId("");
+                }
+              }}
+              onLinkedNodeIdChange={setLinkedNodeId}
               onDueDateChange={setDueDate}
               onDueTimeChange={setDueTime}
               onIncludeTimeChange={setIncludeTime}
@@ -555,11 +593,15 @@ function AssignmentFullEditFields({
   moviePlatforms,
   movieCustomPlatform,
   linkedAssignmentId,
+  classId,
+  linkedNodeId,
   dueDate,
   dueTime,
   includeTime,
   saving,
   allAssignments,
+  classOptions,
+  lessonOptions,
   onContentRefChange,
   onQuizTitleChange,
   onQuizQuestionsChange,
@@ -569,6 +611,8 @@ function AssignmentFullEditFields({
   onMoviePlatformsChange,
   onMovieCustomPlatformChange,
   onLinkedAssignmentChange,
+  onClassIdChange,
+  onLinkedNodeIdChange,
   onDueDateChange,
   onDueTimeChange,
   onIncludeTimeChange,
@@ -583,11 +627,15 @@ function AssignmentFullEditFields({
   moviePlatforms: string[];
   movieCustomPlatform: string;
   linkedAssignmentId: string;
+  classId: string;
+  linkedNodeId: string;
   dueDate: string;
   dueTime: string;
   includeTime: boolean;
   saving: boolean;
   allAssignments: ModalAssignment[];
+  classOptions: AssignmentClassOption[];
+  lessonOptions: AssignmentLessonOption[];
   onContentRefChange: (v: string) => void;
   onQuizTitleChange: (v: string) => void;
   onQuizQuestionsChange: (v: QuizQuestion[]) => void;
@@ -597,6 +645,8 @@ function AssignmentFullEditFields({
   onMoviePlatformsChange: (v: string[]) => void;
   onMovieCustomPlatformChange: (v: string) => void;
   onLinkedAssignmentChange: (v: string) => void;
+  onClassIdChange: (v: string) => void;
+  onLinkedNodeIdChange: (v: string) => void;
   onDueDateChange: (v: string) => void;
   onDueTimeChange: (v: string) => void;
   onIncludeTimeChange: (v: boolean) => void;
@@ -604,6 +654,7 @@ function AssignmentFullEditFields({
   const type = assignment.contentType;
   const linkableCandidates = allAssignments.filter(a => a.id !== assignment.id);
   const linkedRecord = allAssignments.find(a => a.id === linkedAssignmentId);
+  const lessonsForClass = lessonOptions.filter((lesson) => lesson.classId === classId);
 
   return (
     <div className="space-y-5">
@@ -718,6 +769,39 @@ function AssignmentFullEditFields({
               })}
             </div>
             <input value={movieCustomPlatform} onChange={e => onMovieCustomPlatformChange(e.target.value)} placeholder="Other platform…" className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm" />
+          </div>
+        </div>
+      ) : null}
+
+      {(classOptions.length > 0 || lessonOptions.length > 0) ? (
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-1">
+            <label className="text-sm font-medium text-slate-700">Class</label>
+            <select
+              value={classId}
+              onChange={e => onClassIdChange(e.target.value)}
+              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+            >
+              {classOptions.map((row) => (
+                <option key={row.id} value={row.id}>{row.title}</option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1">
+            <label className="text-sm font-medium text-slate-700">Linked Lesson</label>
+            <select
+              value={linkedNodeId}
+              onChange={e => onLinkedNodeIdChange(e.target.value)}
+              className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+            >
+              <option value="">- None -</option>
+              {lessonsForClass.map((lesson) => (
+                <option key={lesson.id} value={lesson.id}>
+                  {(lesson.treeTitle ? `${lesson.treeTitle} - ` : "") + `${lesson.title} (${lesson.nodeType})`}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-slate-500">Changing this reassigns the assignment in the skill tree.</p>
           </div>
         </div>
       ) : null}

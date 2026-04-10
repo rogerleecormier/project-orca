@@ -18,15 +18,30 @@ html {
 }
 
 body.orca-theme {
-  background:
-    radial-gradient(circle at 15% 0%, rgba(42, 119, 175, 0.12), transparent 34%),
-    radial-gradient(circle at 90% -5%, rgba(11, 18, 32, 0.08), transparent 36%),
-    linear-gradient(180deg, #f8fbff 0%, #f3f7fc 100%);
+  background: #f6f9fd;
   color: var(--orca-black);
 }
 
 .orca-page-main {
   padding: var(--orca-page-padding-y) var(--orca-page-padding-x);
+}
+
+.orca-page-canvas {
+  background:
+    radial-gradient(circle at 14% -6%, rgba(42, 119, 175, 0.1), transparent 38%),
+    radial-gradient(circle at 88% -8%, rgba(132, 179, 219, 0.14), transparent 42%),
+    linear-gradient(132deg, rgba(255, 255, 255, 0.5) 0%, rgba(255, 255, 255, 0) 48%),
+    linear-gradient(180deg, #fbfdff 0%, #f4f8fd 100%);
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  background-attachment: fixed;
+}
+
+.orca-glass-panel {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.9), rgba(246, 251, 255, 0.84)) !important;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 .orca-auth-page {

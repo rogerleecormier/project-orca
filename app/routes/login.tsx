@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 import { PostLoginRoleModal } from "../components/post-login-role-modal";
 import {
   completePostLoginRoleSelection,
@@ -213,10 +213,8 @@ function LoginPage() {
         >
           Try Demo Account
         </button>
-        <p className="mt-1.5 text-center text-xs text-slate-500">Explore with pre-loaded sample data — no account needed</p>
-
-        <p className="mt-4 text-sm text-slate-600">
-          Don't have an account? <Link className="font-medium text-cyan-700 hover:underline" to="/register">Create One</Link>
+        <p className="mt-1.5 text-center text-xs text-slate-500">
+          Explore with pre-loaded sample data — no account needed. Demo parent PIN: <strong>1234</strong>
         </p>
 
         {error ? <p className="mt-3 text-sm text-rose-700 font-medium">{error}</p> : null}

@@ -240,7 +240,7 @@ function ClassEnginePage() {
   return (
     <div className="space-y-6">
       <ParentPageHeader
-        title="Manage Classes"
+        title="Classes"
         description="Define class spaces by school year before publishing curriculum assignments."
         action={(
           <button
@@ -258,7 +258,7 @@ function ClassEnginePage() {
 
       <div className="space-y-6">
         {/* Class list */}
-        <section className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm orca-glass-panel">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-xl font-semibold text-slate-900">Classes</h2>
 
@@ -285,7 +285,7 @@ function ClassEnginePage() {
               <article
                 id={`class-${row.id}`}
                 key={row.id}
-                className="scroll-mt-24 rounded-2xl border border-slate-200 bg-slate-50/80 p-5"
+                className="scroll-mt-24 rounded-2xl border border-slate-200 bg-white p-5 orca-glass-panel"
               >
                 {editingClassId === row.id ? (
                   <div className="space-y-3">

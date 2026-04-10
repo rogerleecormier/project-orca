@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 type StudentProfileOption = {
   id: string;
@@ -63,17 +64,17 @@ export function PostLoginRoleModal({
     /^\d{4,8}$/.test(studentPin);
   const canContinue = canContinueAsParent || canContinueAsStudent;
 
-  return (
+  const modal = (
     <div
       ref={backdropRef}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/40 p-4 pt-20 backdrop-blur-sm sm:pt-24"
       onClick={(event) => {
         if (event.target === backdropRef.current) {
           onCancel();
         }
       }}
     >
-      <div className="mx-4 w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
         <p className="text-xs uppercase tracking-[0.2em] text-cyan-700">Choose Access</p>
         <h2 className="mt-2 text-xl font-semibold text-slate-900">Parent or Student</h2>
         <p className="mt-2 text-sm text-slate-600">
@@ -188,4 +189,7 @@ export function PostLoginRoleModal({
       </div>
     </div>
   );
+
+  if (typeof document === "undefined") return null;
+  return createPortal(modal, document.body);
 }

@@ -1,0 +1,1 @@
+ALTER TABLE `organizations` ADD `timezone` text DEFAULT 'America/New_York' NOT NULL;

@@ -764,6 +764,19 @@ export type PlannerAssignment = {
   title: string;
   contentType: string;
   classTitle: string;
+  nodeId: string;
+  nodeTitle: string;
+  nodeType: string; // "lesson" | "milestone" | "boss" | "branch" | "elective"
+  nodeStatus: string; // "in_progress" | "available"
+  nodeOrderIndex: number; // assignment's position within the node
+};
+
+export type PlannerSkillContext = {
+  classTitle: string;
+  subject: string | null;
+  nodeTitle: string;
+  nodeStatus: string; // "available" | "in_progress" | "complete" | "mastery"
+  nodeType: string;
 };
 
 export type WeekPlanSlot = {
@@ -772,68 +785,174 @@ export type WeekPlanSlot = {
   orderIndex: number;
 };
 
+const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
 export async function generateWeekPlanWithAI(input: {
   assignments: PlannerAssignment[];
   gradeLevel: string | null;
   weekStartDate: string; // "YYYY-MM-DD" — Monday
+  schoolWeekDays?: number; // 4–7, default 5
+  skillContext?: PlannerSkillContext[];
 }): Promise<WeekPlanSlot[]> {
-  const { assignments, gradeLevel, weekStartDate } = input;
+  const { assignments, gradeLevel, weekStartDate, schoolWeekDays = 5, skillContext = [] } = input;
 
   if (assignments.length === 0) {
     return [];
   }
 
-  // Build weekday ISO dates Mon–Fri
-  const monday = new Date(weekStartDate);
-  const weekDays = Array.from({ length: 5 }, (_, i) => {
-    const d = new Date(monday);
-    d.setDate(monday.getDate() + i);
-    return d.toISOString().slice(0, 10);
-  });
+  const numDays = Math.min(Math.max(schoolWeekDays, 4), 7);
+  const [wy, wm, wd] = weekStartDate.split("-").map(Number) as [number, number, number];
+  const weekDays = Array.from({ length: numDays }, (_, i) =>
+    new Date(Date.UTC(wy, wm - 1, wd + i)).toISOString().slice(0, 10),
+  );
+  const dayRange = weekDays.map((d, i) => `${d} (${DAY_NAMES[i]})`).join(", ");
 
-  const assignmentList = assignments
-    .map((a) => `- id=${a.id} | class=${a.classTitle} | type=${a.contentType} | title=${a.title}`)
-    .join("\n");
+  // ── Group assignments by node, preserving order within each node ─────────────
+  // nodeOrderIndex is the assignment's position within the node (for sequencing).
+  // Nodes are ordered: in_progress first, then available; within status by their
+  // natural order in the input (already sorted by the server).
+
+  type NodeGroup = {
+    nodeId: string;
+    nodeTitle: string;
+    nodeType: string;
+    nodeStatus: string;
+    classTitle: string;
+    assignments: PlannerAssignment[];
+  };
+
+  const nodeMap = new Map<string, NodeGroup>();
+  const nodeOrder: string[] = []; // insertion order = server-sorted priority
+  for (const a of assignments) {
+    if (!nodeMap.has(a.nodeId)) {
+      nodeMap.set(a.nodeId, {
+        nodeId: a.nodeId,
+        nodeTitle: a.nodeTitle,
+        nodeType: a.nodeType,
+        nodeStatus: a.nodeStatus,
+        classTitle: a.classTitle,
+        assignments: [],
+      });
+      nodeOrder.push(a.nodeId);
+    }
+    nodeMap.get(a.nodeId)!.assignments.push(a);
+  }
+  // Sort assignments within each node by nodeOrderIndex
+  for (const g of nodeMap.values()) {
+    g.assignments.sort((a, b) => a.nodeOrderIndex - b.nodeOrderIndex);
+  }
+
+  // Separate lesson nodes from chapter-level nodes (milestone/boss) and reports
+  const lessonNodes: NodeGroup[] = [];
+  const chapterNodes: NodeGroup[] = []; // milestone, boss — their quizzes go after lessons
+  for (const id of nodeOrder) {
+    const g = nodeMap.get(id)!;
+    if (g.nodeType === "milestone" || g.nodeType === "boss") {
+      chapterNodes.push(g);
+    } else {
+      lessonNodes.push(g);
+    }
+  }
+
+  // Cap total nodes sent to AI to keep output token count manageable.
+  // Prefer in_progress lessons first, then available, then chapter nodes.
+  const MAX_LESSON_NODES = numDays; // one lesson node per day is ideal
+  const cappedLessonNodes = lessonNodes.slice(0, MAX_LESSON_NODES);
+  const cappedChapterNodes = chapterNodes.slice(0, Math.max(1, Math.floor(numDays / 3)));
+  const allNodes = [...cappedLessonNodes, ...cappedChapterNodes];
+
+  // Build the flat set of assignments being scheduled (for validation)
+  const assignmentsToSchedule = allNodes.flatMap((g) => g.assignments);
+  if (assignmentsToSchedule.length === 0) return [];
+
+  // ── Build prompt ──────────────────────────────────────────────────────────────
+
+  const totalAssignments = assignmentsToSchedule.length;
+  const targetPerDay = Math.round(totalAssignments / numDays);
+  const minPerDay = Math.max(1, targetPerDay - 1);
+  const maxPerDay = targetPerDay + 1;
+
+  // Format nodes as structured blocks so the AI sees groupings explicitly
+  const nodeBlocks = allNodes
+    .map((g) => {
+      const isChapter = g.nodeType === "milestone" || g.nodeType === "boss";
+      const hint = isChapter
+        ? `[CHAPTER-LEVEL ${g.nodeType.toUpperCase()} — schedule AFTER lesson nodes from this class are placed; quizzes and reports here belong to the chapter as a whole]`
+        : `[LESSON NODE — ALL assignments in this block must go on the SAME day]`;
+      const assignmentLines = g.assignments
+        .map(
+          (a) =>
+            `    - id=${a.id} | type=${a.contentType} | title=${a.title}`,
+        )
+        .join("\n");
+      return `NODE: "${g.nodeTitle}" | class=${g.classTitle} | type=${g.nodeType} | status=${g.nodeStatus}\n${hint}\n${assignmentLines}`;
+    })
+    .join("\n\n");
+
+  const skillContextBlock =
+    skillContext.length > 0
+      ? [
+          "",
+          "Skill map context (use to prioritize sequencing):",
+          ...skillContext.map(
+            (s) =>
+              `- ${s.classTitle}${s.subject ? ` (${s.subject})` : ""}: node "${s.nodeTitle}" [${s.nodeType}] status=${s.nodeStatus}`,
+          ),
+        ].join("\n")
+      : "";
 
   const prompt = [
-    "You are a homeschool week planner. Distribute the following pending assignments across a 5-day school week.",
-    "Rules:",
-    "- Spread work evenly (2–4 items per day ideally).",
-    "- Never put 3+ quizzes or essay_questions on the same day.",
-    "- Alternate subjects across consecutive days where possible.",
-    "- Return ONLY a JSON array — no prose, no markdown.",
-    `- Grade level: ${gradeLevel ?? "unspecified"}`,
-    `- Week: ${weekDays[0]} (Mon) through ${weekDays[4]} (Fri)`,
+    `You are an expert homeschool week planner. Schedule the assignments below across a ${numDays}-day school week.`,
     "",
-    "Each element must have: { \"assignmentId\": \"<id>\", \"scheduledDate\": \"YYYY-MM-DD\", \"orderIndex\": <int> }",
-    "scheduledDate must be one of: " + weekDays.join(", "),
+    "HARD RULES — follow these exactly:",
+    "1. LESSON NODES: Every assignment inside a [LESSON NODE] block MUST be scheduled on the SAME day. Do not split a lesson node across multiple days.",
+    "2. CHAPTER NODES: Assignments in a [CHAPTER-LEVEL] block (milestone/boss) belong to the end of the chapter. Schedule them AFTER the lesson nodes from the same class. Spread chapter-level quizzes and reports across different days if there are multiple.",
+    "3. REPORTS: Schedule each report on the same day as other assignments from the same node when possible. Never put two reports on the same day.",
+    `4. EVEN LOAD: Aim for exactly ${targetPerDay} assignments per day. Acceptable range: ${minPerDay}–${maxPerDay}. Every day must have at least ${minPerDay} assignment(s).`,
+    "5. SUBJECT ROTATION: Alternate which class/subject appears each day. Avoid two consecutive days dominated by the same class.",
+    "6. DATE VALIDITY: scheduledDate MUST be one of the exact dates listed. No other dates are valid.",
     "",
-    "Assignments to schedule:",
-    assignmentList,
+    `Grade level: ${gradeLevel ?? "unspecified"}`,
+    `School week: ${numDays} days — ${dayRange}`,
+    skillContextBlock,
+    "",
+    "Return ONLY a JSON array. No prose, no markdown, no code fences.",
+    `Each element: { "assignmentId": "<id>", "scheduledDate": "YYYY-MM-DD", "orderIndex": <int starting at 0 per day> }`,
+    `Valid dates: ${weekDays.join(", ")}`,
+    "",
+    "=== ASSIGNMENTS (grouped by node) ===",
+    nodeBlocks,
     "",
     "Return ONLY the JSON array.",
   ].join("\n");
+
+  const responseTokens = Math.min(assignmentsToSchedule.length * 80 + 500, 8000);
 
   const result = await env.AI.run(DEFAULT_LLM_MODEL, {
     messages: [
       {
         role: "system",
-        content: "You are a precise scheduling assistant that outputs strict JSON only.",
+        content: "You are a precise scheduling assistant. Output strict JSON only — no prose, no markdown.",
       },
       { role: "user", content: prompt },
     ],
-    max_tokens: 2000,
+    max_tokens: responseTokens,
   });
 
-  const responseText = toModelText(result);
-  const parsed = extractJsonPayload(responseText);
-
-  if (!Array.isArray(parsed)) {
-    throw new Error("AI_PLANNER_PARSE_FAILED");
+  let parsed: unknown;
+  const resultRecord = result as Record<string, unknown>;
+  if (Array.isArray(resultRecord?.response)) {
+    parsed = resultRecord.response;
+  } else {
+    const responseText = toModelText(result);
+    parsed = extractJsonPayload(responseText);
+    if (!Array.isArray(parsed)) {
+      throw new Error(`AI_PLANNER_PARSE_FAILED: ${responseText.slice(0, 300)}`);
+    }
   }
 
   const validDates = new Set(weekDays);
-  const validIds = new Set(assignments.map((a) => a.id));
+  const validIds = new Set(assignmentsToSchedule.map((a) => a.id));
   const slots: WeekPlanSlot[] = [];
 
   for (const item of parsed) {

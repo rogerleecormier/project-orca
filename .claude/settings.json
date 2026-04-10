@@ -36,7 +36,13 @@
       "WebFetch(domain:artificialanalysis.ai)",
       "WebFetch(domain:blog.cloudflare.com)",
       "Bash(./node_modules/.bin/tsc --noEmit)",
-      "Bash(grep -n \"edgeType\" /run/media/rogerleecormier/Storage/dev/project-orca/app/components/skill-tree/*.tsx)"
+      "Bash(grep -n \"edgeType\" /run/media/rogerleecormier/Storage/dev/project-orca/app/components/skill-tree/*.tsx)",
+      "Bash(npm run:*)",
+      "Bash(node -e \"console.log\\(new Date\\('2026-04-05'\\).toLocaleDateString\\('en-US',{weekday:'long'}\\)\\); console.log\\(new Date\\('2026-04-06'\\).toLocaleDateString\\('en-US',{weekday:'long'}\\)\\); console.log\\(new Date\\('2026-04-10'\\).getDay\\(\\)\\)\")",
+      "Bash(pnpm drizzle-kit:*)",
+      "Bash(pnpm deploy:*)",
+      "Bash(pnpm run:*)",
+      "Bash(node -e ':*)"
     ],
     "additionalDirectories": [
       "/tmp"

@@ -1483,6 +1483,14 @@ function CurriculumBuilderPage() {
   // Filter out optimistically deleted assignments and apply marking period filter
   // Derive available school years from classes
   const schoolYears = [...new Set(data.classes.map((c) => c.schoolYear).filter(Boolean))].sort().reverse() as string[];
+  const assignmentClassOptions = data.classes.map((row) => ({ id: row.id, title: row.title }));
+  const skillTreeLessonOptions = data.skillTreeLessons;
+  const assignmentNodeIdByAssignmentId = data.assignmentNodeLinks.reduce<Map<string, string>>((acc, row) => {
+    if (!acc.has(row.assignmentId)) {
+      acc.set(row.assignmentId, row.nodeId);
+    }
+    return acc;
+  }, new Map());
 
   // Class → school year lookup
   const classSchoolYear = new Map(data.classes.map((c) => [c.id, c.schoolYear]));
@@ -1684,7 +1692,7 @@ function CurriculumBuilderPage() {
     if (form.contentType === "video") {
       const selectedVideo = form.videos[0];
       return (
-        <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+        <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-white p-4">
           <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-slate-700">Video Builder</h3>
 
           {/* Step indicator */}
@@ -1804,7 +1812,7 @@ function CurriculumBuilderPage() {
       const selectedQuizSource = classAssignments.find((assignment) => assignment.id === form.quizSourceAssignmentId);
       return (
         <>
-          <div className="md:col-span-2 rounded-2xl border bg-slate-50/80 p-4">
+          <div className="md:col-span-2 rounded-2xl border bg-white p-4">
             {/* Mode selector — always visible */}
             <div className="grid gap-3 sm:grid-cols-2">
               <button
@@ -1977,7 +1985,7 @@ function CurriculumBuilderPage() {
             />
           </label>
 
-          <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+          <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-white p-4">
             <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-slate-700">
               Quiz Questions
             </h3>
@@ -2033,7 +2041,7 @@ function CurriculumBuilderPage() {
   return (
     <div className="space-y-6">
       <ParentPageHeader
-        title="Manage Assignments"
+        title="Assignments"
         description="Create video lessons, quizzes, essay questions, reports, and more, then link related work so students experience it as one coherent lesson flow."
         action={(
           <button
@@ -2103,7 +2111,7 @@ function CurriculumBuilderPage() {
 
               {form.createMode === "template" ? (
                 <div className="mt-4 space-y-4">
-                  <div className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50/80 p-4 lg:grid-cols-[1.5fr_220px_220px]">
+                  <div className="grid gap-4 rounded-2xl border border-slate-200 bg-white p-4 lg:grid-cols-[1.5fr_220px_220px]">
                     <div>
                       <h3 className="text-base font-semibold text-slate-900">Choose a template</h3>
                       <p className="mt-1 text-sm text-slate-600">
@@ -2213,7 +2221,7 @@ function CurriculumBuilderPage() {
                       })}
                     </div>
                   ) : (
-                    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50/70 px-4 py-10 text-center">
+                    <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-4 py-10 text-center">
                       <p className="text-sm font-medium text-slate-900">No templates match those filters.</p>
                       <p className="mt-1 text-sm text-slate-500">
                         Try another subject or type, or jump straight into a blank assignment.
@@ -2381,7 +2389,7 @@ function CurriculumBuilderPage() {
       ) : null}
 
       {/* Published Assignments */}
-      <section className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+      <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm orca-glass-panel">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <h2 className="text-xl font-semibold text-slate-900">Published Assignments</h2>
           <div className="flex flex-wrap items-center gap-2">
@@ -2454,10 +2462,10 @@ function CurriculumBuilderPage() {
               <article
                 key={video.id}
                 id={`assignment-${video.id}`}
-                className={`rounded-2xl border border-slate-200 overflow-hidden transition-all duration-300 ${
+                className={`rounded-2xl border border-slate-200 overflow-hidden transition-all duration-300 orca-glass-panel ${
                   highlightedAssignmentId === video.id
                     ? "bg-cyan-50 ring-2 ring-cyan-300 shadow-md"
-                    : "bg-slate-50/80"
+                    : "bg-white"
                 }`}
               >
                 {/* Video row */}
@@ -2577,7 +2585,7 @@ function CurriculumBuilderPage() {
               <div
                 key={row.id}
                 id={`assignment-${row.id}`}
-                className={`rounded-2xl border border-slate-200 transition-all duration-300 ${
+                className={`rounded-2xl border border-slate-200 transition-all duration-300 orca-glass-panel ${
                   highlightedAssignmentId === row.id
                     ? "ring-2 ring-cyan-300 shadow-md"
                     : ""
@@ -2585,7 +2593,7 @@ function CurriculumBuilderPage() {
               >
                 <article
                   className={`flex items-start justify-between gap-4 p-5 ${
-                    highlightedAssignmentId === row.id ? "bg-cyan-50" : "bg-slate-50/80"
+                    highlightedAssignmentId === row.id ? "bg-cyan-50" : "bg-white"
                   } ${isGradable && rowSubmissions.length > 0 ? "rounded-t-2xl" : "rounded-2xl"}`}
                 >
                   <div className="min-w-0">
@@ -2773,6 +2781,9 @@ function CurriculumBuilderPage() {
         <AssignmentModal
           assignment={viewingAssignment as ModalAssignment}
           allAssignments={data.assignments as ModalAssignment[]}
+          classOptions={assignmentClassOptions}
+          lessonOptions={skillTreeLessonOptions}
+          initialNodeId={assignmentNodeIdByAssignmentId.get(viewingAssignment.id) ?? null}
           canEdit={true}
           onClose={() => setViewingAssignment(null)}
           onSaved={async () => {

@@ -277,8 +277,6 @@ export function AppShell({
 
   return (
     <div className="relative min-h-screen">
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(120deg,rgba(27,127,194,0.1),rgba(4,8,15,0))]" />
-
       <div className="relative mx-auto flex min-h-screen w-full max-w-[1400px] overflow-x-clip">
         {/* Sidebar */}
         <aside
@@ -524,7 +522,7 @@ export function AppShell({
             ) : null}
           </header>
 
-          <main className={`min-w-0 flex-1 ${isFullBleedRoute ? "p-0" : "orca-page-main"}`}>
+          <main className={`min-w-0 flex-1 orca-page-canvas ${isFullBleedRoute ? "p-0" : "orca-page-main"}`}>
             {children}
           </main>
 

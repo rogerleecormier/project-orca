@@ -191,6 +191,8 @@ export const organizations = sqliteTable(
     ownerUserId: text("owner_user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    schoolWeekDays: integer("school_week_days").notNull().default(5),
+    timezone: text("timezone").notNull().default("America/New_York"),
     createdAt: text("created_at")
       .notNull()
       .$defaultFn(() => new Date().toISOString()),

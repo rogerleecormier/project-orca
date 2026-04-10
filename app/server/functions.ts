@@ -44,6 +44,8 @@ import {
   generateQuizDraft,
   generateRewardSuggestions,
   generateWeekPlanWithAI as aiGenerateWeekPlan,
+  type PlannerAssignment,
+  type PlannerSkillContext,
   gradeSubmission,
   layoutForceDirected,
   reweaveCurriculumTree,
@@ -236,11 +238,24 @@ export const getParentSettingsData = createServerFn({ method: "GET" }).handler(a
     throw new Error("FORBIDDEN");
   }
 
+  const organizationId = await resolveActiveOrganizationId(
+    session.user.id,
+    session.session.activeOrganizationId,
+  );
+
+  const org = organizationId
+    ? await db.query.organizations.findFirst({
+        where: eq(organizations.id, organizationId),
+      })
+    : null;
+
   return {
     name: userRecord.name ?? "",
     email: userRecord.email ?? "",
     username: userRecord.username ?? "",
     parentPinLength: resolveParentPinLength(userRecord.parentPinLength),
+    schoolWeekDays: (org?.schoolWeekDays ?? 5) as 4 | 5 | 6 | 7,
+    timezone: org?.timezone ?? "America/New_York",
   };
 });
 
@@ -292,6 +307,49 @@ export const updateParentSettings = createServerFn({ method: "POST" })
       })
       .where(eq(users.id, session.user.id));
 
+    return { success: true };
+  });
+
+export const updateSchoolWeekDays = createServerFn({ method: "POST" })
+  .inputValidator((data) =>
+    z.object({ schoolWeekDays: z.union([z.literal(4), z.literal(5), z.literal(6), z.literal(7)]) }).parse(data),
+  )
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["parent", "admin"]);
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    if (!organizationId) {
+      throw new Error("NO_ORGANIZATION");
+    }
+
+    const db = getDb();
+    await db
+      .update(organizations)
+      .set({ schoolWeekDays: data.schoolWeekDays, updatedAt: new Date().toISOString() })
+      .where(eq(organizations.id, organizationId));
+
+    return { success: true };
+  });
+
+export const updateTimezone = createServerFn({ method: "POST" })
+  .inputValidator((data) =>
+    z.object({ timezone: z.string().min(1).max(60) }).parse(data),
+  )
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["parent", "admin"]);
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+    if (!organizationId) throw new Error("NO_ORGANIZATION");
+    const db = getDb();
+    await db
+      .update(organizations)
+      .set({ timezone: data.timezone, updatedAt: new Date().toISOString() })
+      .where(eq(organizations.id, organizationId));
     return { success: true };
   });
 
@@ -3894,6 +3952,8 @@ const updateAssignmentInput = z.object({
   description: z.string().optional(),
   contentRef: z.string().optional(),
   linkedAssignmentId: z.string().nullable().optional(),
+  classId: z.string().optional(),
+  nodeId: z.string().nullable().optional(),
   dueAt: z.string().optional(),
 });
 
@@ -3930,9 +3990,50 @@ export const updateAssignmentRecord = createServerFn({ method: "POST" })
       if (!linked) throw new Error("LINKED_ASSIGNMENT_NOT_FOUND");
     }
 
+    let nextClassId = existing.classId;
+    if (data.classId) {
+      const targetClass = await db.query.classes.findFirst({
+        where: and(
+          eq(classes.id, data.classId),
+          eq(classes.organizationId, organizationId),
+        ),
+      });
+      if (!targetClass) {
+        throw new Error("CLASS_NOT_FOUND");
+      }
+      nextClassId = targetClass.id;
+    }
+
+    if (data.nodeId) {
+      const nodeRow = await db
+        .select({
+          nodeId: skillTreeNodes.id,
+          classId: skillTrees.classId,
+        })
+        .from(skillTreeNodes)
+        .innerJoin(skillTrees, eq(skillTreeNodes.treeId, skillTrees.id))
+        .where(
+          and(
+            eq(skillTreeNodes.id, data.nodeId),
+            eq(skillTreeNodes.organizationId, organizationId),
+            eq(skillTrees.organizationId, organizationId),
+          ),
+        )
+        .limit(1);
+
+      const node = nodeRow[0];
+      if (!node) {
+        throw new Error("NODE_NOT_FOUND");
+      }
+      if (!node.classId || node.classId !== nextClassId) {
+        throw new Error("NODE_CLASS_MISMATCH");
+      }
+    }
+
     await db
       .update(assignments)
       .set({
+        classId: nextClassId,
         title: data.title.trim(),
         description: data.description?.trim() || null,
         contentRef: data.contentRef !== undefined ? data.contentRef : existing.contentRef,
@@ -3949,6 +4050,30 @@ export const updateAssignmentRecord = createServerFn({ method: "POST" })
           eq(assignments.organizationId, organizationId),
         ),
       );
+
+    const classChanged = nextClassId !== existing.classId;
+    const shouldRewriteNodeLinks = data.nodeId !== undefined || classChanged;
+
+    if (shouldRewriteNodeLinks) {
+      await db
+        .delete(skillTreeNodeAssignments)
+        .where(eq(skillTreeNodeAssignments.assignmentId, data.assignmentId));
+
+      if (data.nodeId) {
+        const highestNodeOrder = await db.query.skillTreeNodeAssignments.findFirst({
+          where: eq(skillTreeNodeAssignments.nodeId, data.nodeId),
+          orderBy: [desc(skillTreeNodeAssignments.orderIndex)],
+        });
+        const nextOrderIndex = (highestNodeOrder?.orderIndex ?? -1) + 1;
+
+        await db.insert(skillTreeNodeAssignments).values({
+          id: crypto.randomUUID(),
+          nodeId: data.nodeId,
+          assignmentId: data.assignmentId,
+          orderIndex: nextOrderIndex,
+        });
+      }
+    }
 
     return { success: true };
   });
@@ -4111,7 +4236,7 @@ export const getCurriculumBuilderData = createServerFn({ method: "GET" }).handle
       session.session.activeOrganizationId,
     );
 
-    const [classRows, assignmentRows, userRecord, submissionRows, profileRows, templatesResult, markingPeriodRows] = await Promise.all([
+    const [classRows, assignmentRows, userRecord, submissionRows, profileRows, templatesResult, markingPeriodRows, skillTreeNodeRows, assignmentNodeLinkRows] = await Promise.all([
       db.query.classes.findMany({
         where: eq(classes.organizationId, organizationId),
         orderBy: [desc(classes.createdAt)],
@@ -4141,6 +4266,31 @@ export const getCurriculumBuilderData = createServerFn({ method: "GET" }).handle
         where: eq(markingPeriods.organizationId, organizationId),
         orderBy: [markingPeriods.periodNumber],
       }),
+      db
+        .select({
+          nodeId: skillTreeNodes.id,
+          nodeTitle: skillTreeNodes.title,
+          nodeType: skillTreeNodes.nodeType,
+          treeTitle: skillTrees.title,
+          classId: skillTrees.classId,
+        })
+        .from(skillTreeNodes)
+        .innerJoin(skillTrees, eq(skillTreeNodes.treeId, skillTrees.id))
+        .where(
+          and(
+            eq(skillTreeNodes.organizationId, organizationId),
+            eq(skillTrees.organizationId, organizationId),
+          ),
+        ),
+      db
+        .select({
+          assignmentId: skillTreeNodeAssignments.assignmentId,
+          nodeId: skillTreeNodeAssignments.nodeId,
+          orderIndex: skillTreeNodeAssignments.orderIndex,
+        })
+        .from(skillTreeNodeAssignments)
+        .innerJoin(skillTreeNodes, eq(skillTreeNodeAssignments.nodeId, skillTreeNodes.id))
+        .where(eq(skillTreeNodes.organizationId, organizationId)),
     ]);
     const templates: AccessibleAssignmentTemplate[] = templatesResult;
 
@@ -4151,6 +4301,21 @@ export const getCurriculumBuilderData = createServerFn({ method: "GET" }).handle
       markingPeriods: markingPeriodRows,
       templates,
       submissions: submissionRows,
+      skillTreeLessons: skillTreeNodeRows
+        .filter((row) => Boolean(row.classId))
+        .map((row) => ({
+          id: row.nodeId,
+          classId: row.classId as string,
+          title: row.nodeTitle,
+          nodeType: row.nodeType,
+          treeTitle: row.treeTitle,
+        })),
+      assignmentNodeLinks: assignmentNodeLinkRows
+        .sort((a, b) => b.orderIndex - a.orderIndex)
+        .map((row) => ({
+          assignmentId: row.assignmentId,
+          nodeId: row.nodeId,
+        })),
       profiles: profileRows.map((p) => ({
         id: p.id,
         displayName: p.displayName,
@@ -4962,6 +5127,23 @@ export const getTodaysPlan = createServerFn({ method: "POST" })
     return { slots, today };
   });
 
+/**
+ * Snap an ISO date to the correct week-start for the given school week length.
+ * 7-day weeks start on Sunday; all others start on Monday.
+ */
+function snapToWeekStart(isoDate: string, numDays: number): string {
+  const [y, m, d] = isoDate.split("-").map(Number) as [number, number, number];
+  const utcMs = Date.UTC(y, m - 1, d);
+  const dow = new Date(utcMs).getUTCDay(); // 0=Sun, 1=Mon…
+  let offset: number;
+  if (numDays === 7) {
+    offset = dow; // back to Sunday
+  } else {
+    offset = dow === 0 ? 6 : dow - 1; // back to Monday (Sun → 6 days back)
+  }
+  return new Date(utcMs - offset * 86400000).toISOString().slice(0, 10);
+}
+
 const getWeekPlanInput = z.object({
   profileId: z.string().min(1),
   weekStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -4978,11 +5160,20 @@ export const getWeekPlan = createServerFn({ method: "GET" })
       session.session.activeOrganizationId,
     );
 
-    // Build week end date (Friday = start + 4 days)
-    const weekStart = new Date(data.weekStartDate);
-    const weekEnd = new Date(weekStart);
-    weekEnd.setDate(weekStart.getDate() + 4);
-    const weekEndDate = weekEnd.toISOString().slice(0, 10);
+    // Fetch org school week days setting
+    const org = await db.query.organizations.findFirst({
+      where: eq(organizations.id, organizationId),
+    });
+    const schoolWeekDays = Math.min(Math.max(org?.schoolWeekDays ?? 5, 4), 7);
+
+    // Build week end date based on configured school week length.
+    // Use UTC arithmetic to avoid timezone bugs with new Date("YYYY-MM-DD").
+    function addDaysToIsoGet(isoDate: string, days: number): string {
+      const [y, m, d] = isoDate.split("-").map(Number) as [number, number, number];
+      return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+    }
+    const snappedWeekStart = snapToWeekStart(data.weekStartDate, schoolWeekDays);
+    const weekEndDate = addDaysToIsoGet(snappedWeekStart, schoolWeekDays - 1);
 
     const slots = await db
       .select({
@@ -5002,7 +5193,7 @@ export const getWeekPlan = createServerFn({ method: "GET" })
         and(
           eq(weekPlan.organizationId, organizationId),
           eq(weekPlan.profileId, data.profileId),
-          gte(weekPlan.scheduledDate, data.weekStartDate),
+          gte(weekPlan.scheduledDate, snappedWeekStart),
           lte(weekPlan.scheduledDate, weekEndDate),
         ),
       )
@@ -5054,7 +5245,254 @@ export const getWeekPlan = createServerFn({ method: "GET" })
       (a) => !scheduledAssignmentIds.has(a.id) && !submittedIds.has(a.id),
     );
 
-    return { slots, unscheduled };
+    return { slots, unscheduled, schoolWeekDays, timezone: org?.timezone ?? "America/New_York" };
+  });
+
+export const getAllPendingAssignments = createServerFn({ method: "GET" })
+  .inputValidator((data) =>
+    z
+      .object({
+        profileId: z.string().min(1),
+        page: z.number().int().min(0).default(0),
+        pageSize: z.number().int().min(1).max(100).default(50),
+      })
+      .parse(data),
+  )
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent", "student"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const enrolledClassRows = await db
+      .select({ classId: classEnrollments.classId })
+      .from(classEnrollments)
+      .where(eq(classEnrollments.profileId, data.profileId));
+
+    const enrolledClassIds = enrolledClassRows.map((r) => r.classId);
+    if (enrolledClassIds.length === 0) return { assignments: [], hasMore: false, total: 0 };
+
+    const submittedRows = await db
+      .select({ assignmentId: submissions.assignmentId })
+      .from(submissions)
+      .where(
+        and(
+          eq(submissions.profileId, data.profileId),
+          eq(submissions.organizationId, organizationId),
+        ),
+      );
+    const submittedIds = new Set(submittedRows.map((r) => r.assignmentId));
+
+    const scheduledRows = await db
+      .select({ assignmentId: weekPlan.assignmentId })
+      .from(weekPlan)
+      .where(eq(weekPlan.profileId, data.profileId));
+    const scheduledIds = new Set(scheduledRows.map((r) => r.assignmentId));
+
+    const allRows = await db
+      .select({
+        id: assignments.id,
+        title: assignments.title,
+        contentType: assignments.contentType,
+        classTitle: classes.title,
+      })
+      .from(assignments)
+      .innerJoin(classes, eq(assignments.classId, classes.id))
+      .where(
+        and(
+          eq(assignments.organizationId, organizationId),
+          inArray(assignments.classId, enrolledClassIds),
+        ),
+      )
+      .orderBy(classes.title, assignments.createdAt);
+
+    const pending = allRows.filter(
+      (a) => !submittedIds.has(a.id) && !scheduledIds.has(a.id),
+    );
+
+    const total = pending.length;
+    const start = data.page * data.pageSize;
+    const page = pending.slice(start, start + data.pageSize);
+
+    return { assignments: page, hasMore: start + data.pageSize < total, total };
+  });
+
+export const getRecommendedAssignments = createServerFn({ method: "GET" })
+  .inputValidator((data) =>
+    z
+      .object({
+        profileId: z.string().min(1),
+        weekStartDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      })
+      .parse(data),
+  )
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent", "student"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    // All assignments already submitted by this student
+    const submittedRows = await db
+      .select({ assignmentId: submissions.assignmentId })
+      .from(submissions)
+      .where(
+        and(
+          eq(submissions.profileId, data.profileId),
+          eq(submissions.organizationId, organizationId),
+        ),
+      );
+    const submittedIds = new Set(submittedRows.map((r) => r.assignmentId));
+
+    // Assignments scheduled in the viewed week (or any week if no weekStartDate given)
+    const weekScheduleConditions = [eq(weekPlan.profileId, data.profileId)];
+    if (data.weekStartDate) {
+      const [wy, wm, wd] = data.weekStartDate.split("-").map(Number) as [number, number, number];
+      const weekEndDate = new Date(Date.UTC(wy, wm - 1, wd + 6)).toISOString().slice(0, 10);
+      weekScheduleConditions.push(
+        gte(weekPlan.scheduledDate, data.weekStartDate),
+        lte(weekPlan.scheduledDate, weekEndDate),
+      );
+    }
+    const scheduledRows = await db
+      .select({ assignmentId: weekPlan.assignmentId })
+      .from(weekPlan)
+      .where(and(...weekScheduleConditions));
+    const scheduledIds = new Set(scheduledRows.map((r) => r.assignmentId));
+
+    // Enrolled classes
+    const enrolledClassRows = await db
+      .select({ classId: classEnrollments.classId })
+      .from(classEnrollments)
+      .where(eq(classEnrollments.profileId, data.profileId));
+    const enrolledClassIds = enrolledClassRows.map((r) => r.classId);
+
+    if (enrolledClassIds.length === 0) {
+      return { recommendations: [] };
+    }
+
+    // Find all skill trees for enrolled classes belonging to this org
+    const treeRows = await db
+      .select({ id: skillTrees.id, classId: skillTrees.classId, title: skillTrees.title })
+      .from(skillTrees)
+      .where(
+        and(
+          eq(skillTrees.organizationId, organizationId),
+          inArray(skillTrees.classId, enrolledClassIds),
+        ),
+      );
+
+    if (treeRows.length === 0) {
+      return { recommendations: [] };
+    }
+
+    const treeIds = treeRows.map((t) => t.id);
+    const treeById = new Map(treeRows.map((t) => [t.id, t]));
+
+    // Get node progress for in_progress and available nodes across all trees
+    const progressRows = await db
+      .select({
+        nodeId: skillTreeNodeProgress.nodeId,
+        treeId: skillTreeNodeProgress.treeId,
+        status: skillTreeNodeProgress.status,
+      })
+      .from(skillTreeNodeProgress)
+      .where(
+        and(
+          eq(skillTreeNodeProgress.profileId, data.profileId),
+          inArray(skillTreeNodeProgress.treeId, treeIds),
+          inArray(skillTreeNodeProgress.status, ["in_progress", "available"]),
+        ),
+      );
+
+    if (progressRows.length === 0) {
+      return { recommendations: [] };
+    }
+
+    // Sort: in_progress before available
+    const statusPriority: Record<string, number> = { in_progress: 0, available: 1 };
+    const sortedProgress = progressRows.sort(
+      (a, b) => (statusPriority[a.status] ?? 2) - (statusPriority[b.status] ?? 2),
+    );
+
+    const activeNodeIds = sortedProgress.map((p) => p.nodeId);
+    const nodeStatusMap = new Map(sortedProgress.map((p) => [p.nodeId, p.status]));
+    const nodeTreeMap = new Map(sortedProgress.map((p) => [p.nodeId, p.treeId]));
+
+    // Fetch ALL assignments linked to active nodes — we'll sort and dedupe in JS
+    const nodeAssignmentRows = await db
+      .select({
+        nodeId: skillTreeNodeAssignments.nodeId,
+        assignmentId: skillTreeNodeAssignments.assignmentId,
+        orderIndex: skillTreeNodeAssignments.orderIndex,
+        assignmentTitle: assignments.title,
+        assignmentContentType: assignments.contentType,
+        assignmentClassId: assignments.classId,
+        classTitle: classes.title,
+        nodeTitle: skillTreeNodes.title,
+        nodeType: skillTreeNodes.nodeType,
+      })
+      .from(skillTreeNodeAssignments)
+      .innerJoin(assignments, eq(skillTreeNodeAssignments.assignmentId, assignments.id))
+      .innerJoin(classes, eq(assignments.classId, classes.id))
+      .innerJoin(skillTreeNodes, eq(skillTreeNodeAssignments.nodeId, skillTreeNodes.id))
+      .where(inArray(skillTreeNodeAssignments.nodeId, activeNodeIds));
+
+    // Sort: in_progress nodes first, then by assignment orderIndex within each node
+    const statusPriorityMap: Record<string, number> = { in_progress: 0, available: 1 };
+    nodeAssignmentRows.sort((a, b) => {
+      const aPriority = statusPriorityMap[nodeStatusMap.get(a.nodeId) ?? "available"] ?? 1;
+      const bPriority = statusPriorityMap[nodeStatusMap.get(b.nodeId) ?? "available"] ?? 1;
+      if (aPriority !== bPriority) return aPriority - bPriority;
+      return a.orderIndex - b.orderIndex;
+    });
+
+    // Build per-class recommendations: collect up to RECS_PER_CLASS unsubmitted
+    // assignments across ALL active nodes for the class, deduping by assignmentId.
+    // The "current node" shown is the highest-priority (in_progress > available) node.
+    const RECS_PER_CLASS = 6;
+
+    const byClass = new Map<string, {
+      classTitle: string;
+      nodeTitle: string;
+      nodeType: string;
+      nodeStatus: string;
+      assignments: { id: string; title: string; contentType: string; alreadyScheduled: boolean }[];
+    }>();
+
+    const seenAssignmentIds = new Set<string>();
+
+    for (const row of nodeAssignmentRows) {
+      if (submittedIds.has(row.assignmentId)) continue;
+      if (seenAssignmentIds.has(row.assignmentId)) continue;
+      seenAssignmentIds.add(row.assignmentId);
+
+      const classId = row.assignmentClassId;
+      const nodeStatus = nodeStatusMap.get(row.nodeId) ?? "available";
+      const alreadyScheduled = scheduledIds.has(row.assignmentId);
+
+      const existing = byClass.get(classId);
+      if (!existing) {
+        byClass.set(classId, {
+          classTitle: row.classTitle,
+          // Use this first row's node as the "current node" — it's the highest priority
+          nodeTitle: row.nodeTitle,
+          nodeType: row.nodeType,
+          nodeStatus,
+          assignments: [{ id: row.assignmentId, title: row.assignmentTitle, contentType: row.assignmentContentType, alreadyScheduled }],
+        });
+      } else if (existing.assignments.length < RECS_PER_CLASS) {
+        existing.assignments.push({ id: row.assignmentId, title: row.assignmentTitle, contentType: row.assignmentContentType, alreadyScheduled });
+      }
+    }
+
+    return { recommendations: Array.from(byClass.values()) };
   });
 
 const saveWeekPlanInput = z.object({
@@ -5080,39 +5518,97 @@ export const saveWeekPlan = createServerFn({ method: "POST" })
       session.session.activeOrganizationId,
     );
 
-    // Build week end date
-    const weekStart = new Date(data.weekStartDate);
-    const weekEnd = new Date(weekStart);
-    weekEnd.setDate(weekStart.getDate() + 4);
-    const weekEndDate = weekEnd.toISOString().slice(0, 10);
+    // Fetch org settings first so we know the school week length before snapping dates.
+    const orgForSave = await db.query.organizations.findFirst({
+      where: eq(organizations.id, organizationId),
+    });
+    const saveSchoolWeekDays = Math.min(Math.max(orgForSave?.schoolWeekDays ?? 5, 4), 7);
 
-    // Delete existing slots for this week/profile then re-insert
+    // Snap weekStartDate to the correct week-start day (Mon for <7 days, Sun for 7).
+    // Guards against client timezone bugs producing the wrong date.
+    const weekStartDate = snapToWeekStart(data.weekStartDate, saveSchoolWeekDays);
+
+    function addDaysToIso(isoDate: string, days: number): string {
+      const [y, m, d] = isoDate.split("-").map(Number) as [number, number, number];
+      const dt = new Date(Date.UTC(y, m - 1, d + days));
+      return dt.toISOString().slice(0, 10);
+    }
+
+    // Valid dates for this week: weekStartDate + 0..schoolWeekDays-1
+    const validDates = new Set(
+      Array.from({ length: saveSchoolWeekDays }, (_, i) => addDaysToIso(weekStartDate, i)),
+    );
+
+    // Delete window: always full Sun–Sat (7 days) to clear any AI-placed slots
+    // that landed outside the strict school week range.
+    const windowEndDate = addDaysToIso(weekStartDate, 6);
     await db
       .delete(weekPlan)
       .where(
         and(
           eq(weekPlan.organizationId, organizationId),
           eq(weekPlan.profileId, data.profileId),
-          gte(weekPlan.scheduledDate, data.weekStartDate),
-          lte(weekPlan.scheduledDate, weekEndDate),
+          gte(weekPlan.scheduledDate, weekStartDate),
+          lte(weekPlan.scheduledDate, windowEndDate),
         ),
       );
 
-    if (data.slots.length > 0) {
-      await db.insert(weekPlan).values(
-        data.slots.map((slot) => ({
-          id: crypto.randomUUID(),
-          organizationId,
-          profileId: data.profileId,
-          assignmentId: slot.assignmentId,
-          scheduledDate: slot.scheduledDate,
-          orderIndex: slot.orderIndex,
-          createdAt: new Date().toISOString(),
-        })),
-      );
+    // Validate all incoming assignment IDs actually exist in this org
+    const slotAssignmentIds = [...new Set(data.slots.map((s) => s.assignmentId))];
+    const validAssignments = slotAssignmentIds.length > 0
+      ? await db
+          .select({ id: assignments.id })
+          .from(assignments)
+          .where(
+            and(
+              eq(assignments.organizationId, organizationId),
+              inArray(assignments.id, slotAssignmentIds),
+            ),
+          )
+      : [];
+    const validAssignmentIds = new Set(validAssignments.map((a) => a.id));
+
+    // Deduplicate by assignmentId, drop invalid dates and unknown assignments
+    const dedupedSlots = Array.from(
+      data.slots
+        .filter((s) => validDates.has(s.scheduledDate) && validAssignmentIds.has(s.assignmentId))
+        .reduce((map, slot) => {
+          map.set(slot.assignmentId, slot);
+          return map;
+        }, new Map<string, (typeof data.slots)[number]>())
+        .values(),
+    );
+
+    if (dedupedSlots.length > 0) {
+      try {
+        // Keep INSERT statements under SQLite/D1 bind-parameter limits.
+        // 7 columns/row -> chunking at 10 rows = 70 params max/statement.
+        const insertChunkSize = 10;
+        for (let i = 0; i < dedupedSlots.length; i += insertChunkSize) {
+          const chunk = dedupedSlots.slice(i, i + insertChunkSize);
+          await db.insert(weekPlan).values(
+            chunk.map((slot) => ({
+              id: crypto.randomUUID(),
+              organizationId,
+              profileId: data.profileId,
+              assignmentId: slot.assignmentId,
+              scheduledDate: slot.scheduledDate,
+              orderIndex: slot.orderIndex,
+              createdAt: new Date().toISOString(),
+            })),
+          );
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `INSERT_FAILED: ${msg} | slots=${JSON.stringify(
+            dedupedSlots.map((s) => ({ a: s.assignmentId, d: s.scheduledDate })),
+          )} | validDates=${JSON.stringify([...validDates])} | validAssignments=${validAssignments.length}/${slotAssignmentIds.length}`,
+        );
+      }
     }
 
-    return { saved: data.slots.length };
+    return { saved: dedupedSlots.length };
   });
 
 const generateWeekPlanInput = z.object({
@@ -5130,6 +5626,8 @@ export const generateWeekPlan = createServerFn({ method: "POST" })
       session.user.id,
       session.session.activeOrganizationId,
     );
+
+    // weekStartDate will be snapped after we know schoolWeekDays (fetched below).
 
     const profile = await db.query.profiles.findFirst({
       where: and(
@@ -5165,30 +5663,119 @@ export const generateWeekPlan = createServerFn({ method: "POST" })
 
     const submittedIds = new Set(submittedRows.map((r) => r.assignmentId));
 
-    const pendingAssignments = await db
-      .select({
-        id: assignments.id,
-        title: assignments.title,
-        contentType: assignments.contentType,
-        classId: assignments.classId,
-        classTitle: classes.title,
-      })
-      .from(assignments)
-      .innerJoin(classes, eq(assignments.classId, classes.id))
-      .where(
-        and(
-          eq(assignments.organizationId, organizationId),
-          inArray(assignments.classId, enrolledClassIds),
-        ),
-      )
-      .orderBy(assignments.createdAt);
+    // Fetch org settings, skill tree progress, and already-scheduled items in parallel
+    const [org, skillProgressRows, alreadyScheduledRows] = await Promise.all([
+      db.query.organizations.findFirst({
+        where: eq(organizations.id, organizationId),
+      }),
+      db
+        .select({
+          nodeId: skillTreeNodeProgress.nodeId,
+          treeId: skillTreeNodeProgress.treeId,
+          status: skillTreeNodeProgress.status,
+          nodeTitle: skillTreeNodes.title,
+          nodeType: skillTreeNodes.nodeType,
+          subject: skillTreeNodes.subject,
+          classId: skillTrees.classId,
+          classTitle: classes.title,
+        })
+        .from(skillTreeNodeProgress)
+        .innerJoin(skillTreeNodes, eq(skillTreeNodeProgress.nodeId, skillTreeNodes.id))
+        .innerJoin(skillTrees, eq(skillTreeNodeProgress.treeId, skillTrees.id))
+        .leftJoin(classes, eq(skillTrees.classId, classes.id))
+        .where(
+          and(
+            eq(skillTreeNodeProgress.profileId, data.profileId),
+            inArray(skillTreeNodeProgress.status, ["available", "in_progress"]),
+          ),
+        )
+        .orderBy(skillTreeNodeProgress.status),
+      // Assignments already on the calendar for this week
+      db
+        .select({ assignmentId: weekPlan.assignmentId })
+        .from(weekPlan)
+        .where(eq(weekPlan.profileId, data.profileId)),
+    ]);
 
-    const unsubmitted = pendingAssignments.filter((a) => !submittedIds.has(a.id));
+    const genSchoolWeekDays = Math.min(Math.max(org?.schoolWeekDays ?? 5, 4), 7);
+    const weekStartDate = snapToWeekStart(data.weekStartDate, genSchoolWeekDays);
+
+    // Build the set of IDs to exclude: submitted + already on the calendar
+    const alreadyScheduledIds = new Set(alreadyScheduledRows.map((r) => r.assignmentId));
+    const excludedIds = new Set([...submittedIds, ...alreadyScheduledIds]);
+
+    // Build skill context for the AI prompt
+    const skillContext: PlannerSkillContext[] = skillProgressRows
+      .filter((r) => r.classTitle !== null)
+      .map((r) => ({
+        classTitle: r.classTitle!,
+        subject: r.subject,
+        nodeTitle: r.nodeTitle,
+        nodeStatus: r.status,
+        nodeType: r.nodeType,
+      }));
+
+    // Pull recommended assignments from active skill tree nodes (same logic as getRecommendedAssignments)
+    const activeNodeIds = skillProgressRows.map((r) => r.nodeId);
+    const nodeInfoMap = new Map(
+      skillProgressRows.map((r) => [
+        r.nodeId,
+        { nodeTitle: r.nodeTitle, nodeType: r.nodeType, nodeStatus: r.status },
+      ]),
+    );
+    let unsubmitted: PlannerAssignment[] = [];
+
+    if (activeNodeIds.length > 0) {
+      const nodeStatusMap = new Map(skillProgressRows.map((p) => [p.nodeId, p.status]));
+      const nodeAssignmentRows = await db
+        .select({
+          nodeId: skillTreeNodeAssignments.nodeId,
+          assignmentId: skillTreeNodeAssignments.assignmentId,
+          orderIndex: skillTreeNodeAssignments.orderIndex,
+          assignmentTitle: assignments.title,
+          assignmentContentType: assignments.contentType,
+          classTitle: classes.title,
+        })
+        .from(skillTreeNodeAssignments)
+        .innerJoin(assignments, eq(skillTreeNodeAssignments.assignmentId, assignments.id))
+        .innerJoin(classes, eq(assignments.classId, classes.id))
+        .where(inArray(skillTreeNodeAssignments.nodeId, activeNodeIds));
+
+      // Sort: in_progress nodes first, then by assignment orderIndex within each node
+      const statusPriorityMap: Record<string, number> = { in_progress: 0, available: 1 };
+      nodeAssignmentRows.sort((a, b) => {
+        const aPriority = statusPriorityMap[nodeStatusMap.get(a.nodeId) ?? "available"] ?? 1;
+        const bPriority = statusPriorityMap[nodeStatusMap.get(b.nodeId) ?? "available"] ?? 1;
+        if (aPriority !== bPriority) return aPriority - bPriority;
+        return a.orderIndex - b.orderIndex;
+      });
+
+      const seenIds = new Set<string>();
+      for (const row of nodeAssignmentRows) {
+        if (excludedIds.has(row.assignmentId)) continue;
+        if (seenIds.has(row.assignmentId)) continue;
+        seenIds.add(row.assignmentId);
+        const nodeInfo = nodeInfoMap.get(row.nodeId);
+        unsubmitted.push({
+          id: row.assignmentId,
+          title: row.assignmentTitle,
+          contentType: row.assignmentContentType,
+          classTitle: row.classTitle,
+          nodeId: row.nodeId,
+          nodeTitle: nodeInfo?.nodeTitle ?? "",
+          nodeType: nodeInfo?.nodeType ?? "lesson",
+          nodeStatus: nodeInfo?.nodeStatus ?? "available",
+          nodeOrderIndex: row.orderIndex,
+        });
+      }
+    }
 
     const slots = await aiGenerateWeekPlan({
       assignments: unsubmitted,
       gradeLevel: profile.gradeLevel,
-      weekStartDate: data.weekStartDate,
+      weekStartDate,
+      schoolWeekDays: genSchoolWeekDays,
+      skillContext,
     });
 
     return { slots };

@@ -354,8 +354,7 @@ function TemplateManagerPage() {
   return (
     <div className="space-y-6">
       <ParentPageHeader
-        eyebrow="Template Manager"
-        title="Assignment Templates"
+        title="Templates"
         description="Save your best assignment setups once, then spin up polished new assignments in one click."
         action={(
           <Link
@@ -367,7 +366,7 @@ function TemplateManagerPage() {
         )}
       />
 
-      <section className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+      <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm orca-glass-panel">
         <div className="mt-5 grid gap-3 md:grid-cols-3">
           <label className="block space-y-1">
             <span className="text-xs font-semibold uppercase tracking-wide text-slate-600">Target class</span>
@@ -456,7 +455,7 @@ function TemplateManagerPage() {
         {error ? <p className="mt-2 text-sm font-medium text-rose-700">{error}</p> : null}
       </section>
 
-      <section className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+      <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm orca-glass-panel">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-lg font-semibold text-slate-900">Templates</h2>
           <p className="text-xs text-slate-500">{filteredTemplates.length} shown</p>
@@ -496,7 +495,7 @@ function TemplateManagerPage() {
         </div>
 
         {filteredTemplates.length === 0 ? (
-          <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-sm text-slate-600">
+          <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-600">
             No templates match your filters.
           </div>
         ) : (
@@ -507,7 +506,7 @@ function TemplateManagerPage() {
               const busy = workingTemplateId === template.id;
 
               return (
-                <article key={template.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <article key={template.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm orca-glass-panel">
                   <div className="flex items-center justify-between gap-2">
                     <label className="inline-flex items-center gap-2 text-xs text-slate-600">
                       <input
@@ -752,12 +751,12 @@ function TemplateManagerPage() {
             <div className="mt-6 space-y-3">
               <h4 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Content</h4>
               {previewTarget.contentType === "text" || previewTarget.contentType === "report" ? (
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-800">
+                <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-800">
                   {previewTarget.contentRef ? <RichContent html={previewTarget.contentRef} /> : <p>No content.</p>}
                 </div>
               ) : null}
               {previewTarget.contentType === "url" ? (
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-800">
+                <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-800">
                   {previewTarget.contentRef ? (
                     <a href={previewTarget.contentRef} target="_blank" rel="noreferrer" className="text-cyan-700 hover:underline">
                       {previewTarget.contentRef}
@@ -768,7 +767,7 @@ function TemplateManagerPage() {
                 </div>
               ) : null}
               {previewTarget.contentType === "quiz" ? (
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-800">
+                <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-800">
                   {(() => {
                     const payload = parseJson<QuizPayloadPreview>(previewTarget.contentRef);
                     const questions = payload?.questions ?? [];
@@ -793,7 +792,7 @@ function TemplateManagerPage() {
                 </div>
               ) : null}
               {previewTarget.contentType === "essay_questions" ? (
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-800">
+                <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-800">
                   {(() => {
                     const payload = parseJson<EssayPayloadPreview>(previewTarget.contentRef);
                     const questions = payload?.questions ?? [];
@@ -811,7 +810,7 @@ function TemplateManagerPage() {
                 </div>
               ) : null}
               {previewTarget.contentType === "file" || previewTarget.contentType === "video" ? (
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-700">
                   <p>This template uses structured content.</p>
                   <p className="mt-1 break-all text-xs text-slate-500">{previewTarget.contentRef ?? "No content reference set."}</p>
                 </div>

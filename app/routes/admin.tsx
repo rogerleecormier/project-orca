@@ -99,7 +99,6 @@ function AdminConsolePage() {
   return (
     <div className="space-y-6">
       <ParentPageHeader
-        eyebrow="Admin Console"
         title={data.organization?.name ?? "Home Pod"}
         description="Toggle which parent accounts have admin access to menus and management views."
       />

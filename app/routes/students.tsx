@@ -193,7 +193,7 @@ function StudentsPage() {
   return (
     <div className="space-y-6">
       <ParentPageHeader
-        title="Manage Students"
+        title="Students"
         description="Add new student profiles and update existing student records."
         action={(
           <button

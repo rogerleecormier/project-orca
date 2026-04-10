@@ -71,7 +71,7 @@ function TreeSection({ tree }: { tree: TreeRow }) {
   const totalCount = tree.nodes.length;
 
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white/90 shadow-sm overflow-hidden">
+    <section className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden orca-glass-panel">
       <button
         type="button"
         onClick={() => setCollapsed((c) => !c)}
