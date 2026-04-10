@@ -7,7 +7,7 @@ import {
   getWeekPlan,
   saveWeekPlan,
 } from "../server/functions";
-import { OrcaMark } from "../components/icons/orca-mark";
+import { ParentPageHeader } from "../components/parent-page-header";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -459,19 +459,10 @@ function PlannerPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <section className="orca-hero orca-wave rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
-        <p className="text-xs uppercase tracking-[0.2em] text-cyan-700">Week Planner</p>
-        <div className="mt-2 flex items-center gap-3">
-          <span className="orca-icon-chip" aria-hidden="true">
-            <OrcaMark className="h-6 w-6" alt="" />
-          </span>
-          <h1 className="text-2xl font-semibold text-slate-900">Schedule This Week</h1>
-        </div>
-        <p className="mt-1 text-sm text-slate-600">
-          Drag assignments onto each day. Use AI to auto-balance the week.
-        </p>
-      </section>
+      <ParentPageHeader
+        title="Week Planner"
+        description="Drag assignments onto each day, then use AI to balance the week for a smoother workload."
+      />
 
       {/* Controls */}
       <section className="rounded-2xl border border-slate-200 bg-white/90 px-6 py-4 shadow-sm">

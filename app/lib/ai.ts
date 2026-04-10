@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { z } from "zod";
 
-const DEFAULT_LLM_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+const DEFAULT_LLM_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
 
 export type YoutubeVideo = {
   videoId: string;
@@ -860,10 +860,25 @@ export async function generateWeekPlanWithAI(input: {
 // ── Skill tree layout ─────────────────────────────────────────────────────────
 
 /**
- * Structured web layout for skill graphs.
- * Keeps the core path readable through the center, fans specialization
- * branches into side lanes, and separates nodes by depth so the result reads
- * like an intentional web instead of a physics pile-up.
+ * Spine-first hierarchical layout — PoE road style.
+ *
+ * Strategy:
+ *   1. Identify the PRIMARY SPINE: the longest chain of required-edge nodes
+ *      from root to terminal boss. This runs straight down the center.
+ *   2. All other nodes are BRANCHES: fan left/right from their spine anchor.
+ *      Branches that merge back to the spine (bonus edges) are allowed.
+ *   3. Layers (rows) are assigned by longest-path depth from any root.
+ *   4. Within each layer: spine nodes occupy the center column (X=0 offset).
+ *      Branch subtrees are placed using Reingold-Tilford on each side,
+ *      alternating L/R so they never overlap.
+ *   5. Minimum horizontal gap between any two nodes in the same layer is
+ *      enforced globally after placement.
+ *   6. Fork nodes (decision points) are core spine nodes that split into
+ *      2+ core continuation choices. Optional specialization branches do not
+ *      count as forks.
+ *
+ * Result: center spine flows straight down; branches spread cleanly
+ * left and right like roads off a highway — no edge crossings.
  */
 export function layoutForceDirected(
   nodes: Array<{
@@ -886,433 +901,303 @@ export function layoutForceDirected(
 ): Map<string, { x: number; y: number }> {
   if (nodes.length === 0) return new Map();
 
-  const width = options?.width ?? 1200;
-  const height = options?.height ?? 900;
-  const minNodeDistance = options?.minNodeDistance ?? 86;
-  const centerX = width / 2;
-  const sidePadding = 90;
-  const topPadding = 96;
-  const bottomPadding = 96;
-  const coreWave = Math.min(90, width * 0.07);
-  const coreSpread = Math.max(minNodeDistance * 1.7, 138);
-  const layerGap = Math.max(
-    78,
-    Math.min(128, (height - topPadding - bottomPadding) / Math.max(1, nodes.length / 4)),
-  );
-  const branchLaneGap = Math.max(minNodeDistance * 1.45, 128);
-  const branchOutwardStep = Math.max(minNodeDistance * 0.95, 84);
+  const W         = options?.width  ?? 1800;
+  const H         = options?.height ?? 1400;
+  const NODE_SEP  = Math.max(options?.minNodeDistance ?? 130, 130); // horizontal gap between same-layer nodes
+  const RANK_SEP  = 150;  // vertical gap between layers (spine)
+  const BRANCH_SEP = 110; // tighter vertical gap within branch subtrees
+  const FORK_EXTRA = 40;  // extra Y gap before fork decision points
+  const PAD_X     = 100;
+  const PAD_Y     = 100;
+  const CENTER_X  = W / 2;
 
-  const nodeMap = new Map(nodes.map((node) => [node.id, node]));
-  const inputOrder = new Map(nodes.map((node, index) => [node.id, index]));
-  const pos = new Map<string, { x: number; y: number }>();
+  const nodeMap    = new Map(nodes.map((n) => [n.id, n]));
+  const inputOrder = new Map(nodes.map((n, i) => [n.id, i]));
 
-  const clusterOf = (id: string) =>
-    nodeMap.get(id)?.cluster === "specialization" ? "specialization" : "core";
-
-  const depthMemo = new Map<string, number>();
-  const depthStack = new Set<string>();
-  const getDepth = (id: string): number => {
-    const cached = depthMemo.get(id);
-    if (typeof cached === "number") return cached;
-
+  // ── Layer assignment (longest path from root, cycle-safe) ───────────────────
+  const layerOf  = new Map<string, number>();
+  const visiting = new Set<string>();
+  const computeLayer = (id: string): number => {
+    if (layerOf.has(id)) return layerOf.get(id)!;
+    if (visiting.has(id)) return 0;
+    visiting.add(id);
     const node = nodeMap.get(id);
-    if (!node) return 0;
-    if (depthStack.has(id)) return 0;
-
-    depthStack.add(id);
-    const prereqDepths = node.prerequisites
-      .filter((prereqId) => nodeMap.has(prereqId))
-      .map((prereqId) => getDepth(prereqId) + 1);
-    const derivedDepth = prereqDepths.length > 0 ? Math.max(...prereqDepths) : 0;
-    const explicitDepth =
-      typeof node.depth === "number" && Number.isFinite(node.depth) ? Math.max(0, node.depth) : null;
-    const resolvedDepth = explicitDepth === null ? derivedDepth : Math.max(explicitDepth, derivedDepth);
-    depthStack.delete(id);
-    depthMemo.set(id, resolvedDepth);
-    return resolvedDepth;
+    const prereqs = (node?.prerequisites ?? []).filter((p) => nodeMap.has(p));
+    const l = prereqs.length === 0 ? 0 : Math.max(...prereqs.map((p) => computeLayer(p) + 1));
+    visiting.delete(id);
+    layerOf.set(id, l);
+    return l;
   };
+  for (const n of nodes) computeLayer(n.id);
 
-  const maxDepth = Math.max(0, ...nodes.map((node) => getDepth(node.id)));
-  const resolvedLayerGap = Math.max(
-    78,
-    Math.min(128, (height - topPadding - bottomPadding) / Math.max(1, maxDepth + 1)),
-  );
-
-  const choosePrimaryParent = (nodeId: string): string | null => {
-    const node = nodeMap.get(nodeId);
-    if (!node) return null;
-
-    const candidates = node.prerequisites.filter((prereqId) => nodeMap.has(prereqId));
-    if (candidates.length === 0) return null;
-
-    return [...candidates].sort((a, b) => {
-      const clusterPenaltyA = clusterOf(a) === clusterOf(nodeId) ? 0 : 1;
-      const clusterPenaltyB = clusterOf(b) === clusterOf(nodeId) ? 0 : 1;
-      if (clusterPenaltyA !== clusterPenaltyB) return clusterPenaltyA - clusterPenaltyB;
-
-      const depthA = getDepth(a);
-      const depthB = getDepth(b);
-      if (depthA !== depthB) return depthB - depthA;
-
-      return (inputOrder.get(a) ?? 0) - (inputOrder.get(b) ?? 0);
-    })[0] ?? null;
-  };
-
-  const primaryParent = new Map<string, string | null>();
-  for (const node of nodes) {
-    primaryParent.set(node.id, choosePrimaryParent(node.id));
-  }
-
-  const primaryChildren = new Map<string, string[]>();
-  for (const node of nodes) primaryChildren.set(node.id, []);
-  for (const node of nodes) {
-    const parentId = primaryParent.get(node.id);
-    if (!parentId) continue;
-    const existing = primaryChildren.get(parentId);
-    if (existing) existing.push(node.id);
-  }
-  for (const [parentId, childIds] of primaryChildren) {
-    childIds.sort((a, b) => {
-      const clusterPenaltyA = clusterOf(a) === "core" ? 0 : 1;
-      const clusterPenaltyB = clusterOf(b) === "core" ? 0 : 1;
-      if (clusterPenaltyA !== clusterPenaltyB) return clusterPenaltyA - clusterPenaltyB;
-      const depthDelta = getDepth(a) - getDepth(b);
-      if (depthDelta !== 0) return depthDelta;
-      return (inputOrder.get(a) ?? 0) - (inputOrder.get(b) ?? 0);
-    });
-    primaryChildren.set(parentId, childIds);
-  }
-
-  const anchorCoreMemo = new Map<string, string | null>();
-  const getAnchorCore = (id: string): string | null => {
-    if (anchorCoreMemo.has(id)) return anchorCoreMemo.get(id) ?? null;
-
-    if (clusterOf(id) === "core") {
-      anchorCoreMemo.set(id, id);
-      return id;
-    }
-
-    const node = nodeMap.get(id);
-    if (!node) {
-      anchorCoreMemo.set(id, null);
-      return null;
-    }
-
-    const directCoreParent = node.prerequisites.find((prereqId) => clusterOf(prereqId) === "core") ?? null;
-    if (directCoreParent) {
-      anchorCoreMemo.set(id, directCoreParent);
-      return directCoreParent;
-    }
-
-    const primary = primaryParent.get(id);
-    const anchor = primary ? getAnchorCore(primary) : null;
-    anchorCoreMemo.set(id, anchor);
-    return anchor;
-  };
-
-  const branchRootMemo = new Map<string, string>();
-  const getBranchRoot = (id: string): string => {
-    const cached = branchRootMemo.get(id);
-    if (cached) return cached;
-
-    if (clusterOf(id) !== "specialization") {
-      branchRootMemo.set(id, id);
-      return id;
-    }
-
-    const primary = primaryParent.get(id);
-    if (!primary || clusterOf(primary) !== "specialization") {
-      branchRootMemo.set(id, id);
-      return id;
-    }
-
-    const root = getBranchRoot(primary);
-    branchRootMemo.set(id, root);
-    return root;
-  };
-
-  const clampX = (value: number) => Math.max(sidePadding, Math.min(width - sidePadding, value));
-  const clampY = (value: number) => Math.max(topPadding - 24, Math.min(height - bottomPadding + 24, value));
-
-  const branchRootsByAnchor = new Map<string, string[]>();
-  for (const node of nodes) {
-    if (clusterOf(node.id) !== "specialization") continue;
-    const branchRootId = getBranchRoot(node.id);
-    if (branchRootId !== node.id) continue;
-    const anchorId = getAnchorCore(node.id) ?? nodes[0]?.id;
-    if (!anchorId) continue;
-    const existing = branchRootsByAnchor.get(anchorId) ?? [];
-    existing.push(branchRootId);
-    branchRootsByAnchor.set(anchorId, existing);
-  }
-
-  const branchLane = new Map<string, number>();
-  const laneFromIndex = (index: number) => {
-    const magnitude = Math.floor(index / 2) + 1;
-    return index % 2 === 0 ? magnitude : -magnitude;
-  };
-  for (const [anchorId, branchRoots] of branchRootsByAnchor) {
-    const anchorPos = pos.get(anchorId);
-    const uniqueRoots = Array.from(new Set(branchRoots)).sort(
-      (a, b) => (inputOrder.get(a) ?? 0) - (inputOrder.get(b) ?? 0),
-    );
-    uniqueRoots.forEach((branchRootId, index) => {
-      if (uniqueRoots.length === 1) {
-        const anchorBias =
-          anchorPos
-            ? anchorPos.x >= centerX ? -1 : 1
-            : (inputOrder.get(anchorId) ?? 0) % 2 === 0 ? 1 : -1;
-        branchLane.set(branchRootId, anchorBias);
-        return;
-      }
-      branchLane.set(branchRootId, laneFromIndex(index));
-    });
-  }
-
-  const coreChildrenOf = (id: string) =>
-    (primaryChildren.get(id) ?? []).filter((childId) => clusterOf(childId) === "core");
-  const specChildrenOf = (id: string) =>
-    (primaryChildren.get(id) ?? []).filter((childId) => clusterOf(childId) === "specialization");
-
-  const coreRoots = nodes
-    .filter((node) => clusterOf(node.id) === "core")
-    .filter((node) => {
-      const parentId = primaryParent.get(node.id);
-      return !parentId || clusterOf(parentId) !== "core";
-    })
-    .sort((a, b) => {
-      const depthDelta = getDepth(a.id) - getDepth(b.id);
-      if (depthDelta !== 0) return depthDelta;
-      return (inputOrder.get(a.id) ?? 0) - (inputOrder.get(b.id) ?? 0);
-    })
-    .map((node) => node.id);
-
-  const coreLeafWeightMemo = new Map<string, number>();
-  const getCoreLeafWeight = (id: string): number => {
-    const cached = coreLeafWeightMemo.get(id);
-    if (typeof cached === "number") return cached;
-    const children = coreChildrenOf(id);
-    const weight = children.length === 0
-      ? 1
-      : children.reduce((sum, childId) => sum + getCoreLeafWeight(childId), 0);
-    coreLeafWeightMemo.set(id, weight);
-    return weight;
-  };
-
-  const placeCoreNode = (id: string, left: number, right: number) => {
-    const depth = getDepth(id);
-    const children = coreChildrenOf(id);
-    const y = topPadding + depth * resolvedLayerGap;
-    let x = (left + right) / 2;
-    const parentId = primaryParent.get(id);
-    const parentPos = parentId ? pos.get(parentId) : undefined;
-
-    if (parentPos && children.length <= 1) {
-      const desired = x;
-      const maxShift = Math.max(coreSpread * 0.45, 72);
-      x = parentPos.x + Math.max(-maxShift, Math.min(maxShift, desired - parentPos.x));
-    }
-
-    if (children.length > 1) {
-      x += Math.sin(depth * 0.55) * Math.min(24, (right - left) * 0.04);
-    }
-
-    pos.set(id, { x: clampX(x), y: clampY(y) });
-    if (children.length === 0) return;
-
-    const totalWeight = children.reduce((sum, childId) => sum + getCoreLeafWeight(childId), 0);
-    let cursor = left;
-    for (const childId of children) {
-      const weight = getCoreLeafWeight(childId);
-      const span = (right - left) * (weight / totalWeight);
-      placeCoreNode(childId, cursor, cursor + span);
-      cursor += span;
-    }
-  };
-
-  const effectiveCoreRoots = coreRoots.length > 0 ? coreRoots : [nodes[0]!.id];
-  const totalRootWeight = effectiveCoreRoots.reduce((sum, id) => sum + getCoreLeafWeight(id), 0);
-  const usableWidth = Math.max(320, width - sidePadding * 2);
-  let rootCursor = sidePadding;
-  for (const rootId of effectiveCoreRoots) {
-    const span = usableWidth * (getCoreLeafWeight(rootId) / Math.max(1, totalRootWeight));
-    placeCoreNode(rootId, rootCursor, rootCursor + span);
-    rootCursor += span;
-  }
-
-  const orderedSpecNodes = [...nodes].sort((a, b) => {
-    const depthDelta = getDepth(a.id) - getDepth(b.id);
-    if (depthDelta !== 0) return depthDelta;
-    return (inputOrder.get(a.id) ?? 0) - (inputOrder.get(b.id) ?? 0);
-  });
-
-  for (const node of orderedSpecNodes) {
-    if (clusterOf(node.id) !== "specialization") continue;
-
-    const parentId = primaryParent.get(node.id);
-    const anchorId = getAnchorCore(node.id) ?? parentId ?? effectiveCoreRoots[0] ?? node.id;
-    const anchorDepth = getDepth(anchorId);
-    const depth = getDepth(node.id);
-    const localDepth = Math.max(1, depth - anchorDepth);
-    const anchorPos =
-      pos.get(anchorId) ?? {
-        x: centerX,
-        y: topPadding + anchorDepth * resolvedLayerGap,
-      };
-    const parentPos = parentId ? pos.get(parentId) ?? anchorPos : anchorPos;
-
-    const branchRootId = getBranchRoot(node.id);
-    const lane = branchLane.get(branchRootId) ?? 1;
-    const laneDistance = Math.abs(lane);
-    const side = lane < 0 ? -1 : 1;
-
-    const siblingIds =
-      parentId && clusterOf(parentId) === "specialization"
-        ? specChildrenOf(parentId)
-        : specChildrenOf(anchorId);
-    const siblingIndex = Math.max(0, siblingIds.indexOf(node.id));
-    const centeredSiblingOffset =
-      siblingIds.length <= 1
-        ? 0
-        : (siblingIndex - (siblingIds.length - 1) / 2) * Math.max(minNodeDistance * 0.72, 56);
-
-    let x: number;
-    let y: number;
-
-    if (!parentId || clusterOf(parentId) === "core") {
-      x = anchorPos.x + side * (laneDistance * branchLaneGap + Math.max(0, localDepth - 1) * (branchOutwardStep * 0.42));
-      y = anchorPos.y + Math.max(resolvedLayerGap * 0.9, 78);
-      x += centeredSiblingOffset * 0.8;
+  // ── Spanning tree (one primary parent per child) ─────────────────────────────
+  const parent   = new Map<string, string | null>();
+  const children = new Map<string, string[]>();
+  for (const n of nodes) children.set(n.id, []);
+  for (const n of nodes) {
+    const prereqs = n.prerequisites.filter((p) => nodeMap.has(p));
+    if (prereqs.length === 0) {
+      parent.set(n.id, null);
     } else {
-      x = parentPos.x + side * (branchOutwardStep * 0.58 + (laneDistance - 1) * 18);
-      y = parentPos.y + resolvedLayerGap * 0.86;
-      x += centeredSiblingOffset * 0.4;
+      const best = prereqs.reduce((a, b) => (layerOf.get(a)! >= layerOf.get(b)! ? a : b));
+      parent.set(n.id, best);
+      children.get(best)!.push(n.id);
     }
+  }
+  for (const [, kids] of children) {
+    kids.sort((a, b) => (inputOrder.get(a) ?? 0) - (inputOrder.get(b) ?? 0));
+  }
 
-    pos.set(node.id, {
-      x: clampX(x),
-      y: clampY(y),
+  // ── Identify the primary spine ───────────────────────────────────────────────
+  // Spine = the longest path of "core" (non-elective, non-specialization) nodes
+  // from root to deepest boss/milestone. We pick it greedily:
+  //   start at the root(s), always follow the child on the primary chain
+  //   (prefer nodeType boss > milestone > lesson > branch, then deepest).
+
+  const roots = nodes
+    .filter((n) => parent.get(n.id) === null)
+    .sort((a, b) => (inputOrder.get(a.id) ?? 0) - (inputOrder.get(b.id) ?? 0))
+    .map((n) => n.id);
+
+  const NODE_TYPE_RANK: Record<string, number> = {
+    boss: 4, milestone: 3, lesson: 2, branch: 1, elective: 0,
+  };
+
+  // Follow the "most important" child at each step to mark the spine
+  const spineSet = new Set<string>();
+  const markSpine = (id: string) => {
+    spineSet.add(id);
+    const kids = children.get(id) ?? [];
+    if (kids.length === 0) return;
+    // Pick the child with highest type rank, then deepest subtree, then input order
+    const subtreeDepth = (nid: string): number => {
+      const kids2 = children.get(nid) ?? [];
+      return kids2.length === 0 ? layerOf.get(nid)! : Math.max(...kids2.map(subtreeDepth));
+    };
+    const best = [...kids].sort((a, b) => {
+      const ra = NODE_TYPE_RANK[nodeMap.get(a)?.nodeType ?? "lesson"] ?? 2;
+      const rb = NODE_TYPE_RANK[nodeMap.get(b)?.nodeType ?? "lesson"] ?? 2;
+      if (ra !== rb) return rb - ra;
+      return subtreeDepth(b) - subtreeDepth(a);
+    })[0]!;
+    markSpine(best);
+  };
+  // Start spine from the deepest root (if multiple trees)
+  const primaryRoot = roots.length === 1 ? roots[0]! :
+    roots.reduce((a, b) => {
+      const da = Math.max(...[...layerOf.entries()].filter(([id]) => {
+        // check if a is ancestor
+        const check = (nid: string): boolean => nid === a || (children.get(nid) ?? []).some(check);
+        return check(id); // rough - just use layer
+      }).map(([, l]) => l), 0);
+      return da >= 0 ? a : b;
     });
+  markSpine(primaryRoot);
+
+  // ── Identify fork nodes (spine nodes with 2+ core continuation children) ─────
+  // These are true "choose a lane" decisions in the main course flow.
+  // Optional specialization branches should never be marked as forks.
+  // (We expose this via a separate exported map attached to the return — but since
+  //  we return Map<string,{x,y}>, we smuggle it as optional property.)
+  const isCorePathNode = (id: string) => {
+    const node = nodeMap.get(id);
+    if (!node) return false;
+    return node.cluster !== "specialization" && node.nodeType !== "elective";
+  };
+  const forkSet = new Set<string>();
+  for (const id of spineSet) {
+    const kids = children.get(id) ?? [];
+    const coreChoiceKids = kids.filter((kid) => isCorePathNode(kid));
+    if (coreChoiceKids.length >= 2) forkSet.add(id);
   }
 
-  const leafChildrenOf = (id: string) =>
-    (primaryChildren.get(id) ?? []).filter((childId) => (primaryChildren.get(childId)?.length ?? 0) === 0);
+  // ── Y assignment ─────────────────────────────────────────────────────────────
+  // Spine nodes are placed at RANK_SEP intervals.
+  // Branch nodes get BRANCH_SEP intervals from their spine anchor.
+  const finalY = new Map<string, number>();
 
-  const hubNodeIds = nodes
-    .filter((node) => {
-      const leafChildren = leafChildrenOf(node.id).filter((childId) => clusterOf(childId) === "specialization");
-      return leafChildren.length >= 3 || (node.nodeType === "boss" && leafChildren.length >= 2);
-    })
-    .sort((a, b) => getDepth(a.id) - getDepth(b.id))
-    .map((node) => node.id);
-
-  for (const hubId of hubNodeIds) {
-    const hubPos = pos.get(hubId);
-    if (!hubPos) continue;
-
-    const satellites = leafChildrenOf(hubId)
-      .filter((childId) => clusterOf(childId) === "specialization")
-      .sort((a, b) => (inputOrder.get(a) ?? 0) - (inputOrder.get(b) ?? 0));
-    if (satellites.length < 2) continue;
-
-    const sideBias = hubPos.x < centerX - 60 ? -1 : hubPos.x > centerX + 60 ? 1 : 0;
-    const radius = Math.max(minNodeDistance * 1.4, 116);
-    const startAngle = sideBias < 0 ? Math.PI * 0.55 : sideBias > 0 ? Math.PI * 0.05 : Math.PI * 0.18;
-    const endAngle = sideBias < 0 ? Math.PI * 1.05 : sideBias > 0 ? Math.PI * 0.55 : Math.PI * 0.82;
-
-    satellites.forEach((satelliteId, index) => {
-      const angle =
-        satellites.length === 1
-          ? (startAngle + endAngle) / 2
-          : startAngle + ((endAngle - startAngle) * index) / (satellites.length - 1);
-      pos.set(satelliteId, {
-        x: clampX(hubPos.x + Math.cos(angle) * radius),
-        y: clampY(hubPos.y + Math.sin(angle) * radius),
-      });
-    });
-  }
-
-  const nodesByDepth = new Map<number, string[]>();
-  for (const node of nodes) {
-    const depth = getDepth(node.id);
-    const existing = nodesByDepth.get(depth) ?? [];
-    existing.push(node.id);
-    nodesByDepth.set(depth, existing);
-  }
-
-  const minimumHorizontalGap = Math.max(minNodeDistance * 1.28, 108);
-  const settleLayer = (depth: number) => {
-    const ids = nodesByDepth.get(depth);
-    if (!ids || ids.length <= 1) return;
-
-    const ordered = [...ids].sort((a, b) => (pos.get(a)?.x ?? 0) - (pos.get(b)?.x ?? 0));
-
-    for (let index = 1; index < ordered.length; index++) {
-      const prev = pos.get(ordered[index - 1]);
-      const current = pos.get(ordered[index]);
-      if (!prev || !current) continue;
-      const targetX = prev.x + minimumHorizontalGap;
-      if (current.x < targetX) current.x = targetX;
-    }
-
-    const last = pos.get(ordered[ordered.length - 1]);
-    if (last && last.x > width - sidePadding) {
-      const shift = last.x - (width - sidePadding);
-      for (const id of ordered) {
-        const point = pos.get(id);
-        if (point) point.x -= shift;
+  // First pass: assign Y to spine nodes
+  const spineNodes = [...spineSet].sort((a, b) => layerOf.get(a)! - layerOf.get(b)!);
+  let spineY = PAD_Y;
+  const spineLayerY = new Map<number, number>();
+  for (const id of spineNodes) {
+    const l = layerOf.get(id)!;
+    if (!spineLayerY.has(l)) {
+      if (spineLayerY.size > 0) {
+        spineY += forkSet.has(id) ? RANK_SEP + FORK_EXTRA : RANK_SEP;
       }
+      spineLayerY.set(l, spineY);
     }
+    finalY.set(id, spineLayerY.get(l)!);
+  }
 
-    const first = pos.get(ordered[0]);
-    if (first && first.x < sidePadding) {
-      const shift = sidePadding - first.x;
-      for (const id of ordered) {
-        const point = pos.get(id);
-        if (point) point.x += shift;
-      }
+  // Second pass: assign Y to branch nodes relative to their spine anchor
+  const getSpineAncestor = (id: string): string | null => {
+    if (spineSet.has(id)) return id;
+    const p = parent.get(id);
+    if (!p) return null;
+    return getSpineAncestor(p);
+  };
+
+  const assignBranchY = (id: string, baseY: number, depthFromAnchor: number) => {
+    if (finalY.has(id)) return;
+    const y = baseY + depthFromAnchor * BRANCH_SEP;
+    finalY.set(id, y);
+    for (const kid of children.get(id) ?? []) {
+      if (!spineSet.has(kid)) assignBranchY(kid, baseY, depthFromAnchor + 1);
     }
   };
 
-  for (let pass = 0; pass < 3; pass++) {
-    for (const depth of Array.from(nodesByDepth.keys()).sort((a, b) => a - b)) {
-      settleLayer(depth);
-    }
-  }
-
-  const allIds = nodes.map((node) => node.id);
-  for (let pass = 0; pass < 2; pass++) {
-    for (let i = 0; i < allIds.length; i++) {
-      for (let j = i + 1; j < allIds.length; j++) {
-        const a = pos.get(allIds[i]);
-        const b = pos.get(allIds[j]);
-        if (!a || !b) continue;
-
-        let dx = b.x - a.x;
-        let dy = b.y - a.y;
-        let dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist < 0.001) {
-          dx = 1;
-          dy = 0;
-          dist = 1;
-        }
-        if (dist >= minNodeDistance) continue;
-
-        const overlap = (minNodeDistance - dist) / 2;
-        const ux = dx / dist;
-        const uy = dy / dist;
-        a.x = clampX(a.x - ux * overlap);
-        a.y = clampY(a.y - uy * overlap);
-        b.x = clampX(b.x + ux * overlap);
-        b.y = clampY(b.y + uy * overlap);
+  for (const id of spineSet) {
+    const kids = children.get(id) ?? [];
+    for (const kid of kids) {
+      if (!spineSet.has(kid)) {
+        assignBranchY(kid, finalY.get(id)!, 1);
       }
     }
   }
+
+  // Handle any orphan non-spine nodes without a spine ancestor
+  for (const n of nodes) {
+    if (!finalY.has(n.id)) {
+      finalY.set(n.id, PAD_Y + layerOf.get(n.id)! * BRANCH_SEP);
+    }
+  }
+
+  // ── X assignment ─────────────────────────────────────────────────────────────
+  // Spine nodes sit at CENTER_X.
+  // Branch subtrees fan left/right from their spine anchor, alternating sides.
+  // We use a modified RT within each branch subtree, then translate to L/R.
+
+  const finalX = new Map<string, number>();
+
+  // Place all spine nodes at center
+  for (const id of spineSet) finalX.set(id, CENTER_X);
+
+  // For each spine node that has branch children, place those subtrees L/R
+  // Gather all branch roots per spine node, sort by input order
+  const placeBranchSubtree = (rootId: string, centerAnchorX: number, side: -1 | 1, levelOffset: number) => {
+    // Use a simple recursive width-first placement:
+    // compute the subtree width, then place root at centerAnchorX + side * offset
+
+    // Compute leaf count (subtree width)
+    const leafCount = (id: string): number => {
+      const kids = children.get(id) ?? [];
+      const nonSpineKids = kids.filter((k) => !spineSet.has(k));
+      if (nonSpineKids.length === 0) return 1;
+      return nonSpineKids.reduce((s, k) => s + leafCount(k), 0);
+    };
+
+    // Place a branch subtree rooted at `id` with the given center X
+    const placeSubtree = (id: string, cx: number) => {
+      if (finalX.has(id)) return; // don't overwrite spine nodes
+      finalX.set(id, cx);
+      const kids = (children.get(id) ?? []).filter((k) => !spineSet.has(k));
+      if (kids.length === 0) return;
+      const totalLeaves = kids.reduce((s, k) => s + leafCount(k), 0);
+      const totalWidth = (totalLeaves - 1) * NODE_SEP;
+      let cursor = cx - totalWidth / 2;
+      for (const kid of kids) {
+        const kidLeaves = leafCount(kid);
+        const kidCX = cursor + (kidLeaves - 1) * NODE_SEP / 2;
+        placeSubtree(kid, kidCX);
+        cursor += kidLeaves * NODE_SEP;
+      }
+    };
+
+    const lc = leafCount(rootId);
+    // Offset from spine: levelOffset * NODE_SEP, plus subtree half-width to avoid overlap with spine
+    const halfWidth = ((lc - 1) * NODE_SEP) / 2;
+    const rootX = centerAnchorX + side * (levelOffset * NODE_SEP + halfWidth + NODE_SEP * 0.6);
+    placeSubtree(rootId, rootX);
+  };
+
+  for (const spineId of spineSet) {
+    const kids = children.get(spineId) ?? [];
+    const branchKids = kids.filter((k) => !spineSet.has(k));
+    if (branchKids.length === 0) continue;
+
+    // Alternate L/R: 0→right, 1→left, 2→right, ...
+    branchKids.forEach((kid, idx) => {
+      const side: -1 | 1 = idx % 2 === 0 ? 1 : -1;
+      const levelOffset = Math.floor(idx / 2) + 1;
+      placeBranchSubtree(kid, CENTER_X, side, levelOffset);
+    });
+  }
+
+  // Handle any unplaced nodes
+  let orphanX = CENTER_X + NODE_SEP * 3;
+  for (const n of nodes) {
+    if (!finalX.has(n.id)) {
+      finalX.set(n.id, orphanX);
+      orphanX += NODE_SEP;
+    }
+  }
+
+  // ── Global layer separation enforcement ──────────────────────────────────────
+  // Guarantee no two nodes in the same layer are closer than NODE_SEP horizontally.
+  const byY = new Map<number, string[]>();
+  for (const n of nodes) {
+    const y = finalY.get(n.id)!;
+    const bucket = byY.get(y) ?? [];
+    bucket.push(n.id);
+    byY.set(y, bucket);
+  }
+
+  for (const [, ids] of byY) {
+    if (ids.length <= 1) continue;
+    ids.sort((a, b) => finalX.get(a)! - finalX.get(b)!);
+    // Forward pass: push right
+    for (let i = 1; i < ids.length; i++) {
+      const prev = finalX.get(ids[i - 1]!)!;
+      const cur  = finalX.get(ids[i]!)!;
+      if (cur - prev < NODE_SEP) finalX.set(ids[i]!, prev + NODE_SEP);
+    }
+    // Re-center the whole layer around the spine nodes in this layer if any
+    const spineInLayer = ids.filter((id) => spineSet.has(id));
+    if (spineInLayer.length > 0) {
+      // find where spine sits now vs where it should (CENTER_X)
+      const spineX = finalX.get(spineInLayer[0]!)!;
+      const shift  = CENTER_X - spineX;
+      if (Math.abs(shift) > 1) {
+        for (const id of ids) {
+          finalX.set(id, finalX.get(id)! + shift);
+        }
+      }
+    }
+  }
+
+  // ── Normalize so everything fits on canvas ───────────────────────────────────
+  const allX  = [...finalX.values()];
+  const allY  = [...finalY.values()];
+  const minX  = Math.min(...allX);
+  const maxX  = Math.max(...allX);
+  const minY  = Math.min(...allY);
+  const maxY  = Math.max(...allY);
+  const spanX = maxX - minX || 1;
+  const spanY = maxY - minY || 1;
+
+  const usableW = W - PAD_X * 2;
+  const usableH = H - PAD_Y * 2;
+
+  // Only scale down if it doesn't fit; never scale up (would make it too sparse)
+  const scaleX = spanX > usableW ? usableW / spanX : 1;
+  const scaleY = spanY > usableH ? usableH / spanY : 1;
+
+  // Re-center after scaling
+  const scaledSpanX = spanX * scaleX;
+  const offsetX     = PAD_X + (usableW - scaledSpanX) / 2;
 
   const result = new Map<string, { x: number; y: number }>();
-  for (const [id, p] of pos) {
-    result.set(id, { x: Math.round(p.x), y: Math.round(p.y) });
+  for (const n of nodes) {
+    const rx = (finalX.get(n.id)! - minX) * scaleX + offsetX;
+    const ry = (finalY.get(n.id)! - minY) * scaleY + PAD_Y;
+    result.set(n.id, { x: Math.round(rx), y: Math.round(ry) });
   }
+
+  // Tag fork nodes on the result map so the caller can mark them
+  (result as Map<string, { x: number; y: number }> & { forkIds?: Set<string> }).forkIds = forkSet;
+
   return result;
 }
 
@@ -1550,6 +1435,8 @@ export async function generateCurriculumTree(input: {
     "PREREQUISITES RULES:",
     "   - Most non-root nodes list exactly 1 prerequisite that already exists in the array.",
     "   - A small number of core rejoin nodes may list 2 local prerequisites if one route reconnects into the core scaffold.",
+    "   - Main spine/core roads should be the required path. Specialization branches are optional by default.",
+    "   - Only create a true core fork when there are 2-4 comparable path choices; if you do, keep those paths balanced in node count, rigor, and XP so one is not an obvious shortcut.",
     "   - A node may branch to several children, but keep connections local and contextually related.",
     "   - NO cycles. Prerequisites must only reference nodes with lower tempId numbers.",
     "",
@@ -1689,6 +1576,8 @@ export async function reweaveCurriculumTree(input: {
     "8. No cycles. Any prerequisite must reference an earlier tempId.",
     "9. Preserve major fundamentals on the core scaffold. Use specialization branches for choice, enrichment, and side quests.",
     "10. Prefer milestone/boss/branch-like nodes as hubs or important scaffold anchors when appropriate.",
+    "11. Treat the main spine as required. Specialization branches stay optional unless you intentionally create a balanced 2-4 lane core fork.",
+    "12. If you create a true core fork, keep the competing lanes comparable in length and rigor so no route is the obvious shortcut.",
     "",
     "Return JSON array with this exact shape:",
     JSON.stringify({
@@ -1823,13 +1712,18 @@ export async function generateCurriculumSpine(input: {
   gradeLevel: string;
   courseLength: string;
   interests: string;
+  ageYears?: number;
+  focusSteering?: string;
 }): Promise<CurriculumNodeSuggestion[]> {
   const weeks = courseLengthToWeeks(input.courseLength);
   const { chapterCount } = spineScale(weeks);
+  const calibration = gradeCalibrationContext(input.gradeLevel, input.ageYears);
 
   const prompt = [
     `You are building a curriculum spine for ${input.subject}, grade ${input.gradeLevel}, ${input.courseLength}.`,
     input.interests ? `Student interests: ${input.interests}.` : "",
+    input.focusSteering ? `Curriculum focus/steering: ${input.focusSteering} — weave relevant examples and contexts into chapter titles and descriptions.` : "",
+    `Grade-level calibration: ${calibration}`,
     "",
     `Generate a JSON array of ${chapterCount + 3} nodes. Rules:`,
     "- spine_0: the course root (depth 0, prerequisites [], nodeType 'milestone', colorRamp 'teal', xpReward 100, isRequired true)",
@@ -1968,13 +1862,15 @@ export async function generateCurriculumWebFromSpine(input: {
     "  Each cluster uses ONE consistent colorRamp (different cluster = different ramp).",
     "  XP: hub 200–350, satellites 150–450.",
     "",
-    `━━━ ZONE C — STUDENT CHOICE BRANCHES (~${choiceCount} nodes) ━━━`,
+    `━━━ ZONE C — STUDENT CHOICE FORKS (~${choiceCount} nodes) ━━━`,
     "  cluster='core', isRequired=false, nodeType='lesson', colorRamp='blue' or 'teal'",
     `  At ${Math.max(1, Math.floor(scale.choiceCount / 6))} spine milestone(s), offer TWO alternate approach paths:`,
     "    Path A: 3 lesson nodes (chain), prerequisite starts from the milestone.",
     "    Path B: 3 lesson nodes (chain), also starting from the same milestone.",
     "  The two paths cover the same content unit from different angles (e.g., visual vs. analytical, historical vs. applied).",
-    "  Student must complete ONE path to advance — but both are available.",
+    "  These are TRUE FORKS in the main course flow, not optional side quests.",
+    "  Keep the paths balanced: same number of nodes, similar XP totals, similar rigor, and comparable assignment weight so no path is the obvious shortcut.",
+    "  Student should be able to complete ONE path to advance, while the other path remains available later for extra XP.",
     "  Label clearly in description which path this belongs to (e.g., 'Path A: Visual approach').",
     "  XP: 150–300.",
     "",
@@ -2050,13 +1946,18 @@ export async function generateChapterCluster(input: {
   milestoneDescription: string;
   milestoneDepth: number;
   existingTitles: string[];
+  ageYears?: number;
+  focusSteering?: string;
 }): Promise<CurriculumNodeSuggestion[]> {
   const prefix = `ch_${input.milestoneId}`;
   const d = input.milestoneDepth + 1;
+  const calibration = gradeCalibrationContext(input.gradeLevel, input.ageYears);
 
   const prompt = [
     `You are building lesson nodes for a ${input.subject} curriculum, grade ${input.gradeLevel}.`,
     `Parent milestone: "${input.milestoneTitle}" — ${input.milestoneDescription}`,
+    input.focusSteering ? `Curriculum focus: ${input.focusSteering} — use relevant local examples where applicable.` : "",
+    `Grade-level calibration: ${calibration}`,
     ``,
     `Generate exactly 3 lesson nodes that teach the content of this milestone, as a learning chain.`,
     `TempId format: ${prefix}_0, ${prefix}_1, ${prefix}_2`,
@@ -2114,14 +2015,19 @@ export async function generateBranchCluster(input: {
   lessonDepth: number;
   milestoneTitle: string;
   existingTitles: string[];
+  ageYears?: number;
+  focusSteering?: string;
 }): Promise<CurriculumNodeSuggestion[]> {
   const prefix = `br_${input.lessonId}`;
   const d = input.lessonDepth + 1;
+  const calibration = gradeCalibrationContext(input.gradeLevel, input.ageYears);
 
   const prompt = [
     `You are adding optional exploration branches to a ${input.subject} curriculum, grade ${input.gradeLevel}.`,
     `The student just learned: "${input.lessonTitle}" — ${input.lessonDescription}`,
     `This is part of the unit: "${input.milestoneTitle}"`,
+    input.focusSteering ? `Curriculum focus: ${input.focusSteering} — connect branch topics to this theme where meaningful.` : "",
+    `Grade-level calibration: ${calibration}`,
     ``,
     `Generate exactly 2 elective nodes that let a student go DEEPER into this topic (optional enrichment).`,
     `TempId format: ${prefix}_0, ${prefix}_1`,
@@ -2213,6 +2119,9 @@ export async function generateAssignmentsForNode(input: {
   gradeLevel: string;
   node: { tempId: string; title: string; description: string; nodeType: string };
   prefs: AssignmentPrefs;
+  youtubeApiKey?: string;
+  ageYears?: number;
+  focusSteering?: string;
 }): Promise<GeneratedAssignment[]> {
   const { node, prefs } = input;
   const tasks: string[] = [];
@@ -2226,7 +2135,7 @@ export async function generateAssignmentsForNode(input: {
     // Chapter entry nodes — overview, activation, and chapter-level assessment.
     // Best practice: chapter openers include a "hook" to activate prior knowledge,
     // an overview of learning objectives, and 1-2 intro media before the first lesson.
-    tasks.push('1 chapter overview: contentType="text", contentRef=a well-structured 3-paragraph HTML chapter introduction using <p> tags (250-350 words): paragraph 1 hooks the student with a compelling question or real-world connection, paragraph 2 previews the key concepts and learning goals, paragraph 3 explains how this chapter connects to prior and upcoming learning. Title like "Chapter Intro: <topic>"');
+    tasks.push('1 chapter overview: contentType="text", contentRef=a detailed 5-paragraph HTML chapter introduction using <p> tags (500-700 words): paragraph 1 hooks the student with a compelling question or real-world connection, paragraph 2 builds essential background knowledge, paragraph 3 previews key concepts and learning goals, paragraph 4 explains why the topic matters in authentic contexts for this grade/age band, paragraph 5 connects to prior and upcoming learning. Keep depth high and grade-calibrated; do not oversimplify to be brief. Title like "Chapter Intro: <topic>"');
     if (prefs.chapterIntroVideo) {
       tasks.push('2 intro videos: contentType="video" — (1) a broad overview video (YouTube search query), title like "Watch: <topic> Overview"; (2) a more specific video connecting to the first key concept, title like "Watch: <topic> Introduction"');
     }
@@ -2246,28 +2155,28 @@ export async function generateAssignmentsForNode(input: {
     // Best practice (UbD, Bloom's Taxonomy): each lesson should include input (reading/video),
     // guided practice, and a formative check. 4-5 assignments per lesson is standard.
     if (prefs.readingPerNode) {
-      tasks.push('1 reading lesson: contentType="text", contentRef=a thorough 4-paragraph HTML reading passage using <p> tags (400-600 words): paragraph 1 introduces the concept with a relatable hook, paragraphs 2-3 explain the content clearly with examples appropriate to the grade level, paragraph 4 summarizes key takeaways and poses a thinking question. Title like "Reading: <topic>"');
+      tasks.push('1 reading lesson: contentType="text", contentRef=a thorough 6-paragraph HTML reading passage using <p> tags (700-950 words): paragraph 1 introduces the concept with a relatable hook, paragraphs 2-4 build deep conceptual understanding with multiple concrete examples and explicit vocabulary development for the grade level, paragraph 5 explains common misconceptions and clarifies them, paragraph 6 summarizes key takeaways and sets up follow-up synthesis. Prioritize depth and explanatory detail over brevity. Title like "Reading: <topic>"');
     }
     if (prefs.videosPerLesson > 0) {
       tasks.push(`${prefs.videosPerLesson} targeted video(s): contentType="video", contentRef=a specific YouTube search query for an educational video on this exact concept (not just the general topic), title like "Video: <topic>"`);
     }
     // Formative check — every lesson gets one regardless of chapter quiz setting;
     // this is the "exit ticket" equivalent that drives mastery-based progression
-    tasks.push('1 formative check quiz: contentType="quiz", contentRef=a JSON array of exactly 5 question objects [{"question":"...","options":["A","B","C","D"],"answer":"B"},...] that directly assesses understanding of THIS lesson\'s specific content — questions should test comprehension and application, not just recall. Title like "Check: <topic>"');
+    tasks.push('1 formative check quiz: contentType="quiz", contentRef=a JSON array of exactly 5 question objects [{"question":"...","options":["A","B","C","D"],"answer":"B"},...] that directly assesses understanding of THIS lesson\'s specific content — questions should require students to synthesize ideas from the reading and apply them, not just recall isolated facts. Title like "Check: <topic>"');
     // Practice activity — writing response to deepen understanding
-    tasks.push('1 practice activity: contentType="essay_questions", contentRef=a short-answer question (1-2 sentences) asking the student to explain, apply, or connect the concept in their own words — e.g., "Explain in your own words..." or "Give an example of...". Title like "Practice: <topic>"');
+    tasks.push('1 practice activity: contentType="essay_questions", contentRef=a short-answer question (2-4 sentences) asking the student to synthesize, explain, and apply the concept in their own words with evidence from the reading. Title like "Practice: <topic>"');
   } else if (isElective) {
     // Elective/deep-dive nodes — optional enrichment and specialization.
     // Best practice: electives should go beyond recall into analysis, synthesis, creation (Bloom's upper levels).
     // These are the "stretch" nodes for motivated or advanced students.
     if (prefs.readingPerNode) {
-      tasks.push('1 deep-dive reading: contentType="text", contentRef=a rich 5-paragraph HTML reading passage using <p> tags (500-750 words) that goes beyond the textbook — includes primary source excerpts, real-world applications, or advanced analysis. Paragraph 1: hook and context. Paragraphs 2-4: in-depth exploration with examples and evidence. Paragraph 5: synthesis and open questions for further thought. Title like "Deep Dive: <topic>"');
+      tasks.push('1 deep-dive reading: contentType="text", contentRef=a rich 7-paragraph HTML reading passage using <p> tags (900-1200 words) that goes beyond the textbook — includes primary source excerpts, real-world applications, and advanced analysis calibrated to grade and age. Paragraph 1: hook and context. Paragraphs 2-5: in-depth exploration with evidence and multiple perspectives. Paragraph 6: connect to broader disciplinary themes. Paragraph 7: synthesis and open questions for further thought. Prioritize thorough explanation over concision. Title like "Deep Dive: <topic>"');
     }
     if (prefs.videosPerLesson > 0) {
       tasks.push(`${Math.min(prefs.videosPerLesson + 1, 3)} video(s): contentType="video" — mix of a documentary-style video and a how-it-works or case-study video on this advanced topic, title like "Video: <topic>"`);
     }
     // Electives always include a synthesis quiz to confirm depth of understanding
-    tasks.push('1 analysis quiz: contentType="quiz", contentRef=a JSON array of exactly 5 question objects [{"question":"...","options":["A","B","C","D"],"answer":"B"},...] — questions should require analysis and application, not simple recall. Title like "Analysis Check: <topic>"');
+    tasks.push('1 analysis quiz: contentType="quiz", contentRef=a JSON array of exactly 5 question objects [{"question":"...","options":["A","B","C","D"],"answer":"B"},...] — questions should require synthesis across ideas in the reading and application to new scenarios, not simple recall. Title like "Analysis Check: <topic>"');
     // Always include a project for electives — this is their defining characteristic
     tasks.push('1 hands-on project or creative response: contentType="report", contentRef=a detailed project prompt (5-7 sentences) that asks the student to CREATE something — a model, diagram, experiment, written piece, or presentation. Include: the goal, the process steps, what to submit, and how it connects to the topic. Title like "Project: <topic>"');
     if (prefs.includeMovies) {
@@ -2278,10 +2187,10 @@ export async function generateAssignmentsForNode(input: {
     // Best practice (Understanding by Design Stage 2): capstones include review,
     // multiple assessment formats, and a performance task that requires transfer of learning.
     // These should feel substantial — a student might spend 2-3 days on a boss node.
-    tasks.push('1 comprehensive unit review: contentType="text", contentRef=a thorough 5-paragraph HTML review using <p> tags (600-900 words) that synthesizes ALL key concepts from the unit: paragraph 1 frames the big ideas, paragraphs 2-4 review each major concept cluster with examples and connections between them, paragraph 5 connects to the next unit and poses an essential question for further learning. Title like "Unit Review: <topic>"');
+    tasks.push('1 comprehensive unit review: contentType="text", contentRef=a thorough 7-paragraph HTML review using <p> tags (1000-1400 words) that synthesizes ALL key concepts from the unit: paragraph 1 frames the big ideas, paragraphs 2-5 review each major concept cluster with detailed examples and explicit connections, paragraph 6 integrates cross-cutting themes and misconceptions, paragraph 7 connects to the next unit and poses an essential question for further learning. Depth should be substantial and grade-calibrated rather than concise. Title like "Unit Review: <topic>"');
     // Boss nodes always get at least one essay — writing is essential for retention (Roediger & Karpicke)
     const essayCount = Math.max(1, prefs.essaysPerBoss);
-    tasks.push(`${essayCount} analytical essay prompt(s): contentType="essay_questions", contentRef=a substantive essay question (3-4 sentences) that requires the student to synthesize evidence, make an argument, or evaluate a claim — not just summarize. Title like "Essay: <topic>"`);
+    tasks.push(`${essayCount} analytical essay prompt(s): contentType="essay_questions", contentRef=a substantive essay question (4-6 sentences) that requires the student to synthesize evidence from the readings, make an argument, or evaluate a claim — not just summarize. Title like "Essay: <topic>"`);
     if (prefs.quizzesPerBoss > 0) {
       tasks.push(`${prefs.quizzesPerBoss} summative quiz(zes): contentType="quiz", contentRef=a JSON array of exactly 5 question objects [{"question":"...","options":["A","B","C","D"],"answer":"B"},...] — each quiz covers a different concept cluster from the unit, so together they provide comprehensive coverage. Title like "Unit Quiz: <topic>"`);
     }
@@ -2301,10 +2210,14 @@ export async function generateAssignmentsForNode(input: {
   if (tasks.length === 0) return [];
 
   const nodeId = node.tempId;
+  const calibration = gradeCalibrationContext(input.gradeLevel, input.ageYears);
   const prompt = [
     `You are creating assignments for a ${input.subject} curriculum, grade ${input.gradeLevel}.`,
+    `Grade-level calibration: ${calibration}`,
+    input.focusSteering ? `Curriculum focus: ${input.focusSteering} — use relevant examples from this theme in readings and quiz questions where applicable.` : "",
     `Node: "${node.title}" (type: ${node.nodeType})`,
     node.description ? `Context: ${node.description.slice(0, 200)}` : "",
+    `Reading quality policy: prioritize thorough, informative, grade-calibrated explanations. Do not shorten readings for concision. Use quizzes and written assignments to make students synthesize and apply what they read.`,
     "",
     `Generate the following assignments for this node (nodeId must be exactly "${nodeId}"):`,
     tasks.map((t, i) => `${i + 1}. ${t}`).join("\n"),
@@ -2365,11 +2278,61 @@ export async function generateAssignmentsForNode(input: {
           contentRef: typeof r.contentRef === "string" ? r.contentRef : "",
         });
       }
-      if (parsed.length >= 1) return parsed;
+      if (parsed.length >= 1) {
+        // Resolve YouTube video IDs if API key is provided
+        if (input.youtubeApiKey) {
+          const resolved = await resolveVideoAssignments(parsed, input.youtubeApiKey, input.subject, input.gradeLevel);
+          return resolved;
+        }
+        return parsed;
+      }
     }
   }
 
   return []; // soft fail
+}
+
+/**
+ * For any video assignments that have a search-query contentRef, call the YouTube API
+ * to resolve a real validated videoId. Replaces the search query with a JSON object
+ * containing the validated videoId, title, and channel.
+ */
+async function resolveVideoAssignments(
+  assignments: GeneratedAssignment[],
+  apiKey: string,
+  subject: string,
+  gradeLevel: string,
+): Promise<GeneratedAssignment[]> {
+  return Promise.all(
+    assignments.map(async (assignment) => {
+      if (assignment.contentType !== "video") return assignment;
+
+      // If contentRef already looks like a resolved JSON blob, skip
+      const trimmed = assignment.contentRef.trim();
+      if (trimmed.startsWith("{") || trimmed.startsWith("[")) return assignment;
+
+      try {
+        const query = `${assignment.contentRef} ${subject} grade ${gradeLevel} educational`;
+        const videos = await searchYoutubeForVideos(query, apiKey);
+        const top = videos[0];
+        if (!top) return assignment;
+
+        return {
+          ...assignment,
+          contentRef: JSON.stringify({
+            videoId: top.videoId,
+            title: top.title,
+            channel: top.channel,
+            thumbnail: top.thumbnail,
+            query: assignment.contentRef,
+          }),
+        };
+      } catch {
+        // YouTube search failed — keep the original search query string
+        return assignment;
+      }
+    }),
+  );
 }
 
 /** @deprecated Use generateAssignmentsForNode instead (per-node calls) */
@@ -2391,6 +2354,242 @@ export async function generateNodeAssignments(input: {
     all.push(...results);
   }
   return all;
+}
+
+// ── Grade calibration ─────────────────────────────────────────────────────────
+
+/**
+ * Returns a grade-level calibration context string for AI prompts.
+ * Ensures content complexity, vocabulary, and expectations are age-appropriate.
+ */
+export function gradeCalibrationContext(gradeLevel: string, ageYears?: number): string {
+  const grade = parseInt(gradeLevel, 10);
+  const effectiveGrade = Number.isFinite(grade) ? grade : (ageYears ? ageYears - 5 : 7);
+
+  if (effectiveGrade <= 2) {
+    return "Use simple, concrete vocabulary, but still teach with depth through rich examples, explicit why/how explanations, and careful scaffolding. Prefer multiple short paragraphs over brief summaries. Avoid abstract jargon; keep concepts anchored in familiar daily-life contexts.";
+  }
+  if (effectiveGrade <= 5) {
+    return "Use foundational academic vocabulary with clear definitions when needed. Build detailed explanations step by step with multiple examples and comparisons. Expect students to classify, compare, and explain cause/effect. Keep language accessible, but do not oversimplify content.";
+  }
+  if (effectiveGrade <= 8) {
+    return "Develop cause-effect reasoning and structured argumentation with substantial explanatory detail. Introduce primary and secondary sources where relevant. Use domain-specific vocabulary appropriate for the subject and require evidence-based claims and cross-topic connections.";
+  }
+  if (effectiveGrade <= 10) {
+    return "Emphasize critical thinking, textual analysis, and synthesis across multiple sources with detailed, information-rich prose. Use college-prep vocabulary and nuanced argumentation. Assume students can handle complex texts, counterarguments, and multi-step problem solving.";
+  }
+  return "Use advanced academic language and substantial disciplinary detail. Expect original analysis, synthesis of scholarly ideas, and independent inquiry. Content should reflect AP/dual-enrollment rigor with primary sources, methodological critique, and evidence-driven reasoning.";
+}
+
+// ── Curriculum recommendation ──────────────────────────────────────────────────
+
+export type CourseRecommendation = {
+  name: string;
+  subject: string;
+  description: string;
+  courseLength: string;
+  rationale: string;
+};
+
+export async function recommendCurriculumCourses(input: {
+  gradeLevel: string;
+  ageYears: number;
+  duration: string;
+  courseCount: number;
+  focusSteering: string;
+}): Promise<CourseRecommendation[]> {
+  const courseLength = input.duration;
+
+  // Derive grade-appropriate course expectations in one compact line
+  const grade = parseInt(input.gradeLevel, 10);
+  const gradeNote =
+    grade <= 5
+      ? "foundational skills, concrete examples"
+      : grade <= 8
+        ? "core academic rigor, structured reasoning"
+        : "college-prep depth, independent analysis";
+
+  const steeringNote = input.focusSteering
+    ? `Weave this focus theme into course names and descriptions: "${input.focusSteering}".`
+    : "";
+
+  const prompt = [
+    `Grade ${input.gradeLevel} (age ${input.ageYears}) homeschool curriculum — ${input.duration} duration.`,
+    `Style: ${gradeNote}.`,
+    steeringNote,
+    ``,
+    `Output a JSON array of exactly ${input.courseCount} course objects.`,
+    `Rules: (1) Start with the 4 core subjects for this grade (ELA, Math, Science, History/Social Studies). (2) Fill remaining slots with electives (Art, PE, Music, Technology, etc.). (3) Each subject must be distinct. (4) Names must be specific, not generic.`,
+    ``,
+    `Schema (one line per field):`,
+    `{"name":"string","subject":"string","description":"1-2 sentences","courseLength":"${courseLength}","rationale":"1 sentence"}`,
+    ``,
+    `Return ONLY the JSON array. No markdown. No explanation.`,
+  ].filter(Boolean).join("\n");
+
+  const diagnostics: string[] = [];
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let result: Awaited<ReturnType<typeof env.AI.run>>;
+    try {
+      result = await env.AI.run(DEFAULT_LLM_MODEL, {
+        messages: [
+          {
+            role: "system",
+            content: "You output only valid JSON arrays. No markdown fences, no prose, no explanation.",
+          },
+          {
+            role: "user",
+            content:
+              attempt === 0
+                ? prompt
+                : `${prompt}\n\nCRITICAL: Output ONLY the raw JSON array starting with [ and ending with ]. Nothing else.`,
+          },
+        ],
+        max_tokens: 3000,
+      });
+    } catch (aiErr) {
+      const errMsg = aiErr instanceof Error ? aiErr.message : String(aiErr);
+      diagnostics.push(`attempt ${attempt + 1}: AI.run threw — ${errMsg}`);
+      continue;
+    }
+
+    const responseText = toModelText(result);
+    const preview = responseText.slice(0, 300).replace(/\n/g, "\\n");
+
+    const rawCandidates = [
+      ...extractJsonCandidates(result),
+      ...extractJsonCandidates(responseText),
+      extractJsonPayload(responseText),
+    ].filter((v): v is NonNullable<typeof v> => v !== null);
+
+    // Unwrap common object wrappers: {response:[...]}, {courses:[...]}, {data:[...]}, etc.
+    const WRAPPER_KEYS = ["response", "courses", "data", "result", "items", "curriculum", "recommendations"];
+    const unwrapped = rawCandidates.flatMap((c) => {
+      if (Array.isArray(c)) return [c];
+      if (c && typeof c === "object") {
+        for (const key of WRAPPER_KEYS) {
+          const val = (c as Record<string, unknown>)[key];
+          if (Array.isArray(val)) return [val];
+        }
+        // Try any array-valued key
+        for (const val of Object.values(c as Record<string, unknown>)) {
+          if (Array.isArray(val) && val.length > 0) return [val];
+        }
+      }
+      return [];
+    });
+    const deduped = dedupeCandidates([...unwrapped, ...rawCandidates]);
+    let foundArray = false;
+
+    for (const candidate of deduped) {
+      if (!Array.isArray(candidate)) continue;
+      foundArray = true;
+      const parsed: CourseRecommendation[] = [];
+      for (const item of candidate) {
+        if (!item || typeof item !== "object") continue;
+        const r = item as Record<string, unknown>;
+        if (typeof r.name !== "string" || !r.name) continue;
+        parsed.push({
+          name: String(r.name).trim(),
+          subject: typeof r.subject === "string" ? r.subject.trim() : String(r.name).trim(),
+          description: typeof r.description === "string" ? r.description.trim() : "",
+          courseLength: typeof r.courseLength === "string" ? r.courseLength : courseLength,
+          rationale: typeof r.rationale === "string" ? r.rationale.trim() : "",
+        });
+      }
+      if (parsed.length >= 1) return parsed.slice(0, input.courseCount);
+      diagnostics.push(`attempt ${attempt + 1}: found array but 0 items passed name check (array length=${candidate.length})`);
+    }
+
+    if (!foundArray) {
+      diagnostics.push(`attempt ${attempt + 1}: no JSON array found in response. candidates=${deduped.length}. preview="${preview}"`);
+    }
+  }
+
+  throw new Error(`AI_CURRICULUM_RECOMMEND_FAILED after 3 attempts — ${diagnostics.join(" | ")}`);
+}
+
+// ── Lesson reading generation ──────────────────────────────────────────────────
+
+/**
+ * Generate a grade-appropriate reading passage for a single lesson node.
+ * Returns HTML string (uses <p> tags). Each lesson gets its own call to keep
+ * context focused and avoid token overflow.
+ */
+export async function generateLessonReading(input: {
+  nodeTitle: string;
+  nodeDescription: string;
+  subject: string;
+  gradeLevel: string;
+  ageYears: number;
+  focusSteering?: string;
+  nodeType?: string;
+}): Promise<string> {
+  const calibration = gradeCalibrationContext(input.gradeLevel, input.ageYears);
+  const isElective = input.nodeType === "elective";
+  const wordTarget = isElective ? "900–1200" : "700–950";
+  const paraCount = isElective ? 7 : 6;
+
+  const steeringLine = input.focusSteering
+    ? `Weave in real-world examples, places, or contexts related to: "${input.focusSteering}".`
+    : "";
+
+  const structureGuide = isElective
+    ? `Structure: (1) Hook with a compelling question or surprising fact. (2-5) In-depth exploration with examples, evidence, and at least one competing perspective. (6) Clarify misconceptions and connect to broader themes. (7) Synthesis and open question for further thought.`
+    : `Structure: (1) Relatable hook or real-world connection. (2-4) Deep concept explanation with multiple grade-appropriate examples and explicit vocabulary support. (5) Clarify a common misconception or tricky point. (6) Key takeaways and a thinking question.`;
+
+  const prompt = [
+    `You are writing an educational reading passage for a ${input.subject} lesson.`,
+    `Topic: "${input.nodeTitle}"`,
+    input.nodeDescription ? `Context: ${input.nodeDescription}` : "",
+    ``,
+    `Grade-level calibration: ${calibration}`,
+    steeringLine,
+    ``,
+    `Write a ${wordTarget} word reading passage using exactly ${paraCount} HTML <p> tags.`,
+    structureGuide,
+    ``,
+    `RULES:`,
+    `- Use ONLY <p> tags. No <h1>, <h2>, <strong>, <em>, lists, or other HTML.`,
+    `- Vocabulary and sentence complexity must match grade ${input.gradeLevel}.`,
+    `- Include at least one specific, concrete example per paragraph.`,
+    `- Prioritize thorough teaching and clear reasoning over short summaries.`,
+    `- The reading should front-load knowledge; synthesis and transfer should be assessed in quizzes and written assignments.`,
+    `- Do NOT use generic filler text. Every sentence must teach something.`,
+    `- End the final paragraph with a thought-provoking question.`,
+    ``,
+    `Return ONLY the HTML (the <p> tags). No JSON, no markdown, no explanation.`,
+  ].filter(Boolean).join("\n");
+
+  const result = await env.AI.run(DEFAULT_LLM_MODEL, {
+    messages: [
+      { role: "system", content: "You are an educational content writer. Output only HTML <p> tags. No other tags, no markdown, no prose outside of the content." },
+      { role: "user", content: prompt },
+    ],
+    max_tokens: 2600,
+  });
+
+  const responseText = toModelText(result);
+
+  // Extract <p> tags from the response
+  const pMatches = responseText.match(/<p[\s>][\s\S]*?<\/p>/gi);
+  if (pMatches && pMatches.length >= 2) {
+    return pMatches.join("\n");
+  }
+
+  // Fallback: if model returned plain text paragraphs, wrap them
+  const paragraphs = responseText
+    .split(/\n\n+/)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 20);
+
+  if (paragraphs.length >= 2) {
+    return paragraphs.map((p) => `<p>${p}</p>`).join("\n");
+  }
+
+  // Last resort fallback
+  return `<p>${responseText.trim()}</p>`;
 }
 
 // ── Reward suggestions ────────────────────────────────────────────────────────

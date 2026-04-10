@@ -9,6 +9,7 @@ import {
   getRewardTracksForOrg,
   getViewerContext,
 } from "../server/functions";
+import { ParentPageHeader } from "../components/parent-page-header";
 
 // ── Route ─────────────────────────────────────────────────────────────────────
 
@@ -728,33 +729,19 @@ function RewardsIndexPage() {
 
   return (
     <div className="min-w-0 space-y-6">
-      {/* Hero */}
-      <section className="orca-hero orca-wave rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm sm:p-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <span className="orca-icon-chip" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" className="h-6 w-6" aria-hidden="true">
-                <path d="M20 12v8H4v-8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                <path d="M22 7H2v5h20V7z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                <path d="M12 22V7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-                <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </span>
-            <div>
-              <h2 className="text-xl font-semibold text-slate-900">Reward Tracks</h2>
-              <p className="text-sm text-slate-600">Set up milestone rewards to celebrate your student's XP progress.</p>
-            </div>
-          </div>
+      <ParentPageHeader
+        title="Reward Tracks"
+        description="Set up milestone rewards to celebrate each student's XP progress and keep long-term goals visible."
+        action={(
           <button
             type="button"
             onClick={() => setShowCreate(true)}
-            className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 transition"
+            className="rounded-xl bg-cyan-700 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-cyan-800"
           >
-            + New Reward Track
+            Add Reward Track
           </button>
-        </div>
-      </section>
+        )}
+      />
 
       {/* Active tracks */}
       <section>

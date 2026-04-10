@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { Link, createFileRoute, redirect, useRouter } from "@tanstack/react-router";
-import { OrcaMark } from "../components/icons/orca-mark";
+import { ParentPageHeader } from "../components/parent-page-header";
 import {
   aiSuggestFullCurriculum,
   createSkillTree,
@@ -402,28 +402,19 @@ function SkillTreesIndexPage() {
 
   return (
     <div className="space-y-6">
-      <section className="orca-hero orca-wave rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
-        <p className="text-xs uppercase tracking-[0.2em] text-cyan-700">Parent Workspace</p>
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <span className="orca-icon-chip" aria-hidden="true">
-              <OrcaMark className="h-6 w-6" alt="" />
-            </span>
-            <h1 className="text-3xl font-semibold text-slate-900">Skill Maps</h1>
-          </div>
+      <ParentPageHeader
+        title="Skill Maps"
+        description="Build RPG-style curriculum pathways with required main spines, optional branches, and milestone progression."
+        action={(
           <button
             type="button"
             onClick={() => setShowCreateModal(true)}
-            className="rounded-xl bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700 transition"
+            className="rounded-xl bg-cyan-700 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-cyan-800"
           >
             New Skill Map
           </button>
-        </div>
-        <p className="mt-2 text-slate-600">
-          RPG-style curriculum pathways. Build branching lesson trees and let students unlock
-          milestones.
-        </p>
-      </section>
+        )}
+      />
 
       <section>
         {trees.length === 0 ? (

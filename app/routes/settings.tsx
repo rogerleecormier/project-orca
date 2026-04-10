@@ -18,8 +18,10 @@ import {
   seedDemoPhase7,
   updateMarkingPeriod,
   updateParentSettings,
+  DEMO_SEED_PREVIEW,
+  RICH_DEMO_SEED_PREVIEW,
 } from "../server/functions";
-import { OrcaMark } from "../components/icons/orca-mark";
+import { ParentPageHeader } from "../components/parent-page-header";
 
 export const Route = createFileRoute("/settings")({
   loader: async () => {
@@ -170,9 +172,29 @@ function DemoSeedWizard({ onClose }: { onClose: () => void }) {
 
         {!started && (
           <>
-            <p className="text-sm text-slate-600 mb-4">
-              Seeds 6 students with 5 subjects each, 3 marking periods of assignments, skill trees, progress, and reward tracks simulating a partial school year.
-            </p>
+            {/* Dynamic preview derived from RICH_DEMO_SEED_PREVIEW */}
+            <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2 max-h-56 overflow-y-auto">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                What will be created
+              </p>
+              <div className="space-y-1.5">
+                {RICH_DEMO_SEED_PREVIEW.students.map((s) => (
+                  <div key={s.name} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                    <span className="text-sm font-semibold text-slate-800">{s.name}</span>
+                    <span className="text-xs text-slate-500">Gr. {s.grade}</span>
+                    <span className="text-xs text-slate-400">—</span>
+                    <span className="text-xs text-slate-600 leading-snug">{s.subjects.join(", ")}</span>
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-slate-500 pt-1.5 border-t border-slate-200">
+                {RICH_DEMO_SEED_PREVIEW.totalStudents} students
+                {" · "}{RICH_DEMO_SEED_PREVIEW.totalCourses} courses
+                {" · "}{RICH_DEMO_SEED_PREVIEW.markingPeriods.join(", ")} ({RICH_DEMO_SEED_PREVIEW.schoolYear})
+                {" · "}skill trees, assignments, progress &amp; rewards
+                {" · "}Student PIN: <strong>{RICH_DEMO_SEED_PREVIEW.studentPin}</strong>
+              </p>
+            </div>
             <label className="block space-y-1 mb-4">
               <span className="text-sm font-medium text-slate-700">Parent PIN</span>
               <input
@@ -506,16 +528,10 @@ function SettingsPage() {
     <div className="space-y-6">
       {showSeedWizard && <DemoSeedWizard onClose={() => setShowSeedWizard(false)} />}
 
-      <section className="orca-hero orca-wave rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
-        <p className="text-xs uppercase tracking-[0.2em] text-cyan-700">Parent Workspace</p>
-        <div className="mt-2 flex items-center gap-3">
-          <span className="orca-icon-chip" aria-hidden="true">
-            <OrcaMark className="h-6 w-6" alt="" />
-          </span>
-          <h1 className="text-3xl font-semibold text-slate-900">Settings</h1>
-        </div>
-        <p className="mt-2 text-slate-600">Update your account profile and manage your parent PIN.</p>
-      </section>
+      <ParentPageHeader
+        title="Settings"
+        description="Update your account profile, manage your parent PIN, and control workspace content."
+      />
 
       <section className="grid gap-6 lg:grid-cols-2">
         <article className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">

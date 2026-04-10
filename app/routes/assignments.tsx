@@ -2,11 +2,11 @@ import { useEffect, useReducer, useRef, useState } from "react";
 import { createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { AssignmentModal, type ModalAssignment } from "../components/assignment-modal";
 import { DeleteConfirmModal } from "../components/delete-confirm-modal";
+import { ParentPageHeader } from "../components/parent-page-header";
 import { QuizBuilder, type QuizQuestion } from "../components/quiz-builder";
 import { RichContent } from "../components/rich-content";
 import { RichTextEditor } from "../components/rich-text-editor";
 import { VideoSearch, type VideoData } from "../components/video-search";
-import { OrcaMark } from "../components/icons/orca-mark";
 import {
   assignAssignmentToMarkingPeriod,
   createAssignmentRecord,
@@ -2032,31 +2032,22 @@ function CurriculumBuilderPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <section className="orca-hero orca-wave rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
-        <p className="text-xs uppercase tracking-[0.2em] text-cyan-700">Parent Workspace</p>
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <span className="orca-icon-chip" aria-hidden="true">
-              <OrcaMark className="h-6 w-6" alt="" />
-            </span>
-            <h1 className="text-3xl font-semibold text-slate-900">Manage Assignments</h1>
-          </div>
+      <ParentPageHeader
+        title="Manage Assignments"
+        description="Create video lessons, quizzes, essay questions, reports, and more, then link related work so students experience it as one coherent lesson flow."
+        action={(
           <button
             type="button"
             onClick={() => {
               resetForm();
               setShowCreateModal(true);
             }}
-            className="rounded-xl bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700"
+            className="rounded-xl bg-cyan-700 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-cyan-800"
           >
             New Assignment
           </button>
-        </div>
-        <p className="mt-2 text-slate-600">
-          Create video lessons, quizzes, essay questions, reports, and more. Link assignments together so students see them grouped.
-        </p>
-      </section>
+        )}
+      />
 
       {!showCreateModal && form.error ? (
         <p className="text-sm text-rose-700">{form.error}</p>

@@ -140,7 +140,7 @@ function LoginPage() {
   };
 
   return (
-    <div className="mx-auto grid min-h-[70vh] w-full max-w-3xl gap-6 px-4 py-8">
+    <div className="orca-auth-page grid gap-6">
       <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <p className="text-xs uppercase tracking-[0.2em] text-cyan-700">Parent Login</p>
         <h1 className="mt-2 text-2xl font-semibold text-slate-900">Step 1: Parent Access</h1>

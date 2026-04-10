@@ -31,7 +31,12 @@
       "Bash(grep -E \"NodeSidePanel|skill-tree\\\\.\\\\$|student\\\\.tsx\")",
       "Bash(grep -E 'NodeSidePanel|skill-tree\\\\.$treeId|student\\\\.tsx')",
       "Read(//tmp/**)",
-      "Bash(grep -v \"^$\")"
+      "Bash(grep -v \"^$\")",
+      "Bash(python3 -m json.tool)",
+      "WebFetch(domain:artificialanalysis.ai)",
+      "WebFetch(domain:blog.cloudflare.com)",
+      "Bash(./node_modules/.bin/tsc --noEmit)",
+      "Bash(grep -n \"edgeType\" /run/media/rogerleecormier/Storage/dev/project-orca/app/components/skill-tree/*.tsx)"
     ],
     "additionalDirectories": [
       "/tmp"

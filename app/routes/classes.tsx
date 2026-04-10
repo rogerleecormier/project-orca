@@ -7,7 +7,7 @@ import {
   getViewerContext,
   updateClassRecord,
 } from "../server/functions";
-import { OrcaMark } from "../components/icons/orca-mark";
+import { ParentPageHeader } from "../components/parent-page-header";
 
 export const Route = createFileRoute("/classes")({
   loader: async () => {
@@ -239,30 +239,22 @@ function ClassEnginePage() {
 
   return (
     <div className="space-y-6">
-      <section className="orca-hero orca-wave rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
-        <p className="text-xs uppercase tracking-[0.2em] text-cyan-700">Parent Workspace</p>
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <span className="orca-icon-chip" aria-hidden="true">
-              <OrcaMark className="h-6 w-6" alt="" />
-            </span>
-            <h1 className="text-3xl font-semibold text-slate-900">Manage Classes</h1>
-          </div>
+      <ParentPageHeader
+        title="Manage Classes"
+        description="Define class spaces by school year before publishing curriculum assignments."
+        action={(
           <button
             type="button"
             onClick={() => {
               setError(null);
               setShowCreateModal(true);
             }}
-            className="rounded-xl bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700"
+            className="rounded-xl bg-cyan-700 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-cyan-800"
           >
             New Class
           </button>
-        </div>
-        <p className="mt-2 text-slate-600">
-          Define class spaces by school year before publishing curriculum assignments.
-        </p>
-      </section>
+        )}
+      />
 
       <div className="space-y-6">
         {/* Class list */}

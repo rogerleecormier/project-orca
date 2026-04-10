@@ -1,5 +1,6 @@
 import type React from "react";
 import { RAMP_COLORS } from "./EdgeLayer";
+import { computeSkillTreeNodeRadius } from "./skillTreeGeometry";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -27,28 +28,6 @@ export type SkillTreeNodeProgress = {
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-/**
- * Compute display radius from node type and XP reward.
- *
- * Size tiers (clear delineation for children):
- *   boss       — 40px base  (dominant capstone, always biggest)
- *   milestone  — 30px base  (chapter entry points, clearly large)
- *   lesson     — 20px base  (core topic nodes, medium)
- *   branch     — 20px base  (hub nodes, same as lesson)
- *   elective   — 14px base  (optional deep dives, clearly smallest)
- *
- * XP scales within each tier (±25% of base) so high-XP lessons
- * are visibly larger than low-XP ones, but never overlap the tier above.
- */
-function computeRadius(nodeType: string, xpReward: number): number {
-  const base: Record<string, number> = {
-    boss: 40, milestone: 30, lesson: 20, branch: 20, elective: 14,
-  };
-  const b = base[nodeType] ?? 20;
-  const t = Math.min(1, Math.max(0, (xpReward - 50) / 950));
-  return Math.round(b * (1 + 0.25 * t));
-}
 
 function hexagonPoints(cx: number, cy: number, r: number): string {
   return Array.from({ length: 6 }, (_, i) => {
@@ -81,6 +60,7 @@ type Props = {
   selectedNodeId: string | null;
   newlyAddedNodeIds?: Set<string>;
   dimmedNodeIds?: Set<string>;
+  forkNodeIds?: Set<string>;
   onNodeClick: (nodeId: string) => void;
   onNodeDragStart: (nodeId: string, e: React.MouseEvent) => void;
 };
@@ -95,6 +75,7 @@ export function NodeLayer({
   selectedNodeId,
   newlyAddedNodeIds,
   dimmedNodeIds,
+  forkNodeIds,
   onNodeClick,
   onNodeDragStart,
 }: Props) {
@@ -103,7 +84,7 @@ export function NodeLayer({
       {nodes.map((node) => {
         const p = progressMap.get(node.id);
         const status = p?.status ?? "locked";
-        const r = computeRadius(node.nodeType, node.xpReward);
+        const r = computeSkillTreeNodeRadius(node.nodeType, node.xpReward);
         const cx = node.positionX;
         const cy = node.positionY;
         const nodeColor = RAMP_COLORS[node.colorRamp] ?? RAMP_COLORS.blue;
@@ -114,6 +95,7 @@ export function NodeLayer({
         const isSelected = node.id === selectedNodeId;
         const isConnectSource = node.id === connectingFromId;
         const isNewlyAdded = newlyAddedNodeIds?.has(node.id) ?? false;
+        const isForkNode = forkNodeIds?.has(node.id) ?? false;
 
         const shapeOpacity = isLocked ? 0.35 : 1;
         const fillColor = isLocked ? STATUS_FILL.locked : STATUS_FILL[status] ?? nodeColor;
@@ -291,6 +273,29 @@ export function NodeLayer({
           />
         ) : null;
 
+        // Fork/decision-point nodes get an amber diamond ring + pulsing glow to mark them as choice nodes
+        const forkRing = isForkNode ? (
+          <>
+            {/* Outer pulsing amber glow */}
+            <polygon
+              points={diamondPoints(cx, cy, r + 14)}
+              fill="none"
+              stroke="#ef9f27"
+              strokeWidth={2.5}
+              style={{ animation: "fork-node-pulse 1.8s ease-in-out infinite" }}
+            />
+            {/* Inner solid amber diamond outline */}
+            <polygon
+              points={diamondPoints(cx, cy, r + 8)}
+              fill="none"
+              stroke="#ef9f27"
+              strokeWidth={1.5}
+              opacity={0.75}
+              strokeDasharray="5 3"
+            />
+          </>
+        ) : null;
+
         // Mastery badge
         const masteryBadge = status === "mastery" ? (
           <>
@@ -363,6 +368,7 @@ export function NodeLayer({
             {pulseRing}
             {connectRing}
             {chapterRing}
+            {forkRing}
             {selectedRing}
             {shapeEl}
             {contentEl}
@@ -414,6 +420,10 @@ export function NodeLayer({
           0%   { transform: scale(1);    opacity: 0.75; }
           70%  { transform: scale(1.5);  opacity: 0.15; }
           100% { transform: scale(1.7);  opacity: 0; }
+        }
+        @keyframes fork-node-pulse {
+          0%,100% { opacity: 0.85; }
+          50%     { opacity: 0.2; }
         }
         .node-hover-ring { transition: opacity 0.15s; }
         g:hover .node-hover-ring { opacity: 0.5 !important; }

@@ -8,8 +8,8 @@ import {
   getViewerContext,
   updateAssignmentTemplate,
 } from "../server/functions";
+import { ParentPageHeader } from "../components/parent-page-header";
 import { RichContent } from "../components/rich-content";
-import { OrcaMark } from "../components/icons/orca-mark";
 
 export const Route = createFileRoute("/templates")({
   loader: async () => {
@@ -353,28 +353,21 @@ function TemplateManagerPage() {
 
   return (
     <div className="space-y-6">
-      <section className="orca-hero orca-wave rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-xs uppercase tracking-[0.2em] text-cyan-700">Template Manager</p>
-            <div className="mt-2 flex items-center gap-3">
-              <span className="orca-icon-chip" aria-hidden="true">
-                <OrcaMark className="h-6 w-6" alt="" />
-              </span>
-              <h1 className="text-2xl font-semibold text-slate-900">Assignment Templates</h1>
-            </div>
-            <p className="mt-2 text-sm text-slate-600">
-              Save your best assignment setups once, then spin up new assignments in one click.
-            </p>
-          </div>
+      <ParentPageHeader
+        eyebrow="Template Manager"
+        title="Assignment Templates"
+        description="Save your best assignment setups once, then spin up polished new assignments in one click."
+        action={(
           <Link
             to="/assignments"
-            className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
           >
             Back to Assignments
           </Link>
-        </div>
+        )}
+      />
 
+      <section className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
         <div className="mt-5 grid gap-3 md:grid-cols-3">
           <label className="block space-y-1">
             <span className="text-xs font-semibold uppercase tracking-wide text-slate-600">Target class</span>

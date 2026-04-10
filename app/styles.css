@@ -13,6 +13,8 @@ html {
   --orca-foam: #f5f9fd;
   --orca-paper: #ffffff;
   --orca-line: #d7e2ee;
+  --orca-page-padding-x: clamp(1rem, 2.4vw, 2.25rem);
+  --orca-page-padding-y: clamp(1rem, 2.2vw, 2rem);
 }
 
 body.orca-theme {
@@ -21,6 +23,17 @@ body.orca-theme {
     radial-gradient(circle at 90% -5%, rgba(11, 18, 32, 0.08), transparent 36%),
     linear-gradient(180deg, #f8fbff 0%, #f3f7fc 100%);
   color: var(--orca-black);
+}
+
+.orca-page-main {
+  padding: var(--orca-page-padding-y) var(--orca-page-padding-x);
+}
+
+.orca-auth-page {
+  width: min(100%, 48rem);
+  min-height: calc(100vh - clamp(3rem, 6vw, 5rem));
+  margin-inline: auto;
+  padding: clamp(1rem, 2.2vw, 2rem) var(--orca-page-padding-x);
 }
 
 .orca-theme .bg-cyan-600 {

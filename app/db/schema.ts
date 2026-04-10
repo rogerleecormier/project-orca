@@ -580,7 +580,7 @@ export const skillTreeEdges = sqliteTable(
       .notNull()
       .references(() => skillTreeNodes.id, { onDelete: "cascade" }),
     edgeType: text("edge_type", {
-      enum: ["required", "optional", "bonus"],
+      enum: ["required", "optional", "bonus", "fork"],
     })
       .notNull()
       .default("required"),

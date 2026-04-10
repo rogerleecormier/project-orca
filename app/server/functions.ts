@@ -48,6 +48,9 @@ import {
   layoutForceDirected,
   reweaveCurriculumTree,
   searchYoutubeForVideos,
+  recommendCurriculumCourses,
+  generateLessonReading,
+  type CourseRecommendation,
 } from "../lib/ai";
 
 const COOKIE_MAX_AGE_SECONDS = 60 * 60 * 8;
@@ -381,12 +384,31 @@ const contentResetWithPinInput = z.object({
   parentPin: z.string().regex(/^\d{4,6}$/),
 });
 
-const DEMO_STUDENTS = [
-  { displayName: "Ava Rivers",   gradeLevel: "3" },
-  { displayName: "Noah Chen",    gradeLevel: "5" },
-  { displayName: "Mia Patel",    gradeLevel: "7" },
-  { displayName: "Lucas Gomez",  gradeLevel: "9" },
-] as const;
+// Each student gets 2-3 courses tailored to their grade level.
+const DEMO_STUDENTS: Array<{
+  displayName: string;
+  gradeLevel: string;
+  subjects: string[];
+}> = [
+  { displayName: "Ava Rivers",  gradeLevel: "4", subjects: ["Math", "Language Arts"] },
+  { displayName: "Noah Chen",   gradeLevel: "6", subjects: ["Math", "Earth Science", "US History"] },
+  { displayName: "Mia Patel",   gradeLevel: "8", subjects: ["Pre-Algebra", "Literature", "Life Science"] },
+];
+
+// Exported preview so the settings UI can display accurate counts before seeding.
+export const DEMO_SEED_PREVIEW = (() => {
+  const totalCourses = DEMO_STUDENTS.reduce((s, st) => s + st.subjects.length, 0);
+  return {
+    students: DEMO_STUDENTS.map((s) => ({
+      name: s.displayName,
+      grade: s.gradeLevel,
+      subjects: s.subjects,
+    })),
+    totalStudents: DEMO_STUDENTS.length,
+    totalCourses,
+    studentPin: "1111",
+  };
+})();
 
 function getCurrentSchoolYearLabel() {
   const now = new Date();
@@ -450,103 +472,267 @@ type SubjectSpec = {
 };
 
 const DEMO_CURRICULA: Record<string, SubjectSpec> = {
+  // ── Grade 4 Math ──────────────────────────────────────────────────────────────
   Math: {
     chapters: [
       {
-        title: "Number Sense & Place Value", icon: "🔢", colorRamp: "teal",
+        title: "Multiplication & Division", icon: "✖️", colorRamp: "teal",
         lessons: [
-          { title: "Reading & Writing Large Numbers", icon: "📖", type: "lesson" },
-          { title: "Comparing & Ordering Whole Numbers", icon: "⚖️", type: "lesson" },
-          { title: "Rounding Strategies", icon: "🎯", type: "lesson" },
-          { title: "Number Patterns Deep Dive", icon: "🔍", type: "elective" },
+          { title: "Multiplication Facts Fluency", icon: "🔢", type: "lesson" },
+          { title: "Area Models & Arrays", icon: "⬛", type: "lesson" },
+          { title: "Multi-Digit Multiplication", icon: "📐", type: "lesson" },
+          { title: "Understanding Division", icon: "➗", type: "lesson" },
+          { title: "Division with Remainders", icon: "🔄", type: "lesson" },
+          { title: "Mental Math Shortcuts", icon: "🧠", type: "elective" },
         ],
       },
       {
-        title: "Operations & Fluency", icon: "➕", colorRamp: "blue",
+        title: "Fractions & Mixed Numbers", icon: "½", colorRamp: "purple",
         lessons: [
-          { title: "Addition & Subtraction Strategies", icon: "🧮", type: "lesson" },
-          { title: "Multiplication Concepts", icon: "✖️", type: "lesson" },
-          { title: "Division & Remainders", icon: "➗", type: "lesson" },
-          { title: "Multi-Step Word Problems", icon: "📝", type: "lesson" },
-          { title: "Mental Math Mastery", icon: "🧠", type: "elective" },
+          { title: "Fractions on a Number Line", icon: "📏", type: "lesson" },
+          { title: "Equivalent Fractions", icon: "⚖️", type: "lesson" },
+          { title: "Comparing & Ordering Fractions", icon: "🔀", type: "lesson" },
+          { title: "Mixed Numbers & Improper Fractions", icon: "🔢", type: "lesson" },
+          { title: "Adding Fractions with Like Denominators", icon: "➕", type: "lesson" },
+          { title: "Fractions in Real Life", icon: "🍕", type: "elective" },
         ],
       },
       {
-        title: "Fractions & Decimals", icon: "½", colorRamp: "purple",
+        title: "Geometry & Measurement", icon: "📐", colorRamp: "blue",
         lessons: [
-          { title: "Fractions as Parts of a Whole", icon: "🍕", type: "lesson" },
-          { title: "Equivalent Fractions", icon: "🔄", type: "lesson" },
-          { title: "Adding & Subtracting Fractions", icon: "➕", type: "lesson" },
-          { title: "Introduction to Decimals", icon: ".", type: "lesson" },
-          { title: "Fraction & Decimal Connections", icon: "🔗", type: "elective" },
+          { title: "Lines, Rays & Angles", icon: "📐", type: "lesson" },
+          { title: "Classifying Triangles & Quadrilaterals", icon: "🔷", type: "lesson" },
+          { title: "Perimeter & Area", icon: "⬜", type: "lesson" },
+          { title: "Units of Measurement & Conversions", icon: "📏", type: "lesson" },
+          { title: "Symmetry & Patterns", icon: "🪞", type: "elective" },
         ],
       },
     ],
   },
-  Science: {
+
+  // ── Grade 4 Language Arts ─────────────────────────────────────────────────────
+  "Language Arts": {
     chapters: [
       {
-        title: "The Scientific Method", icon: "🔬", colorRamp: "teal",
+        title: "Reading Comprehension", icon: "📖", colorRamp: "teal",
         lessons: [
-          { title: "Asking Scientific Questions", icon: "❓", type: "lesson" },
-          { title: "Forming a Hypothesis", icon: "💡", type: "lesson" },
-          { title: "Designing an Experiment", icon: "🧪", type: "lesson" },
-          { title: "Collecting & Recording Data", icon: "📊", type: "lesson" },
-          { title: "Advanced Lab Techniques", icon: "🔭", type: "elective" },
+          { title: "Finding the Main Idea", icon: "🎯", type: "lesson" },
+          { title: "Making Inferences", icon: "💭", type: "lesson" },
+          { title: "Author's Purpose & Point of View", icon: "👁️", type: "lesson" },
+          { title: "Text Features & Nonfiction", icon: "📰", type: "lesson" },
+          { title: "Summarizing & Retelling", icon: "📝", type: "lesson" },
+          { title: "Reading Poetry Closely", icon: "🌸", type: "elective" },
         ],
       },
       {
-        title: "Cells & Life Systems", icon: "🧬", colorRamp: "green",
+        title: "Writing Workshop", icon: "✍️", colorRamp: "amber",
         lessons: [
-          { title: "What Are Cells?", icon: "🔵", type: "lesson" },
-          { title: "Cell Organelles & Their Jobs", icon: "⚙️", type: "lesson" },
-          { title: "Plant vs. Animal Cells", icon: "🌿", type: "lesson" },
-          { title: "Cell Division Overview", icon: "✂️", type: "lesson" },
-          { title: "Microscopy & Cell Observation", icon: "🔍", type: "elective" },
+          { title: "The Writing Process", icon: "🔄", type: "lesson" },
+          { title: "Narrative Writing: Story Structure", icon: "📕", type: "lesson" },
+          { title: "Descriptive Details & Word Choice", icon: "🎨", type: "lesson" },
+          { title: "Informational Writing: Paragraphs", icon: "📄", type: "lesson" },
+          { title: "Opinion Writing: Claim & Evidence", icon: "💬", type: "lesson" },
+          { title: "Revision & Editing Strategies", icon: "✏️", type: "elective" },
         ],
       },
       {
-        title: "Ecosystems & Interdependence", icon: "🌍", colorRamp: "amber",
+        title: "Grammar & Vocabulary", icon: "🔤", colorRamp: "green",
         lessons: [
-          { title: "Producers, Consumers & Decomposers", icon: "🌱", type: "lesson" },
-          { title: "Food Chains & Food Webs", icon: "🕸️", type: "lesson" },
-          { title: "Biomes of the World", icon: "🗺️", type: "lesson" },
-          { title: "Human Impact on Ecosystems", icon: "🏭", type: "lesson" },
-          { title: "Conservation Science Project", icon: "♻️", type: "elective" },
+          { title: "Nouns, Verbs & Adjectives", icon: "📚", type: "lesson" },
+          { title: "Sentence Types & Punctuation", icon: "❗", type: "lesson" },
+          { title: "Prefixes, Suffixes & Root Words", icon: "🌱", type: "lesson" },
+          { title: "Figurative Language", icon: "🌈", type: "lesson" },
+          { title: "Context Clues & Dictionary Skills", icon: "🔍", type: "elective" },
         ],
       },
     ],
   },
+
+  // ── Grade 6 Math ──────────────────────────────────────────────────────────────
+  "Pre-Algebra": {
+    chapters: [
+      {
+        title: "Ratios & Proportional Reasoning", icon: "⚖️", colorRamp: "teal",
+        lessons: [
+          { title: "Understanding Ratios", icon: "📊", type: "lesson" },
+          { title: "Unit Rates & Unit Pricing", icon: "🛒", type: "lesson" },
+          { title: "Proportions & Cross-Multiplication", icon: "✖️", type: "lesson" },
+          { title: "Percents & Conversions", icon: "%", type: "lesson" },
+          { title: "Scaling & Similar Figures", icon: "📐", type: "lesson" },
+          { title: "Ratio Applications: Maps & Scale", icon: "🗺️", type: "elective" },
+        ],
+      },
+      {
+        title: "Expressions & Equations", icon: "🔣", colorRamp: "blue",
+        lessons: [
+          { title: "Variables & Expressions", icon: "x", type: "lesson" },
+          { title: "Writing & Evaluating Expressions", icon: "✏️", type: "lesson" },
+          { title: "Properties of Operations", icon: "⚙️", type: "lesson" },
+          { title: "One-Step Equations", icon: "=", type: "lesson" },
+          { title: "Inequalities on a Number Line", icon: "📏", type: "lesson" },
+          { title: "Patterns & Function Tables", icon: "📈", type: "elective" },
+        ],
+      },
+      {
+        title: "Geometry & Statistics", icon: "📐", colorRamp: "purple",
+        lessons: [
+          { title: "Area of Triangles & Quadrilaterals", icon: "🔷", type: "lesson" },
+          { title: "Area of Composite Figures", icon: "⬜", type: "lesson" },
+          { title: "Volume of Rectangular Prisms", icon: "📦", type: "lesson" },
+          { title: "Mean, Median, Mode & Range", icon: "📊", type: "lesson" },
+          { title: "Box Plots & Histograms", icon: "📉", type: "elective" },
+        ],
+      },
+    ],
+  },
+
+  // ── Grade 6 Earth Science ─────────────────────────────────────────────────────
+  "Earth Science": {
+    chapters: [
+      {
+        title: "Earth's Structure & Plate Tectonics", icon: "🌋", colorRamp: "coral",
+        lessons: [
+          { title: "Layers of the Earth", icon: "🌍", type: "lesson" },
+          { title: "Tectonic Plate Boundaries", icon: "🗺️", type: "lesson" },
+          { title: "Earthquakes: Causes & Measurement", icon: "📳", type: "lesson" },
+          { title: "Volcanoes & Volcanic Landforms", icon: "🌋", type: "lesson" },
+          { title: "Mountain Building & Erosion", icon: "⛰️", type: "lesson" },
+          { title: "The Rock Cycle", icon: "🪨", type: "elective" },
+        ],
+      },
+      {
+        title: "Weather & Climate", icon: "🌦️", colorRamp: "blue",
+        lessons: [
+          { title: "The Water Cycle", icon: "💧", type: "lesson" },
+          { title: "Air Masses & Weather Fronts", icon: "🌬️", type: "lesson" },
+          { title: "Reading Weather Maps", icon: "🗺️", type: "lesson" },
+          { title: "Severe Weather: Hurricanes & Tornadoes", icon: "🌀", type: "lesson" },
+          { title: "Climate Zones & Global Patterns", icon: "🌐", type: "lesson" },
+          { title: "Climate Change & Evidence", icon: "🌡️", type: "elective" },
+        ],
+      },
+      {
+        title: "Astronomy & Space", icon: "🔭", colorRamp: "purple",
+        lessons: [
+          { title: "Earth's Rotation & Revolution", icon: "🌍", type: "lesson" },
+          { title: "Phases of the Moon & Tides", icon: "🌙", type: "lesson" },
+          { title: "The Solar System", icon: "🪐", type: "lesson" },
+          { title: "Stars & the Life Cycle of Stars", icon: "⭐", type: "lesson" },
+          { title: "Space Exploration History", icon: "🚀", type: "elective" },
+        ],
+      },
+    ],
+  },
+
+  // ── Grade 6 US History ────────────────────────────────────────────────────────
   "US History": {
     chapters: [
       {
-        title: "Colonial America", icon: "⛵", colorRamp: "teal",
+        title: "Colonial America & the Revolution", icon: "⛵", colorRamp: "teal",
         lessons: [
-          { title: "Why Europeans Came to America", icon: "🗺️", type: "lesson" },
+          { title: "Why Europeans Settled in America", icon: "🗺️", type: "lesson" },
           { title: "The Thirteen Colonies", icon: "🏘️", type: "lesson" },
-          { title: "Colonial Life & Society", icon: "🪶", type: "lesson" },
-          { title: "Relations with Native Peoples", icon: "🤝", type: "lesson" },
-          { title: "Colonial Economy Deep Dive", icon: "💰", type: "elective" },
-        ],
-      },
-      {
-        title: "Revolution & Independence", icon: "🦅", colorRamp: "coral",
-        lessons: [
-          { title: "Causes of Colonial Discontent", icon: "😤", type: "lesson" },
-          { title: "Key Events Leading to War", icon: "⚔️", type: "lesson" },
+          { title: "Taxation Without Representation", icon: "💰", type: "lesson" },
+          { title: "Key Battles of the Revolution", icon: "⚔️", type: "lesson" },
           { title: "The Declaration of Independence", icon: "📜", type: "lesson" },
-          { title: "Fighting the Revolution", icon: "🎖️", type: "lesson" },
-          { title: "Loyalists vs. Patriots Debate", icon: "🗣️", type: "elective" },
+          { title: "Loyalists vs. Patriots", icon: "🗣️", type: "elective" },
         ],
       },
       {
-        title: "Founding the New Nation", icon: "🏛️", colorRamp: "blue",
+        title: "Founding the Republic", icon: "🏛️", colorRamp: "blue",
         lessons: [
-          { title: "The Articles of Confederation", icon: "📄", type: "lesson" },
-          { title: "Writing the Constitution", icon: "✍️", type: "lesson" },
+          { title: "Articles of Confederation & Its Failures", icon: "📄", type: "lesson" },
+          { title: "The Constitutional Convention", icon: "✍️", type: "lesson" },
+          { title: "Separation of Powers & Checks and Balances", icon: "⚖️", type: "lesson" },
           { title: "The Bill of Rights", icon: "📋", type: "lesson" },
-          { title: "The First Presidents", icon: "🎩", type: "lesson" },
-          { title: "Federalists vs. Anti-Federalists", icon: "⚖️", type: "elective" },
+          { title: "Washington & Hamilton: The First Government", icon: "🎩", type: "lesson" },
+          { title: "Federalists vs. Anti-Federalists", icon: "📰", type: "elective" },
+        ],
+      },
+      {
+        title: "Expansion & Conflict", icon: "🦅", colorRamp: "amber",
+        lessons: [
+          { title: "Louisiana Purchase & Western Expansion", icon: "🗺️", type: "lesson" },
+          { title: "The Trail of Tears & Native Displacement", icon: "🌿", type: "lesson" },
+          { title: "Manifest Destiny", icon: "🌄", type: "lesson" },
+          { title: "Causes of the Civil War", icon: "💣", type: "lesson" },
+          { title: "The Abolitionist Movement", icon: "✊", type: "elective" },
+        ],
+      },
+    ],
+  },
+
+  // ── Grade 8 Life Science ──────────────────────────────────────────────────────
+  "Life Science": {
+    chapters: [
+      {
+        title: "Cells: The Building Blocks of Life", icon: "🧬", colorRamp: "green",
+        lessons: [
+          { title: "Cell Theory & the History of Microscopy", icon: "🔬", type: "lesson" },
+          { title: "Prokaryotic vs. Eukaryotic Cells", icon: "🔵", type: "lesson" },
+          { title: "Cell Organelles & Their Functions", icon: "⚙️", type: "lesson" },
+          { title: "Cell Membrane & Transport", icon: "🚪", type: "lesson" },
+          { title: "Mitosis: Cell Division & Growth", icon: "✂️", type: "lesson" },
+          { title: "Meiosis & Sexual Reproduction", icon: "🔄", type: "elective" },
+        ],
+      },
+      {
+        title: "Genetics & Heredity", icon: "🧬", colorRamp: "purple",
+        lessons: [
+          { title: "DNA Structure & Function", icon: "🔬", type: "lesson" },
+          { title: "Genes, Traits & Inheritance", icon: "👨‍👩‍👧", type: "lesson" },
+          { title: "Punnett Squares & Probability", icon: "⬛", type: "lesson" },
+          { title: "Dominant vs. Recessive Traits", icon: "⚖️", type: "lesson" },
+          { title: "Mutations & Genetic Variation", icon: "🔀", type: "lesson" },
+          { title: "Genetic Engineering & Biotechnology", icon: "🧪", type: "elective" },
+        ],
+      },
+      {
+        title: "Evolution & Natural Selection", icon: "🦕", colorRamp: "amber",
+        lessons: [
+          { title: "Darwin & the Theory of Evolution", icon: "🐢", type: "lesson" },
+          { title: "Evidence for Evolution: Fossils & Anatomy", icon: "🦴", type: "lesson" },
+          { title: "Natural Selection: Survival of the Fittest", icon: "🦁", type: "lesson" },
+          { title: "Adaptation & Speciation", icon: "🦋", type: "lesson" },
+          { title: "Human Evolution", icon: "🧑‍🔬", type: "elective" },
+        ],
+      },
+    ],
+  },
+
+  // ── Grade 8 Literature ────────────────────────────────────────────────────────
+  Literature: {
+    chapters: [
+      {
+        title: "Narrative Fiction & Story Craft", icon: "📕", colorRamp: "coral",
+        lessons: [
+          { title: "Plot Structure: Freytag's Pyramid", icon: "📈", type: "lesson" },
+          { title: "Character Analysis: Motivation & Change", icon: "🎭", type: "lesson" },
+          { title: "Setting & Atmosphere", icon: "🏚️", type: "lesson" },
+          { title: "Point of View & Narrative Voice", icon: "👁️", type: "lesson" },
+          { title: "Theme vs. Moral: The Big Idea", icon: "💡", type: "lesson" },
+          { title: "Unreliable Narrators", icon: "❓", type: "elective" },
+        ],
+      },
+      {
+        title: "Literary Devices & Craft", icon: "🖊️", colorRamp: "blue",
+        lessons: [
+          { title: "Figurative Language: Simile, Metaphor, Personification", icon: "🌈", type: "lesson" },
+          { title: "Symbolism & Imagery", icon: "🎨", type: "lesson" },
+          { title: "Foreshadowing & Flashback", icon: "⏳", type: "lesson" },
+          { title: "Irony: Dramatic, Verbal & Situational", icon: "😏", type: "lesson" },
+          { title: "Tone vs. Mood", icon: "🎵", type: "lesson" },
+          { title: "Allusion & Intertextuality", icon: "🔗", type: "elective" },
+        ],
+      },
+      {
+        title: "Analytical Writing", icon: "✍️", colorRamp: "teal",
+        lessons: [
+          { title: "The Literary Essay: Thesis & Evidence", icon: "📄", type: "lesson" },
+          { title: "Citing Textual Evidence", icon: "📌", type: "lesson" },
+          { title: "Analyzing Author's Craft", icon: "🔍", type: "lesson" },
+          { title: "Compare & Contrast Texts", icon: "⚖️", type: "lesson" },
+          { title: "Peer Review & Revision", icon: "✏️", type: "elective" },
         ],
       },
     ],
@@ -571,6 +757,170 @@ type AssignmentRow = {
 };
 
 function makeId() { return crypto.randomUUID(); }
+
+// Subject+chapter-specific checkpoint quiz questions.
+// Each entry is [question, optionA, optionB, optionC, optionD, correctIndex (0-based), explanation]
+type QuizSpec = [string, string, string, string, string, number, string];
+
+const CHAPTER_QUIZ_BANK: Record<string, QuizSpec[]> = {
+  "Multiplication & Division": [
+    ["What does 7 × 8 equal?", "48", "54", "56", "63", 2, "7 × 8 = 56. Tip: 7 × 7 = 49, plus one more 7 = 56."],
+    ["Which is the correct area model for 4 × 23?", "4 × 20 + 4 × 3", "4 × 2 + 4 × 3", "4 + 20 + 3", "4 × 23 = 4 + 23", 0, "Area models break 23 into 20 + 3, then multiply each part by 4: 80 + 12 = 92."],
+    ["84 ÷ 7 = ?", "11", "12", "13", "14", 1, "7 × 12 = 84, so 84 ÷ 7 = 12."],
+    ["Which equation shows the relationship between multiplication and division?", "6 × 8 = 48, so 48 ÷ 6 = 8", "6 + 8 = 14, so 14 ÷ 6 = 8", "6 × 8 = 48, so 48 ÷ 8 = 6 only", "Division and multiplication are unrelated", 0, "Multiplication and division are inverse operations: if 6 × 8 = 48, then 48 ÷ 6 = 8 AND 48 ÷ 8 = 6."],
+    ["A class has 96 crayons shared equally among 8 tables. How many crayons per table?", "8", "10", "12", "14", 2, "96 ÷ 8 = 12 crayons per table."],
+  ],
+  "Fractions & Mixed Numbers": [
+    ["Which fraction is equivalent to 2/3?", "4/9", "4/6", "3/4", "6/8", 1, "2/3 = 4/6 because both numerator and denominator are multiplied by 2."],
+    ["Which correctly converts 7/4 to a mixed number?", "1 3/4", "1 1/2", "2 1/4", "1 2/4", 0, "7 ÷ 4 = 1 remainder 3, so 7/4 = 1 and 3/4."],
+    ["3/5 + 1/5 = ?", "4/10", "4/5", "3/10", "2/5", 1, "When denominators are the same, add the numerators: 3 + 1 = 4, so 4/5."],
+    ["Which fraction is greater: 3/4 or 5/8?", "They are equal", "5/8", "3/4", "Cannot compare", 2, "Convert 3/4 to 6/8. Since 6/8 > 5/8, the fraction 3/4 is greater."],
+    ["A pizza is cut into 8 slices. You eat 3 slices. What fraction did you eat?", "3/5", "5/8", "3/8", "1/3", 2, "You ate 3 out of 8 slices, which is 3/8."],
+  ],
+  "Geometry & Measurement": [
+    ["What is the area of a rectangle that is 6 cm wide and 9 cm long?", "30 cm²", "54 cm²", "54 cm", "15 cm²", 1, "Area = length × width = 9 × 6 = 54 cm²."],
+    ["An angle that measures exactly 90° is called a:", "Acute angle", "Obtuse angle", "Right angle", "Straight angle", 2, "A right angle measures exactly 90°, like the corner of a square."],
+    ["A triangle with all three sides the same length is called:", "Scalene", "Isosceles", "Equilateral", "Right", 2, "Equilateral triangles have all three sides equal in length."],
+    ["Which unit would you use to measure the weight of a textbook?", "Millimeters", "Liters", "Pounds", "Degrees", 2, "Pounds (or kilograms) measure weight. Millimeters and liters are for length and volume."],
+    ["What is the perimeter of a square with side length 7 cm?", "28 cm", "49 cm", "14 cm", "21 cm", 0, "Perimeter of a square = 4 × side = 4 × 7 = 28 cm."],
+  ],
+  "Reading Comprehension": [
+    ["The main idea of a passage is best described as:", "The first sentence of each paragraph", "The most important point the author is making", "A detail that supports an argument", "The title of the article", 1, "The main idea is the central message or argument the author wants you to take away."],
+    ["When you make an inference, you:", "Copy a sentence directly from the text", "Use text evidence plus what you already know to figure something out", "Summarize the whole passage", "Look up a word in the dictionary", 1, "Inferences are conclusions we draw by combining text clues with our own background knowledge."],
+    ["Author's purpose refers to:", "The topic of the text", "Why the author wrote the text (to inform, persuade, entertain)", "The author's favorite subject", "The length of the text", 1, "Authors write for specific reasons: to inform, persuade, or entertain."],
+    ["A nonfiction text feature that helps you find information quickly is:", "A simile", "A plot twist", "An index or table of contents", "Dialogue between characters", 2, "Indexes and tables of contents help readers navigate nonfiction books quickly."],
+    ["Which best describes a summary of a passage?", "A list of all the details", "A short retelling of only the most important ideas", "A copy of the first paragraph", "A new story about the same topic", 1, "A summary captures the key points briefly — not every detail, just the essentials."],
+  ],
+  "Writing Workshop": [
+    ["Which is the correct order of the writing process?", "Draft, Prewrite, Revise, Edit, Publish", "Prewrite, Draft, Revise, Edit, Publish", "Edit, Draft, Prewrite, Revise, Publish", "Publish, Prewrite, Draft, Edit, Revise", 1, "Writers plan (prewrite), then draft, revise for ideas, edit for mechanics, then publish."],
+    ["A narrative essay is best described as:", "A text that argues a position with evidence", "A story that uses vivid details and a clear sequence of events", "A list of facts about a topic", "A text that compares two things", 1, "Narrative writing tells a story using descriptive details, characters, and a clear sequence."],
+    ["What is the purpose of a topic sentence?", "To end the paragraph", "To introduce the main idea of a paragraph", "To provide the most interesting detail", "To transition between paragraphs", 1, "A topic sentence tells the reader what the paragraph is going to be about."],
+    ["In opinion writing, what must you always include to support your claim?", "Rhyming language", "Evidence and reasons", "A character's name", "A question for the reader", 1, "Strong opinion writing backs every claim with evidence — facts, examples, or expert opinions."],
+    ["Which sentence uses the most vivid word choice?", "The dog walked.", "The old dog moved slowly.", "The arthritic beagle limped across the frosty yard.", "The dog went across the yard.", 2, "Vivid word choice uses specific, sensory details that paint a clear picture in the reader's mind."],
+  ],
+  "Grammar & Vocabulary": [
+    ["In the sentence 'The quick brown fox jumps over the lazy dog,' which word is an adjective?", "jumps", "fox", "quick", "over", 2, "'Quick' describes the noun 'fox,' making it an adjective."],
+    ["Which sentence is punctuated correctly?", "What time is it", "What time is it?", "What time is it!", "What, time is it?", 1, "Questions end with a question mark."],
+    ["The prefix 'un-' means:", "again", "before", "not or opposite of", "half", 2, "Un- reverses the meaning: 'unhappy' means not happy."],
+    ["Which is an example of a metaphor?", "Her smile was as bright as the sun.", "The thunder growled angrily.", "Time is a thief.", "She ran quickly.", 2, "A metaphor directly equates two things: 'Time IS a thief' (not 'like' a thief, which would be a simile)."],
+    ["Using context clues, what does 'arid' most likely mean in this sentence: 'The desert was so arid that no plants could survive.'?", "cold", "crowded", "very dry", "beautiful", 2, "Context clue: 'no plants could survive' tells us arid means extremely dry."],
+  ],
+  "Ratios & Proportional Reasoning": [
+    ["A recipe uses 2 cups of flour for every 3 cups of sugar. What is the ratio of flour to sugar?", "3:2", "2:3", "2:5", "5:2", 1, "The ratio of flour to sugar is 2:3, reading the order given in the problem."],
+    ["If 4 apples cost $2.00, what is the unit price per apple?", "$0.25", "$0.50", "$0.75", "$1.00", 1, "Unit price = total cost ÷ quantity = $2.00 ÷ 4 = $0.50 per apple."],
+    ["What percent is equivalent to 3/4?", "34%", "43%", "75%", "25%", 2, "3 ÷ 4 = 0.75 = 75%."],
+    ["A map uses the scale 1 inch = 50 miles. Two cities are 4 inches apart on the map. How far apart are they really?", "54 miles", "150 miles", "200 miles", "46 miles", 2, "4 inches × 50 miles/inch = 200 miles."],
+    ["Which proportion is correctly set up to solve: if 5 workers finish a job in 8 days, how long for 10 workers?", "5/8 = 10/x", "5/10 = x/8", "5 × 8 = 10 × x", "8/5 = x/10", 2, "More workers → fewer days (inverse). 5 × 8 = 10 × x gives x = 4 days."],
+  ],
+  "Expressions & Equations": [
+    ["What is the value of 3x + 5 when x = 4?", "12", "17", "20", "7", 1, "3(4) + 5 = 12 + 5 = 17."],
+    ["Which property allows you to rewrite 4 × (6 + 3) as 4 × 6 + 4 × 3?", "Commutative property", "Associative property", "Distributive property", "Identity property", 2, "The distributive property lets you multiply a factor by each addend: 4(6+3) = 24+12 = 36."],
+    ["Solve: x − 9 = 14. What is x?", "5", "23", "126", "−5", 1, "Add 9 to both sides: x = 14 + 9 = 23."],
+    ["Which inequality describes all numbers greater than 7?", "x < 7", "x = 7", "x > 7", "x ≤ 7", 2, "The symbol '>' means 'greater than.' So x > 7 means x is any number bigger than 7."],
+    ["If f(x) = 2x − 1, what is f(5)?", "8", "9", "10", "11", 1, "f(5) = 2(5) − 1 = 10 − 1 = 9."],
+  ],
+  "Geometry & Statistics": [
+    ["What is the area of a triangle with base 10 cm and height 6 cm?", "60 cm²", "30 cm²", "16 cm²", "32 cm²", 1, "Area of a triangle = ½ × base × height = ½ × 10 × 6 = 30 cm²."],
+    ["A rectangular prism has length 5, width 4, and height 3. What is its volume?", "12", "60", "47", "120", 1, "Volume = l × w × h = 5 × 4 × 3 = 60 cubic units."],
+    ["A data set is: 4, 7, 3, 9, 7. What is the median?", "3", "4", "7", "9", 2, "Order the data: 3, 4, 7, 7, 9. The middle value is 7."],
+    ["What is the range of the data set: 12, 5, 18, 9, 3?", "15", "8", "10", "13", 0, "Range = highest − lowest = 18 − 3 = 15."],
+    ["In a histogram, the bars represent:", "Individual data points", "Frequencies of data within intervals", "The median of the data", "The mean of the data", 1, "Histograms show how often data falls within a given range (interval)."],
+  ],
+  "Earth's Structure & Plate Tectonics": [
+    ["Which layer of the Earth is the thinnest?", "Inner core", "Outer core", "Mantle", "Crust", 3, "Earth's crust is the thinnest layer — only 5–70 km thick compared to the 2,900 km mantle."],
+    ["At a convergent plate boundary, the two plates:", "Move apart from each other", "Slide past each other horizontally", "Move toward each other and collide", "Do not move relative to each other", 2, "Convergent boundaries involve plates colliding, which can form mountains or ocean trenches."],
+    ["The Richter scale measures:", "The speed of a tectonic plate", "The duration of an earthquake", "The magnitude (energy released) of an earthquake", "The depth of a volcano", 2, "The Richter scale measures the energy released by an earthquake."],
+    ["Most volcanoes are located:", "Randomly across the globe", "Near the center of tectonic plates", "At tectonic plate boundaries", "Only in tropical regions", 2, "Volcanoes form where tectonic plates diverge or converge, releasing magma."],
+    ["Which type of rock forms when lava cools and solidifies?", "Sedimentary", "Metamorphic", "Igneous", "Mineral", 2, "Igneous rock forms from cooled magma or lava."],
+  ],
+  "Weather & Climate": [
+    ["During which stage of the water cycle does water vapor become liquid water in clouds?", "Evaporation", "Condensation", "Precipitation", "Transpiration", 1, "Condensation turns water vapor into tiny water droplets that form clouds."],
+    ["A cold front occurs when:", "Warm air slides up over cold air", "Cold air pushes under warm air, lifting it rapidly", "Two air masses of the same temperature meet", "High pressure moves into an area", 1, "Cold fronts bring cold air undercutting warm air, often causing severe thunderstorms."],
+    ["What drives Earth's global wind patterns?", "Ocean currents alone", "Unequal heating of Earth's surface and the Coriolis effect", "The tilt of Earth's axis only", "Volcanic activity", 1, "Uneven solar heating + the Coriolis effect from Earth's rotation creates the global wind belts."],
+    ["Which best describes the difference between weather and climate?", "They mean the same thing", "Weather is long-term; climate is short-term", "Weather is short-term; climate is long-term patterns", "Climate only refers to temperature", 2, "Weather = current conditions; climate = average patterns over 30+ years."],
+    ["Hurricanes get their energy from:", "Cold Arctic air masses", "Warm ocean water", "High-altitude jet streams", "Desert heat", 1, "Hurricanes are powered by the evaporation of warm ocean water (≥26°C)."],
+  ],
+  "Astronomy & Space": [
+    ["Earth completes one full rotation on its axis in approximately:", "365 days", "28 days", "24 hours", "12 hours", 2, "Earth rotates once every ~24 hours, which gives us day and night."],
+    ["A lunar month (full cycle of moon phases) takes approximately:", "7 days", "14 days", "28–29 days", "365 days", 2, "The moon takes about 29.5 days to complete all its phases as it orbits Earth."],
+    ["What causes the seasons on Earth?", "Earth's distance from the Sun", "The tilt of Earth's axis relative to its orbit", "The speed of Earth's rotation", "Sunspot activity", 1, "Earth's 23.5° axial tilt causes different hemispheres to receive more/less direct sunlight throughout the year."],
+    ["Which planet is the largest in our solar system?", "Saturn", "Neptune", "Earth", "Jupiter", 3, "Jupiter is the largest planet — it's so big that all other planets could fit inside it."],
+    ["A star's life cycle ends as a:", "Planet", "Galaxy", "White dwarf, neutron star, or black hole, depending on its mass", "Comet", 2, "Massive stars end as supernovae leaving neutron stars or black holes; smaller stars become white dwarfs."],
+  ],
+  "Colonial America & the Revolution": [
+    ["Which document declared the American colonies independent from Britain?", "The Magna Carta", "The Constitution", "The Declaration of Independence", "The Mayflower Compact", 2, "The Declaration of Independence, adopted July 4, 1776, formally declared independence from Britain."],
+    ["The slogan 'No taxation without representation' expressed colonial anger over:", "Being forced to house British soldiers", "Paying taxes to a parliament where they had no elected delegates", "Losing trade rights with France", "Being denied freedom of religion", 1, "Colonists were taxed by the British Parliament but had no vote or representation in that body."],
+    ["The Battle of Lexington and Concord is significant because:", "It was the last major battle of the Revolution", "It was the first military conflict of the American Revolution", "George Washington won a decisive victory there", "It took place in Philadelphia", 1, "The 'shot heard round the world' — the first shots of the Revolution were fired at Lexington in 1775."],
+    ["Which best describes the difference between Patriots and Loyalists?", "Patriots wanted independence; Loyalists wanted to remain under British rule", "Loyalists wanted independence; Patriots supported the king", "Both groups supported independence", "Patriots were farmers; Loyalists were city dwellers", 0, "Patriots sought independence from Britain; Loyalists (Tories) believed in remaining loyal to the Crown."],
+    ["Thomas Jefferson is most famous for:", "Winning the Battle of Yorktown", "Being the first Chief Justice", "Writing the Declaration of Independence", "Commanding the Continental Navy", 2, "Jefferson was the primary author of the Declaration of Independence."],
+  ],
+  "Founding the Republic": [
+    ["The Articles of Confederation failed primarily because:", "They gave Congress too much power", "The central government was too weak with no power to tax or enforce laws", "The states refused to sign them", "They were only meant to be temporary", 1, "Under the Articles, Congress could not tax citizens or compel states to follow federal law — making the government ineffective."],
+    ["The principle of 'checks and balances' ensures that:", "All three branches have equal budgets", "No single branch of government becomes too powerful", "The President can override the Supreme Court", "Congress makes all final decisions", 1, "Each branch has powers that limit the others, preventing any one from dominating."],
+    ["The Bill of Rights was added to the Constitution primarily to:", "Reduce the size of government", "Protect individual freedoms from government overreach", "Define the powers of the President", "Establish the Supreme Court", 1, "The first 10 amendments protect freedoms like speech, religion, and due process."],
+    ["Federalists like Hamilton believed:", "The states should have more power than the federal government", "A strong central government was necessary", "The Constitution should not be ratified", "America should remain a confederation", 1, "Federalists argued that a strong national government was essential for stability and effective governance."],
+    ["George Washington set an important precedent by:", "Serving three terms as President", "Refusing to leave office", "Voluntarily stepping down after two terms", "Declaring himself king", 2, "Washington's voluntary retirement after two terms established the two-term tradition (later codified in the 22nd Amendment)."],
+  ],
+  "Expansion & Conflict": [
+    ["The Louisiana Purchase doubled the size of the United States. Who sold this territory?", "Spain", "Britain", "France", "Mexico", 2, "Napoleon Bonaparte sold the Louisiana Territory to the U.S. in 1803 for $15 million."],
+    ["The Trail of Tears refers to:", "A trade route between New England and the Mississippi", "The forced removal of Cherokee and other Native nations from their lands to Oklahoma", "The march of soldiers to fight in the Mexican-American War", "The westward path of the Oregon Trail", 1, "President Jackson's Indian Removal Act forced thousands of Native Americans west; thousands died on the journey."],
+    ["Manifest Destiny was the 19th-century belief that:", "The U.S. should limit its territory to the original 13 colonies", "It was America's God-given right to expand across the continent to the Pacific", "Western territories should remain wilderness", "Native Americans should receive full citizenship", 1, "Manifest Destiny justified westward expansion as divinely ordained — with devastating consequences for Native peoples."],
+    ["The primary cause of the Civil War was:", "Disagreements over tariff policy alone", "The issue of slavery and its expansion into new territories", "Britain's interference in American trade", "Disputes over the construction of railroads", 1, "While multiple factors played roles, slavery — particularly its expansion into western territories — was the central cause."],
+    ["Frederick Douglass was significant because:", "He led the Confederate army", "He was an escaped slave who became a leading abolitionist and speaker", "He wrote the Emancipation Proclamation", "He was the first Black senator", 1, "Douglass used his powerful speeches and autobiography to expose the brutal reality of slavery and argue for abolition."],
+  ],
+  "Cells: The Building Blocks of Life": [
+    ["Which scientist first observed cells using a microscope?", "Charles Darwin", "Louis Pasteur", "Robert Hooke", "Gregor Mendel", 2, "Robert Hooke coined the term 'cell' in 1665 after observing cork tissue under a microscope."],
+    ["Which organelle is called the 'powerhouse of the cell'?", "Nucleus", "Ribosome", "Cell membrane", "Mitochondria", 3, "Mitochondria produce ATP (the cell's energy currency) through cellular respiration."],
+    ["What is the main difference between prokaryotic and eukaryotic cells?", "Only eukaryotes have cell membranes", "Prokaryotes lack a membrane-bound nucleus; eukaryotes have one", "Prokaryotes are always larger than eukaryotes", "Only prokaryotes have ribosomes", 1, "Prokaryotes (like bacteria) have no nuclear membrane; eukaryotes (animals, plants, fungi) have a true nucleus."],
+    ["The cell membrane's job is to:", "Produce energy for the cell", "Control what enters and exits the cell", "Store the cell's DNA", "Make proteins", 1, "The cell membrane is selectively permeable — it controls which substances pass in and out."],
+    ["During mitosis, the result is:", "One cell with half the original chromosomes", "Two identical daughter cells with the same number of chromosomes", "Four genetically unique cells", "The destruction of the parent cell", 1, "Mitosis produces two genetically identical daughter cells — used for growth and repair."],
+  ],
+  "Genetics & Heredity": [
+    ["DNA is shaped like:", "A straight ladder", "A single strand", "A double helix", "A sphere", 2, "DNA has a double helix structure — like a twisted ladder — discovered by Watson and Crick in 1953."],
+    ["In a Punnett square cross of Tt × Tt, what fraction of offspring will be dominant (TT or Tt)?", "1/4", "1/2", "3/4", "All of them", 2, "The Punnett square gives TT, Tt, Tt, tt — 3 out of 4 (75%) show the dominant phenotype."],
+    ["An organism's genotype refers to:", "Its observable physical traits", "Its genetic makeup (the alleles it carries)", "The environment it lives in", "How healthy it is", 1, "Genotype = the actual alleles (Aa, BB, etc.). Phenotype = the physical trait you can see."],
+    ["Which of the following is an example of a recessive trait being expressed?", "A person with one allele for brown eyes and one for blue eyes having brown eyes", "Two parents with brown eyes having a blue-eyed child", "A parent passing a dominant allele to every child", "A single allele controlling many traits", 1, "A blue-eyed child from brown-eyed parents means both parents carry a hidden recessive allele (Bb × Bb → bb)."],
+    ["A gene mutation is:", "Always harmful to the organism", "A permanent change in the DNA sequence", "The same as a genetic disease", "Impossible to inherit", 1, "Mutations are changes in the DNA sequence — they can be harmful, neutral, or occasionally beneficial."],
+  ],
+  "Evolution & Natural Selection": [
+    ["Charles Darwin's voyage on the HMS Beagle led him to observe:", "That all species were created separately and never change", "That species vary and those best adapted to their environment survive and reproduce", "That Earth is only a few thousand years old", "That evolution happens within a single lifetime", 1, "Darwin's Galápagos observations showed that populations adapt over generations through natural selection."],
+    ["Which provides evidence for evolution?", "The fact that all organisms need food", "Fossil records, DNA similarities, and homologous structures in different species", "The existence of different colors of flowers", "Organisms reproducing quickly", 1, "Multiple lines of evidence — fossils, DNA, anatomy — all point to common ancestry and evolution."],
+    ["Natural selection acts on:", "Genotypes directly", "Individual organisms' choices", "Random mutations in a population", "Phenotypes — observable traits that affect survival and reproduction", 3, "Selection acts on what you can see (phenotype). Traits that help survival get passed on more often."],
+    ["Two populations of the same species that become isolated and no longer interbreed may eventually become:", "The same species forever", "Extinct immediately", "Separate species through speciation", "More similar over time", 2, "Geographic or reproductive isolation leads to divergence — eventually the two populations become distinct species."],
+    ["The phrase 'survival of the fittest' means:", "The strongest animal always wins", "The fastest animal always wins", "Organisms best adapted to their environment are most likely to reproduce", "Only predators survive", 2, "'Fitness' in biology means reproductive success — leaving behind offspring. A camouflaged moth is 'fit' for its environment."],
+  ],
+  "Narrative Fiction & Story Craft": [
+    ["Freytag's Pyramid places the climax:", "At the very beginning of the story", "At the rising action", "At the peak of the pyramid, where tension is highest", "In the resolution", 2, "The climax is the story's turning point — the moment of highest tension before the conflict is resolved."],
+    ["A dynamic character is one who:", "Appears in many scenes", "Remains the same throughout the story", "Undergoes significant change by the end", "Is the most powerful character", 2, "Dynamic characters grow, change, or learn something significant. Static characters stay the same."],
+    ["Setting affects a story primarily by:", "Determining the protagonist's name", "Creating mood and influencing character behavior and plot", "Deciding the theme", "Having no impact on the plot", 1, "Setting shapes atmosphere, creates obstacles or advantages, and reflects characters' inner states."],
+    ["In first-person narration, the narrator:", "Knows the thoughts of every character", "Is a character within the story, using 'I' and 'me'", "Tells the story from outside without being in it", "Speaks directly to another character only", 1, "First-person narrators are characters in the story — we experience events through their limited perspective."],
+    ["Theme is best described as:", "A one-word topic like 'friendship'", "The setting of the story", "A universal message or insight about life conveyed by the story", "The summary of what happens", 2, "Theme is the 'so what?' — the deeper truth or insight about human experience the story reveals."],
+  ],
+  "Literary Devices & Craft": [
+    ["'The classroom was a battlefield' is an example of:", "Simile", "Alliteration", "Metaphor", "Personification", 2, "A metaphor compares two unlike things directly (without 'like' or 'as'): the classroom IS a battlefield."],
+    ["Which is an example of personification?", "Her laugh was like music.", "The storm roared and howled in fury.", "He ran as fast as a cheetah.", "The mountains stood tall.", 1, "Personification gives human qualities to non-human things. A storm can't literally roar in fury — that's a human action."],
+    ["Foreshadowing in a story serves to:", "Confuse the reader deliberately", "Give hints about what will happen later in the story", "Explain what already happened", "Reveal the theme directly", 1, "Foreshadowing plants clues that make later events feel inevitable — it creates tension and rewards re-reading."],
+    ["Dramatic irony occurs when:", "A character says something funny", "The reader knows something a character doesn't", "The opposite of what's expected happens", "Two characters disagree", 1, "Dramatic irony creates tension because we (the audience) know something the character doesn't — like knowing the villain is behind the door."],
+    ["The tone of a piece of writing refers to:", "The overall emotion the reader feels", "The author's attitude toward the subject or audience", "The speed at which the plot moves", "The number of literary devices used", 1, "Tone = the author's attitude (ironic, melancholic, celebratory). Mood = how the reader feels."],
+  ],
+  "Analytical Writing": [
+    ["A strong thesis statement for a literary essay should:", "State a plot summary", "Make an arguable claim about the text's meaning or craft", "Ask a question for the reader to answer", "List the literary devices used", 1, "A thesis stakes a specific, defensible claim about what the text means or how it works — not just what happens."],
+    ["Textual evidence is most effectively used when:", "You quote as many long passages as possible", "You select a specific quote and then explain how it supports your claim", "You paraphrase everything without quotes", "You only cite the beginning and end of the text", 1, "The best evidence = specific quote + explanation of how it proves your point (the 'quote sandwich')."],
+    ["When analyzing an author's craft, you should focus on:", "Whether you liked the book", "How literary choices (imagery, structure, word choice) create meaning or effect", "The author's biography", "A summary of the events", 1, "Craft analysis asks: why did the author make this choice, and what effect does it have on the reader?"],
+    ["A compare-contrast essay requires you to:", "Only describe similarities between two texts", "Find and analyze both similarities and differences to reveal a deeper insight", "Summarize both texts completely before comparing", "Only discuss which text is better", 1, "Strong compare-contrast essays go beyond listing similarities/differences — they use comparison to argue a point."],
+    ["The revision stage of writing differs from editing because revision focuses on:", "Correcting grammar and spelling errors", "Big-picture changes: ideas, structure, argument clarity, and evidence", "Formatting the document correctly", "Adding a title and author name", 1, "Revision = rethinking content and argument. Editing = fixing mechanics. Do them in that order."],
+  ],
+};
+
+function getChapterQuizQuestions(chapterTitle: string, subject: string): QuizSpec[] {
+  return CHAPTER_QUIZ_BANK[chapterTitle] ?? [
+    [`What is the central focus of "${chapterTitle}" in ${subject}?`, "Optional enrichment only", "Core foundational concepts that build throughout the course", "Historical trivia unrelated to other topics", "Vocabulary terms only", 1, `${chapterTitle} covers essential concepts that support everything else in ${subject}.`],
+    [`How does ${chapterTitle} connect to real-world situations?`, "It has no real-world applications", "The concepts apply to everyday situations and problems", "Only professionals use these ideas", "It only applies inside a classroom", 1, `${subject} concepts — including those in ${chapterTitle} — show up constantly in the real world.`],
+    ["Which learning strategy works best when studying a new chapter?", "Read once and hope it sticks", "Re-read difficult sections and connect ideas to what you already know", "Skip sections that seem hard", "Memorize definitions without understanding them", 1, "Active reading — re-reading, connecting, questioning — dramatically improves retention and understanding."],
+    [`What should you be able to do after completing ${chapterTitle}?`, "Recite facts from memory alone", "Explain key ideas in your own words with examples", "Copy definitions from the text", "Recognize vocabulary words only", 1, "True understanding means you can explain and apply concepts, not just repeat them."],
+    ["How will you know you've mastered this chapter?", "You finished all the assignments", "You can explain the main ideas clearly to someone who hasn't studied them", "You got 100% on every quiz", "You read everything twice", 1, "The Feynman technique — teaching a concept in simple terms — is one of the best mastery checks."],
+  ];
+}
 
 function milestoneAssignments(
   ctx: { orgId: string; classId: string; userId: string; now: string },
@@ -631,13 +981,9 @@ function milestoneAssignments(
       contentType: "quiz",
       contentRef: JSON.stringify({
         title: `${chapterTitle} — Chapter Quiz`,
-        questions: [
-          { question: `What is the main topic of the ${chapterTitle} chapter?`, options: ["Historical events only", "Core concepts of " + subject, "Only vocabulary terms", "Mathematical formulas"], answerIndex: 1, explanation: `${chapterTitle} covers the core concepts of ${subject} at this level.` },
-          { question: `How does ${chapterTitle} connect to the rest of ${subject}?`, options: ["It doesn't connect", "It builds foundational knowledge", "It's an optional enrichment topic", "It replaces previous learning"], answerIndex: 1, explanation: "Every chapter builds on previous knowledge and prepares you for what comes next." },
-          { question: "Which learning strategy is most effective for this chapter?", options: ["Memorizing only", "Reading once quickly", "Connecting concepts to real examples", "Skipping the hard parts"], answerIndex: 2, explanation: "Connecting new ideas to real examples you know is the most powerful learning strategy." },
-          { question: `What should you be able to do after completing ${chapterTitle}?`, options: ["Recite facts from memory", "Explain key ideas in your own words", "Copy definitions from the text", "Recognize vocabulary words"], answerIndex: 1, explanation: "True understanding means you can explain concepts in your own words." },
-          { question: "How will you know you've mastered this chapter?", options: ["You finished all the assignments", "You can teach the main ideas to someone else", "You got 100% on every quiz", "You read everything twice"], answerIndex: 1, explanation: "The Feynman technique — being able to teach a concept — is a reliable mastery check." },
-        ],
+        questions: getChapterQuizQuestions(chapterTitle, subject).map(([q, a, b, c, d, ai, exp]) => ({
+          question: q, options: [a, b, c, d], answerIndex: ai, explanation: exp,
+        })),
       }),
     },
     // 6. Chapter reflection essay
@@ -892,7 +1238,6 @@ export const seedDemoWorkspaceContent = createServerFn({ method: "POST" })
     }
 
     const schoolYear = getCurrentSchoolYearLabel();
-    const subjectCycle = ["Math", "Science", "US History"] as const;
     const nowDate = new Date();
     const monday = new Date(nowDate);
     const day = monday.getDay();
@@ -931,7 +1276,7 @@ export const seedDemoWorkspaceContent = createServerFn({ method: "POST" })
 
     for (const student of DEMO_STUDENTS) {
       const profileId = profileIdMap[student.displayName]!;
-      for (const subject of subjectCycle) {
+      for (const subject of student.subjects) {
         const classId = crypto.randomUUID();
         classMetas.push({ classId, profileId, subject, gradeLevel: student.gradeLevel });
         classRows.push({
@@ -1188,14 +1533,23 @@ export const seedDemoWorkspaceContent = createServerFn({ method: "POST" })
     await batchInsert(db, skillTreeNodeAssignments, nodeAssignmentRows);
 
     // ── Phase 5: Node progress + edges ───────────────────────────────────────
+    //
+    // Edge topology for each skill tree:
+    //   milestone  ──required──▶  lesson1
+    //   lesson1    ──required──▶  lesson2  ──...──▶  lastLesson
+    //   lastLesson ──required──▶  nextMilestone  (spine continues)
+    //   milestone  ──optional──▶  elective1  (bonus XP branch off spine)
+    //   lastElective ──bonus──▶  nextMilestone  (merge back)
+    //   lastMilestone ──required──▶  boss  (final boss)
+    //
     const progressRows: Record<string, unknown>[] = [];
     const edgeRows: Record<string, unknown>[] = [];
 
     for (const [treeId, treeNodes] of byTree.entries()) {
       const totalNodes = treeNodes.length;
-      const completedCutoff = Math.max(1, Math.floor(totalNodes * 0.15));
-      const inProgressCutoff = Math.max(2, Math.floor(totalNodes * 0.30));
-      const availableCutoff = Math.max(3, Math.floor(totalNodes * 0.50));
+      const completedCutoff = Math.max(1, Math.floor(totalNodes * 0.25));
+      const inProgressCutoff = Math.max(2, Math.floor(totalNodes * 0.40));
+      const availableCutoff = Math.max(3, Math.floor(totalNodes * 0.55));
 
       for (const [idx, nm] of treeNodes.entries()) {
         const status: "complete" | "in_progress" | "available" | "locked" =
@@ -1211,36 +1565,75 @@ export const seedDemoWorkspaceContent = createServerFn({ method: "POST" })
           treeId,
           status,
           xpEarned: status === "complete" ? nm.nodeType === "boss" ? 300 : nm.nodeType === "milestone" ? 150 : 100
-                   : status === "in_progress" ? 40 : 0,
+                   : status === "in_progress" ? 50 : 0,
           completedAt: status === "complete" ? nowStr : null,
           updatedAt: nowStr,
         });
+      }
 
-        // Edge: chain each node to the next within the tree
-        if (idx > 0) {
-          edgeRows.push({
-            id: crypto.randomUUID(),
-            treeId,
-            sourceNodeId: treeNodes[idx - 1]!.nodeId,
-            targetNodeId: nm.nodeId,
-            edgeType: "required",
-          });
+      // Build edges by chapter groups (structured tree topology)
+      // Group treeNodes by chapter: each milestone starts a new chapter group
+      type ChapterGroup = {
+        milestoneId: string;
+        lessonIds: string[];
+        electiveIds: string[];
+      };
+      const chapters: ChapterGroup[] = [];
+      let bossNodeId: string | null = null;
+
+      for (const nm of treeNodes) {
+        if (nm.nodeType === "boss") {
+          bossNodeId = nm.nodeId;
+        } else if (nm.nodeType === "milestone") {
+          chapters.push({ milestoneId: nm.nodeId, lessonIds: [], electiveIds: [] });
+        } else if (nm.nodeType === "elective") {
+          chapters.at(-1)?.electiveIds.push(nm.nodeId);
+        } else {
+          // lesson or branch
+          chapters.at(-1)?.lessonIds.push(nm.nodeId);
+        }
+      }
+
+      // Emit edges for each chapter
+      for (let ci = 0; ci < chapters.length; ci++) {
+        const ch = chapters[ci]!;
+        const nextCh = chapters[ci + 1];
+
+        // milestone → first lesson (required spine)
+        if (ch.lessonIds.length > 0) {
+          edgeRows.push({ id: crypto.randomUUID(), treeId, sourceNodeId: ch.milestoneId, targetNodeId: ch.lessonIds[0]!, edgeType: "required" });
+
+          // chain lessons (required spine)
+          for (let li = 0; li < ch.lessonIds.length - 1; li++) {
+            edgeRows.push({ id: crypto.randomUUID(), treeId, sourceNodeId: ch.lessonIds[li]!, targetNodeId: ch.lessonIds[li + 1]!, edgeType: "required" });
+          }
+
+          // last lesson → next milestone (required spine continues)
+          const lastLesson = ch.lessonIds.at(-1)!;
+          if (nextCh) {
+            edgeRows.push({ id: crypto.randomUUID(), treeId, sourceNodeId: lastLesson, targetNodeId: nextCh.milestoneId, edgeType: "required" });
+          } else if (bossNodeId) {
+            edgeRows.push({ id: crypto.randomUUID(), treeId, sourceNodeId: lastLesson, targetNodeId: bossNodeId, edgeType: "required" });
+          }
+        } else if (nextCh) {
+          // milestone directly to next milestone if no lessons
+          edgeRows.push({ id: crypto.randomUUID(), treeId, sourceNodeId: ch.milestoneId, targetNodeId: nextCh.milestoneId, edgeType: "required" });
         }
 
-        // Cross-edge: connect milestone nodes to chapter's first lesson
-        if (nm.nodeType === "lesson" && idx > 1) {
-          const before = treeNodes.slice(0, idx);
-          const prevMilestone = before[before.reduceRight((found, n, i) => found === -1 && n.nodeType === "milestone" ? i : found, -1)];
-          if (prevMilestone && prevMilestone.nodeId !== treeNodes[idx - 1]?.nodeId) {
-            edgeRows.push({
-              id: crypto.randomUUID(),
-              treeId,
-              sourceNodeId: prevMilestone.nodeId,
-              targetNodeId: nm.nodeId,
-              edgeType: "required",
-            });
+        // electives branch off the milestone (optional XP side paths)
+        for (const electiveId of ch.electiveIds) {
+          edgeRows.push({ id: crypto.randomUUID(), treeId, sourceNodeId: ch.milestoneId, targetNodeId: electiveId, edgeType: "optional" });
+          // elective merges back into next milestone (or boss) as a bonus path
+          const mergeTarget = nextCh?.milestoneId ?? bossNodeId;
+          if (mergeTarget) {
+            edgeRows.push({ id: crypto.randomUUID(), treeId, sourceNodeId: electiveId, targetNodeId: mergeTarget, edgeType: "bonus" });
           }
         }
+      }
+
+      // If first chapter has no lessons, connect first milestone → boss
+      if (chapters.length === 0 && bossNodeId && treeNodes.length > 0) {
+        edgeRows.push({ id: crypto.randomUUID(), treeId, sourceNodeId: treeNodes[0]!.nodeId, targetNodeId: bossNodeId, edgeType: "required" });
       }
     }
 
@@ -5244,7 +5637,7 @@ const upsertSkillTreeEdgeInput = z.object({
   treeId: z.string(),
   sourceNodeId: z.string(),
   targetNodeId: z.string(),
-  edgeType: z.enum(["required", "optional", "bonus"]).optional(),
+  edgeType: z.enum(["required", "optional", "bonus", "fork"]).optional(),
 });
 
 export const upsertSkillTreeEdge = createServerFn({ method: "POST" })
@@ -5469,12 +5862,75 @@ export const updateNodePositions = createServerFn({ method: "POST" })
     return { updated: data.updates.length };
   });
 
-const PROGRESS_GATING_EDGE_TYPES = new Set(["required", "optional"]);
+const PROGRESS_GATING_EDGE_TYPES = new Set(["required", "fork"]);
 const SPECIALIZATION_COLOR_RAMPS = ["purple", "amber", "coral", "green"] as const;
 const CORE_COLOR_RAMPS = ["blue", "teal"] as const;
 
-function isProgressGatingEdgeType(edgeType: string | null | undefined): edgeType is "required" | "optional" {
+function isProgressGatingEdgeType(edgeType: string | null | undefined): edgeType is "required" | "fork" {
   return typeof edgeType === "string" && PROGRESS_GATING_EDGE_TYPES.has(edgeType);
+}
+
+function isSpecializationLaneNode(input: {
+  cluster?: string | null;
+  nodeType?: string | null;
+  colorRamp?: string | null;
+}) {
+  return (
+    input.cluster === "specialization" ||
+    input.nodeType === "elective" ||
+    (typeof input.colorRamp === "string" &&
+      SPECIALIZATION_COLOR_RAMPS.includes(
+        input.colorRamp as (typeof SPECIALIZATION_COLOR_RAMPS)[number],
+      ))
+  );
+}
+
+function classifySkillTreeEdge(input: {
+  prereqIndex: number;
+  sourceNodeId: string;
+  targetNode: {
+    cluster?: string | null;
+    nodeType?: string | null;
+    colorRamp?: string | null;
+  };
+  forkSourceNodeIds?: Set<string>;
+  existingEdgeType?: SkillTreeEdgeRow["edgeType"] | null;
+}): SkillTreeEdgeRow["edgeType"] {
+  if (input.prereqIndex > 0) return "bonus";
+  if (input.existingEdgeType && input.existingEdgeType !== "bonus") {
+    return input.existingEdgeType;
+  }
+  if (isSpecializationLaneNode(input.targetNode)) return "optional";
+  if (input.forkSourceNodeIds?.has(input.sourceNodeId)) return "fork";
+  return "required";
+}
+
+function deriveForkSourceIds<T extends {
+  id: string;
+  prerequisites: string[];
+  cluster?: string | null;
+  nodeType?: string | null;
+  colorRamp?: string | null;
+}>(nodes: T[]) {
+  const nodeById = new Map(nodes.map((node) => [node.id, node] as const));
+  const coreChildCountBySourceId = new Map<string, number>();
+
+  for (const node of nodes) {
+    if (isSpecializationLaneNode(node)) continue;
+    for (const sourceNodeId of node.prerequisites) {
+      if (!nodeById.has(sourceNodeId)) continue;
+      coreChildCountBySourceId.set(
+        sourceNodeId,
+        (coreChildCountBySourceId.get(sourceNodeId) ?? 0) + 1,
+      );
+    }
+  }
+
+  return new Set(
+    Array.from(coreChildCountBySourceId.entries())
+      .filter(([, count]) => count >= 2)
+      .map(([sourceNodeId]) => sourceNodeId),
+  );
 }
 
 function parseSkillTreeLayoutMetadata(raw: string | null): {
@@ -5658,12 +6114,29 @@ function deriveStoredPrerequisiteGroups(params: {
     if (explicitGroups.length > 0) return explicitGroups;
   }
 
+  const forkGroups = normalizePrerequisiteGroups(
+    params.incomingEdges
+      .filter((edge) => edge.edgeType === "fork")
+      .map((edge) => [edge.sourceNodeId]),
+    incomingSourceIds,
+  );
+
   const gatingGroup = params.incomingEdges
     .filter((edge) => isProgressGatingEdgeType(edge.edgeType))
     .map((edge) => edge.sourceNodeId);
 
+  const unlockOnlyGroup = params.incomingEdges
+    .filter((edge) => edge.edgeType !== "bonus")
+    .map((edge) => edge.sourceNodeId);
+
   const fallbackGroups = normalizePrerequisiteGroups(
-    gatingGroup.length > 0 ? [gatingGroup] : [],
+    forkGroups.length > 0
+      ? forkGroups
+      : gatingGroup.length > 0
+      ? [gatingGroup]
+      : unlockOnlyGroup.length > 0
+        ? [unlockOnlyGroup]
+        : [],
     incomingSourceIds,
   );
 
@@ -5914,24 +6387,33 @@ export const autoLayoutSkillTree = createServerFn({ method: "POST" })
         cluster: node.cluster,
         nodeType: node.nodeType,
       })),
-      { width: 1200, height: 900 },
+      { width: 1800, height: 1400 },
     );
 
+    // Extract true fork node IDs tagged by the layout algorithm
+    const forkIds: Set<string> =
+      (positionMap as Map<string, { x: number; y: number }> & { forkIds?: Set<string> }).forkIds ??
+      new Set();
+
     const normalizedEdgeRows: SkillTreeEdgeRow[] = layoutNodes.flatMap((node) =>
-      node.prerequisites.map((sourceNodeId, index) => ({
-        id: crypto.randomUUID(),
-        treeId: data.treeId,
-        sourceNodeId,
-        targetNodeId: node.tempId,
-        edgeType:
-          index > 0
-            ? "bonus"
-            : (existingEdgeTypeByKey.get(`${sourceNodeId}>${node.tempId}`) ??
-                (node.cluster === "specialization" || node.nodeType === "elective"
-                  ? "optional"
-                  : "required")),
-        createdAt: now,
-      })),
+      node.prerequisites.map((sourceNodeId, index) => {
+        const existing = existingEdgeTypeByKey.get(`${sourceNodeId}>${node.tempId}`);
+        const edgeType = classifySkillTreeEdge({
+          prereqIndex: index,
+          sourceNodeId,
+          targetNode: node,
+          forkSourceNodeIds: forkIds,
+          existingEdgeType: existing ?? null,
+        });
+        return {
+          id: crypto.randomUUID(),
+          treeId: data.treeId,
+          sourceNodeId,
+          targetNodeId: node.tempId,
+          edgeType,
+          createdAt: now,
+        };
+      }),
     );
 
     const incomingEdgesByNodeId = new Map<string, SkillTreeEdgeRow[]>(
@@ -6121,6 +6603,21 @@ export const reweaveSkillTree = createServerFn({ method: "POST" })
     );
 
     const now = new Date().toISOString();
+    const forkTempIds: Set<string> =
+      (positionMap as Map<string, { x: number; y: number }> & { forkIds?: Set<string> }).forkIds ??
+      deriveForkSourceIds(
+        normalizedLayoutNodes.map((node) => ({
+          id: node.tempId,
+          prerequisites: node.prerequisites,
+          cluster: node.cluster,
+          nodeType: node.nodeType,
+        })),
+      );
+    const forkSourceNodeIds = new Set(
+      Array.from(forkTempIds)
+        .map((tempId) => realIdByTempId.get(tempId))
+        .filter((value): value is string => typeof value === "string"),
+    );
     const normalizedNodeByTempId = new Map(
       normalizedLayoutNodes.map((node) => [node.tempId, node] as const),
     );
@@ -6169,12 +6666,12 @@ export const reweaveSkillTree = createServerFn({ method: "POST" })
         if (edgeSet.has(key)) continue;
         edgeSet.add(key);
 
-        const edgeType: SkillTreeEdgeRow["edgeType"] =
-          index > 0
-            ? "bonus"
-            : node.cluster === "specialization" || node.nodeType === "elective"
-              ? "optional"
-              : "required";
+        const edgeType = classifySkillTreeEdge({
+          prereqIndex: index,
+          sourceNodeId,
+          targetNode: node,
+          forkSourceNodeIds,
+        });
 
         rewovenEdgeRows.push({
           id: crypto.randomUUID(),
@@ -6532,6 +7029,11 @@ export const aiExpandSkillTree = createServerFn({ method: "POST" })
 
     // d) Insert nodes and edges with fanned-out positions
     const now = new Date().toISOString();
+    const forkSourceNodeIds = new Set(
+      suggestions.filter((suggestion) => !isSpecializationLaneNode(suggestion)).length >= 2
+        ? [data.fromNodeId]
+        : [],
+    );
     const newNodes: typeof existingNodes = [];
     const newEdgeIds: string[] = [];
 
@@ -6577,10 +7079,12 @@ export const aiExpandSkillTree = createServerFn({ method: "POST" })
           treeId: data.treeId,
           sourceNodeId: data.fromNodeId,
           targetNodeId: nodeId,
-          edgeType:
-            suggestion.cluster === "specialization" || suggestion.nodeType === "elective"
-              ? "optional"
-              : "required",
+          edgeType: classifySkillTreeEdge({
+            prereqIndex: 0,
+            sourceNodeId: data.fromNodeId,
+            targetNode: suggestion,
+            forkSourceNodeIds,
+          }),
           createdAt: now,
         });
 
@@ -6903,12 +7407,20 @@ export const aiSuggestFullCurriculum = createServerFn({ method: "POST" })
       nodeType: s.nodeType,
     }));
     const positionMap = layoutForceDirected(layoutItems);
+    const forkTempIds: Set<string> =
+      (positionMap as Map<string, { x: number; y: number }> & { forkIds?: Set<string> }).forkIds ??
+      deriveForkSourceIds(layoutItems);
 
     // d) Insert nodes — build tempId → real ID map first
     const tempIdToRealId = new Map<string, string>();
     for (const suggestion of suggestions) {
       tempIdToRealId.set(suggestion.tempId, crypto.randomUUID());
     }
+    const forkSourceNodeIds = new Set(
+      Array.from(forkTempIds)
+        .map((tempId) => tempIdToRealId.get(tempId))
+        .filter((value): value is string => typeof value === "string"),
+    );
 
     const now = new Date().toISOString();
 
@@ -6957,7 +7469,7 @@ export const aiSuggestFullCurriculum = createServerFn({ method: "POST" })
       treeId: string;
       sourceNodeId: string;
       targetNodeId: string;
-      edgeType: "required" | "optional" | "bonus";
+      edgeType: "required" | "optional" | "bonus" | "fork";
       createdAt: string;
     }> = [];
     for (const suggestion of suggestions) {
@@ -6970,12 +7482,12 @@ export const aiSuggestFullCurriculum = createServerFn({ method: "POST" })
           treeId: data.treeId,
           sourceNodeId: sourceId,
           targetNodeId: targetId,
-          edgeType:
-            index > 0
-              ? "bonus"
-              : suggestion.cluster === "specialization" || suggestion.nodeType === "elective"
-                ? "optional"
-                : "required",
+          edgeType: classifySkillTreeEdge({
+            prereqIndex: index,
+            sourceNodeId: sourceId,
+            targetNode: suggestion,
+            forkSourceNodeIds,
+          }),
           createdAt: now,
         });
       }
@@ -8030,22 +8542,17 @@ const richDemoSeedWithPinInput = z.object({
 
 const RICH_DEMO_SCHOOL_YEAR = "2025-2026";
 
+// Keep in sync with DEMO_STUDENTS above — same 3 students, same subjects.
 const RICH_DEMO_STUDENTS = [
-  { displayName: "Ava Rivers", gradeLevel: "3", performanceTier: "high" as const },
-  { displayName: "Noah Chen", gradeLevel: "5", performanceTier: "high" as const },
-  { displayName: "Mia Patel", gradeLevel: "7", performanceTier: "medium" as const },
-  { displayName: "Lucas Gomez", gradeLevel: "9", performanceTier: "medium" as const },
-  { displayName: "Sofia Kim", gradeLevel: "4", performanceTier: "high" as const },
-  { displayName: "Ethan Brooks", gradeLevel: "6", performanceTier: "low" as const },
+  { displayName: "Ava Rivers", gradeLevel: "4", performanceTier: "high" as const },
+  { displayName: "Noah Chen", gradeLevel: "6", performanceTier: "high" as const },
+  { displayName: "Mia Patel", gradeLevel: "8", performanceTier: "medium" as const },
 ];
 
 const RICH_DEMO_SUBJECTS_BY_GRADE: Record<string, string[]> = {
-  "3": ["Math", "Language Arts", "Science", "Social Studies", "Art"],
-  "4": ["Math", "Language Arts", "Science", "Social Studies", "Music"],
-  "5": ["Math", "Language Arts", "Science", "Social Studies", "Coding Basics"],
-  "6": ["Math", "Language Arts", "Life Science", "World History", "Art"],
-  "7": ["Pre-Algebra", "Language Arts", "Earth Science", "Geography", "Coding"],
-  "9": ["Algebra I", "English 9", "Biology", "World History", "Elective Studio"],
+  "4": ["Math", "Language Arts"],
+  "6": ["Math", "Earth Science", "US History"],
+  "8": ["Pre-Algebra", "Literature", "Life Science"],
 };
 
 const RICH_DEMO_MARKING_PERIODS = [
@@ -8054,6 +8561,27 @@ const RICH_DEMO_MARKING_PERIODS = [
   { label: "Q3", title: "Third Quarter", periodNumber: 3, startDate: "2026-02-02", endDate: "2026-04-11", status: "active" as const },
   { label: "Q4", title: "Fourth Quarter", periodNumber: 4, startDate: "2026-04-14", endDate: "2026-06-13", status: "upcoming" as const },
 ];
+
+// Exported preview so the settings UI can display accurate counts before seeding.
+export const RICH_DEMO_SEED_PREVIEW = (() => {
+  const totalCourses = RICH_DEMO_STUDENTS.reduce(
+    (sum, s) => sum + (RICH_DEMO_SUBJECTS_BY_GRADE[s.gradeLevel]?.length ?? 0),
+    0,
+  );
+  return {
+    students: RICH_DEMO_STUDENTS.map((s) => ({
+      name: s.displayName,
+      grade: s.gradeLevel,
+      subjects: RICH_DEMO_SUBJECTS_BY_GRADE[s.gradeLevel] ?? [],
+      tier: s.performanceTier,
+    })),
+    totalStudents: RICH_DEMO_STUDENTS.length,
+    totalCourses,
+    markingPeriods: RICH_DEMO_MARKING_PERIODS.map((mp) => mp.label),
+    schoolYear: RICH_DEMO_SCHOOL_YEAR,
+    studentPin: "1111",
+  };
+})();
 
 // Returns a deterministic score based on performance tier and index
 function getDemoScore(tier: "high" | "medium" | "low", seed: number): number {
@@ -8229,7 +8757,7 @@ export const seedDemoPhase2 = createServerFn({ method: "POST" })
     const now = new Date().toISOString();
 
     // 4 quarters → rotate subject → assign classes to marking periods
-    // Each student gets one class per subject (5 subjects). Classes tagged to Q1 for year-long.
+    // Each student gets one class per subject (2-3 subjects). Classes tagged to Q1 for year-long.
     type ClassEntry = { classId: string; profileId: string; subject: string; gradeLevel: string; mpIndex: number };
     const classMap: ClassEntry[] = [];
 
@@ -8533,6 +9061,17 @@ export const seedDemoPhase4 = createServerFn({ method: "POST" })
         })),
         { width: 1200, height: 900 },
       );
+      const forkSourceNodeIds: Set<string> =
+        (positionMap as Map<string, { x: number; y: number }> & { forkIds?: Set<string> }).forkIds ??
+        deriveForkSourceIds(
+          generatedNodes.map((node) => ({
+            id: node.id,
+            prerequisites: node.prerequisites,
+            cluster: node.cluster,
+            nodeType: node.nodeType,
+            colorRamp: node.colorRamp,
+          })),
+        );
 
       for (const node of generatedNodes) {
         const position = positionMap.get(node.id) ?? { x: 600, y: 450 };
@@ -8561,13 +9100,18 @@ export const seedDemoPhase4 = createServerFn({ method: "POST" })
           updatedAt: now,
         });
 
-        for (const prerequisiteId of node.prerequisites) {
+        for (const [index, prerequisiteId] of node.prerequisites.entries()) {
           await db.insert(skillTreeEdges).values({
             id: crypto.randomUUID(),
             treeId,
             sourceNodeId: prerequisiteId,
             targetNodeId: node.id,
-            edgeType: node.cluster === "specialization" ? "optional" : "required",
+            edgeType: classifySkillTreeEdge({
+              prereqIndex: index,
+              sourceNodeId: prerequisiteId,
+              targetNode: node,
+              forkSourceNodeIds,
+            }),
             createdAt: now,
           });
         }
@@ -9237,6 +9781,7 @@ export const wizardGetIntakeData = createServerFn({ method: "GET" }).handler(asy
       id: p.id,
       displayName: p.displayName,
       gradeLevel: p.gradeLevel ?? "",
+      birthDate: p.birthDate ?? null,
     })),
   };
 });
@@ -9672,22 +10217,34 @@ export const wizardCommitCurriculum = createServerFn({ method: "POST" })
 
     // 5. Edges — one per prerequisite, deduped
     const edgeSet = new Set<string>();
+    const forkSourceNodeIds = new Set(
+      Array.from(
+        deriveForkSourceIds(
+          normalizedCommitNodes.map((node) => ({
+            id: node.tempId,
+            prerequisites: node.prerequisites,
+            cluster: node.cluster,
+            nodeType: node.nodeType,
+            colorRamp: node.colorRamp,
+          })),
+        ),
+      )
+        .map((tempId) => tempToReal.get(tempId))
+        .filter((value): value is string => typeof value === "string"),
+    );
+
     const edgeRows: Array<{
       id: string;
       treeId: string;
       sourceNodeId: string;
       targetNodeId: string;
-      edgeType: "required" | "optional" | "bonus";
+      edgeType: "required" | "optional" | "bonus" | "fork";
       createdAt: string;
     }> = [];
 
     for (const node of normalizedCommitNodes) {
       const targetId = tempToReal.get(node.tempId);
       if (!targetId) continue;
-      const isSpecializationLane =
-        node.cluster === "specialization" ||
-        node.nodeType === "elective" ||
-        ["purple", "amber", "coral", "green"].includes(node.colorRamp);
       for (const [index, prereq] of node.prerequisites.entries()) {
         const sourceId = tempToReal.get(prereq);
         if (!sourceId) continue;
@@ -9699,12 +10256,12 @@ export const wizardCommitCurriculum = createServerFn({ method: "POST" })
           treeId,
           sourceNodeId: sourceId,
           targetNodeId: targetId,
-          edgeType:
-            index > 0
-              ? "bonus"
-              : isSpecializationLane
-                ? "optional"
-                : "required",
+          edgeType: classifySkillTreeEdge({
+            prereqIndex: index,
+            sourceNodeId: sourceId,
+            targetNode: node,
+            forkSourceNodeIds,
+          }),
           createdAt: now,
         });
       }
@@ -10025,3 +10582,319 @@ export const populateWebNodeContent = createServerFn({ method: "POST" })
 
     return { nodeId: data.nodeId, assignments: created };
   });
+
+// ── Curriculum Builder: Full Curriculum (Multi-Course) ────────────────────────
+
+const curriculumRecommendInput = z.object({
+  gradeLevel: z.string().min(1),
+  ageYears: z.number().int().min(3).max(25),
+  duration: z.string().min(1),
+  courseCount: z.number().int().min(1).max(12),
+  focusSteering: z.string().default(""),
+});
+
+export const curriculumRecommendCourses = createServerFn({ method: "POST" })
+  .inputValidator((data) => curriculumRecommendInput.parse(data))
+  .handler(async ({ data }) => {
+    await requireActiveRole(["admin", "parent"]);
+    const courses = await recommendCurriculumCourses(data);
+    return { courses };
+  });
+
+const curriculumBuildSpineInput = z.object({
+  subject: z.string().min(1),
+  gradeLevel: z.string().min(1),
+  courseLength: z.string().min(1),
+  interests: z.string().default(""),
+  ageYears: z.number().int().optional(),
+  focusSteering: z.string().default(""),
+});
+
+export const curriculumBuildSpine = createServerFn({ method: "POST" })
+  .inputValidator((data) => curriculumBuildSpineInput.parse(data))
+  .handler(async ({ data }) => {
+    await requireActiveRole(["admin", "parent"]);
+    const nodes = await generateCurriculumSpine(data);
+    return { nodes };
+  });
+
+const curriculumBuildChapterInput = z.object({
+  subject: z.string().min(1),
+  gradeLevel: z.string().min(1),
+  milestoneId: z.string().min(1),
+  milestoneTitle: z.string().min(1),
+  milestoneDescription: z.string().default(""),
+  milestoneDepth: z.number().int().default(0),
+  existingTitles: z.array(z.string()).default([]),
+  ageYears: z.number().int().optional(),
+  focusSteering: z.string().default(""),
+});
+
+export const curriculumBuildChapter = createServerFn({ method: "POST" })
+  .inputValidator((data) => curriculumBuildChapterInput.parse(data))
+  .handler(async ({ data }) => {
+    await requireActiveRole(["admin", "parent"]);
+    const nodes = await generateChapterCluster(data);
+    return { nodes };
+  });
+
+const curriculumBuildBranchInput = z.object({
+  subject: z.string().min(1),
+  gradeLevel: z.string().min(1),
+  lessonId: z.string().min(1),
+  lessonTitle: z.string().min(1),
+  lessonDescription: z.string().default(""),
+  lessonDepth: z.number().int().default(0),
+  milestoneTitle: z.string().min(1),
+  existingTitles: z.array(z.string()).default([]),
+  ageYears: z.number().int().optional(),
+  focusSteering: z.string().default(""),
+});
+
+export const curriculumBuildBranch = createServerFn({ method: "POST" })
+  .inputValidator((data) => curriculumBuildBranchInput.parse(data))
+  .handler(async ({ data }) => {
+    await requireActiveRole(["admin", "parent"]);
+    const nodes = await generateBranchCluster(data);
+    return { nodes };
+  });
+
+const curriculumGenerateAssignmentsInput = z.object({
+  subject: z.string().min(1),
+  gradeLevel: z.string().min(1),
+  node: z.object({
+    tempId: z.string().min(1),
+    title: z.string().min(1),
+    description: z.string().default(""),
+    nodeType: z.string().default("lesson"),
+  }),
+  prefs: z.object({
+    readingPerNode: z.boolean().default(true),
+    videosPerLesson: z.number().int().default(2),
+    chapterIntroVideo: z.boolean().default(true),
+    quizzesPerChapter: z.number().int().default(1),
+    essaysPerChapter: z.number().int().default(1),
+    quizzesPerBoss: z.number().int().default(3),
+    essaysPerBoss: z.number().int().default(1),
+    papersPerBoss: z.number().int().default(0),
+    includeProjects: z.boolean().default(false),
+    includeMovies: z.boolean().default(false),
+    otherInstructions: z.string().default(""),
+  }),
+  ageYears: z.number().int().optional(),
+  focusSteering: z.string().default(""),
+  resolveYoutubeIds: z.boolean().default(false),
+});
+
+export const curriculumGenerateAssignments = createServerFn({ method: "POST" })
+  .inputValidator((data) => curriculumGenerateAssignmentsInput.parse(data))
+  .handler(async ({ data }) => {
+    await requireActiveRole(["admin", "parent"]);
+    const youtubeApiKey = data.resolveYoutubeIds
+      ? ((env as unknown as Record<string, string | undefined>).YOUTUBE_API_KEY ?? undefined)
+      : undefined;
+    const assignments = await generateAssignmentsForNode({
+      subject: data.subject,
+      gradeLevel: data.gradeLevel,
+      node: data.node,
+      prefs: data.prefs,
+      youtubeApiKey,
+      ageYears: data.ageYears,
+      focusSteering: data.focusSteering || undefined,
+    });
+    return { assignments };
+  });
+
+const curriculumGenerateLessonReadingInput = z.object({
+  nodeTitle: z.string().min(1),
+  nodeDescription: z.string().default(""),
+  subject: z.string().min(1),
+  gradeLevel: z.string().min(1),
+  ageYears: z.number().int().default(12),
+  focusSteering: z.string().default(""),
+  nodeType: z.string().default("lesson"),
+});
+
+export const curriculumGenerateLessonReading = createServerFn({ method: "POST" })
+  .inputValidator((data) => curriculumGenerateLessonReadingInput.parse(data))
+  .handler(async ({ data }) => {
+    await requireActiveRole(["admin", "parent"]);
+    const html = await generateLessonReading({
+      nodeTitle: data.nodeTitle,
+      nodeDescription: data.nodeDescription,
+      subject: data.subject,
+      gradeLevel: data.gradeLevel,
+      ageYears: data.ageYears,
+      focusSteering: data.focusSteering || undefined,
+      nodeType: data.nodeType,
+    });
+    return { html };
+  });
+
+const curriculumLayoutInput = z.object({
+  nodes: z.array(z.object({
+    tempId: z.string(),
+    prerequisites: z.array(z.string()),
+    depth: z.number(),
+    cluster: z.string(),
+    nodeType: z.string(),
+  })),
+});
+
+export const curriculumLayoutNodes = createServerFn({ method: "POST" })
+  .inputValidator((data) => curriculumLayoutInput.parse(data))
+  .handler(async ({ data }) => {
+    await requireActiveRole(["admin", "parent"]);
+    const result = layoutForceDirected(
+      data.nodes.map((n) => ({
+        id: n.tempId,
+        prerequisites: n.prerequisites,
+        depth: n.depth,
+        cluster: n.cluster,
+        nodeType: n.nodeType,
+      })),
+      { width: 1200, height: 900 },
+    );
+    const positions: Record<string, { x: number; y: number }> = {};
+    const edges: Array<{ source: string; target: string }> = [];
+    for (const node of data.nodes) {
+      const pos = result.get(node.tempId);
+      if (pos) positions[node.tempId] = pos;
+      for (const prereqId of node.prerequisites) {
+        edges.push({ source: prereqId, target: node.tempId });
+      }
+    }
+    return { positions, edges };
+  });
+
+const curriculumCommitCourseInput = z.object({
+  profileId: z.string().min(1),
+  classTitle: z.string().min(1),
+  treeTitle: z.string().min(1),
+  subject: z.string().min(1),
+  gradeLevel: z.string().min(1),
+  schoolYear: z.string().optional(),
+  nodes: z.array(z.object({
+    tempId: z.string(),
+    title: z.string(),
+    description: z.string().default(""),
+    icon: z.string().default("📚"),
+    colorRamp: z.string().default("blue"),
+    nodeType: z.string().default("lesson"),
+    cluster: z.string().default("core"),
+    depth: z.number().default(0),
+    isRequired: z.boolean().default(true),
+    xpReward: z.number().default(100),
+    prerequisites: z.array(z.string()).default([]),
+    x: z.number().default(600),
+    y: z.number().default(450),
+    suggestedAssignments: z.array(z.object({ type: z.string(), title: z.string() })).default([]),
+  })),
+  generatedAssignments: z.array(z.object({
+    nodeId: z.string(),
+    contentType: z.string(),
+    title: z.string(),
+    description: z.string().default(""),
+    contentRef: z.string().default(""),
+    linkedFollowUpType: z.string().optional(),
+  })).default([]),
+});
+
+export const curriculumCommitCourse = createServerFn({ method: "POST" })
+  .inputValidator((data) => curriculumCommitCourseInput.parse(data))
+  .handler(async ({ data }) => {
+    // Reuse the same commit logic as wizardCommitCurriculum by delegating to it.
+    // This keeps a single source of truth for DB schema changes.
+    const result = await wizardCommitCurriculum({
+      data: {
+        profileId: data.profileId,
+        classTitle: data.classTitle,
+        treeTitle: data.treeTitle,
+        subject: data.subject,
+        gradeLevel: data.gradeLevel,
+        schoolYear: data.schoolYear,
+        nodes: data.nodes,
+        generatedAssignments: data.generatedAssignments,
+      },
+    });
+    return result;
+  });
+
+// ── Lessons index ─────────────────────────────────────────────────────────────
+
+export const getLessonsData = createServerFn({ method: "GET" }).handler(async () => {
+  const session = await requireActiveRole(["admin", "parent"]);
+  const db = getDb();
+
+  const organizationId = await resolveActiveOrganizationId(
+    session.user.id,
+    session.session.activeOrganizationId,
+  );
+
+  // Get all trees for this org
+  const treeRows = await db.query.skillTrees.findMany({
+    where: eq(skillTrees.organizationId, organizationId),
+    orderBy: [desc(skillTrees.createdAt)],
+  });
+
+  if (treeRows.length === 0) {
+    return { trees: [] };
+  }
+
+  const treeIds = treeRows.map((t) => t.id);
+
+  // Get all nodes for all trees
+  const allNodes: (typeof skillTreeNodes.$inferSelect)[] = [];
+  for (const chunk of chunkIds(treeIds, 30)) {
+    const rows = await db.query.skillTreeNodes.findMany({
+      where: inArray(skillTreeNodes.treeId, chunk),
+      orderBy: [desc(skillTreeNodes.createdAt)],
+    });
+    allNodes.push(...rows);
+  }
+
+  // Get assignment counts per node
+  const nodeIds = allNodes.map((n) => n.id);
+  const assignmentCounts: Record<string, number> = {};
+  if (nodeIds.length > 0) {
+    for (const chunk of chunkIds(nodeIds, 50)) {
+      const counts = await db
+        .select({ nodeId: skillTreeNodeAssignments.nodeId, cnt: count() })
+        .from(skillTreeNodeAssignments)
+        .where(inArray(skillTreeNodeAssignments.nodeId, chunk))
+        .groupBy(skillTreeNodeAssignments.nodeId);
+      for (const row of counts) {
+        assignmentCounts[row.nodeId] = row.cnt;
+      }
+    }
+  }
+
+  // Group nodes by tree
+  const nodesByTree = new Map<string, typeof allNodes>();
+  for (const node of allNodes) {
+    const existing = nodesByTree.get(node.treeId) ?? [];
+    existing.push(node);
+    nodesByTree.set(node.treeId, existing);
+  }
+
+  const trees = treeRows.map((tree) => ({
+    id: tree.id,
+    title: tree.title,
+    subject: tree.subject,
+    gradeLevel: tree.gradeLevel,
+    schoolYear: tree.schoolYear,
+    nodes: (nodesByTree.get(tree.id) ?? []).map((n) => ({
+      id: n.id,
+      title: n.title,
+      description: n.description,
+      nodeType: n.nodeType,
+      subject: n.subject,
+      icon: n.icon,
+      colorRamp: n.colorRamp,
+      xpReward: n.xpReward,
+      assignmentCount: assignmentCounts[n.id] ?? 0,
+    })),
+  }));
+
+  return { trees };
+});

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { OrcaMark } from "./icons/orca-mark";
+import { ParentPageHeader } from "./parent-page-header";
 import type { getParentDashboardData } from "../server/functions";
 
 type ParentDashboardData = NonNullable<Awaited<ReturnType<typeof getParentDashboardData>>>;
@@ -42,199 +42,62 @@ export function ParentDashboard({
     return selectedMetrics.filter((metric) => metric.schoolYear === selectedYear);
   }, [selectedMetrics, selectedYear]);
 
-  const featureCtas = [
+  const quickActions = [
     {
       to: "/students",
-      title: "Students",
+      label: "Students",
       description: "Manage student profiles and PINs.",
-      accentClass: "border-emerald-200 bg-emerald-50/80 text-emerald-900",
-      iconClass: "bg-emerald-100 text-emerald-700",
-      icon: (
-        <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" aria-hidden="true">
-          <path
-            d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2m20 0v-2a4 4 0 0 0-3-3.87M15 3.13a4 4 0 0 1 0 7.75M14 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      ),
+      icon: "👥",
     },
     {
       to: "/classes",
-      title: "Classes",
+      label: "Classes",
       description: "Build and organize your curriculum.",
-      accentClass: "border-cyan-200 bg-cyan-50/80 text-cyan-900",
-      iconClass: "bg-cyan-100 text-cyan-700",
-      icon: (
-        <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" aria-hidden="true">
-          <path
-            d="M4 5h16v12H4zM2 17h20M8 21h8"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      ),
+      icon: "🧱",
     },
     {
       to: "/assignments",
-      title: "Assignments",
+      label: "Assignments",
       description: "Create and track student work.",
-      accentClass: "border-violet-200 bg-violet-50/80 text-violet-900",
-      iconClass: "bg-violet-100 text-violet-700",
-      icon: (
-        <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" aria-hidden="true">
-          <path
-            d="M9 11h6M9 15h6M9 7h3M5 3h14a2 2 0 0 1 2 2v14l-4-2-4 2-4-2-4 2V5a2 2 0 0 1 2-2Z"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      ),
+      icon: "📝",
     },
     {
       to: "/templates",
-      title: "Templates",
+      label: "Templates",
       description: "Reuse your best assignment setups.",
-      accentClass: "border-sky-200 bg-sky-50/80 text-sky-900",
-      iconClass: "bg-sky-100 text-sky-700",
-      icon: (
-        <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" aria-hidden="true">
-          <path
-            d="M4 7a2 2 0 0 1 2-2h7l7 7v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7Zm9-2v5h5"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      ),
+      icon: "🗂️",
     },
     {
       to: "/gradebook",
-      title: "Gradebook",
+      label: "Gradebook",
       description: "Review submissions and scores.",
-      accentClass: "border-amber-200 bg-amber-50/80 text-amber-900",
-      iconClass: "bg-amber-100 text-amber-700",
-      icon: (
-        <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" aria-hidden="true">
-          <path
-            d="M6 4h12a2 2 0 0 1 2 2v12H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm0 0v14m5-9h5m-5 4h5"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      ),
+      icon: "📘",
     },
     {
       to: "/planner",
-      title: "Week Planner",
+      label: "Week Planner",
       description: "Schedule assignments for the week.",
-      accentClass: "border-cyan-200 bg-cyan-50/80 text-cyan-900",
-      iconClass: "bg-cyan-100 text-cyan-700",
-      icon: (
-        <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" aria-hidden="true">
-          <path
-            d="M7 3v2m10-2v2M4 9h16M6 6h12a2 2 0 0 1 2 2v10H4V8a2 2 0 0 1 2-2Zm3 6h2m4 0h2m-8 3h2m4 0h2"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      ),
+      icon: "🗓️",
     },
     {
       to: "/skill-trees",
-      title: "Skill Maps",
+      label: "Skill Maps",
       description: "Build RPG-style curriculum pathways.",
-      accentClass: "border-violet-200 bg-violet-50/80 text-violet-900",
-      iconClass: "bg-violet-100 text-violet-700",
-      icon: (
-        <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" aria-hidden="true">
-          <circle cx="12" cy="5" r="2.5" stroke="currentColor" strokeWidth="1.8" />
-          <circle cx="5" cy="16" r="2.5" stroke="currentColor" strokeWidth="1.8" />
-          <circle cx="19" cy="16" r="2.5" stroke="currentColor" strokeWidth="1.8" />
-          <path
-            d="M12 7.5L5 13.5M12 7.5L19 13.5"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-          />
-        </svg>
-      ),
+      icon: "🧭",
     },
     {
       to: "/rewards",
-      title: "Reward Tracks",
+      label: "Reward Tracks",
       description: "Set milestone rewards for XP progress. Battle-pass style motivation.",
-      accentClass: "border-amber-200 bg-amber-50/80 text-amber-900",
-      iconClass: "bg-amber-100 text-amber-700",
-      icon: (
-        <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" aria-hidden="true">
-          <path
-            d="M20 12v8H4v-8"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-          <path
-            d="M22 7H2v5h20V7z"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-          <path
-            d="M12 22V7"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-          />
-          <path
-            d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-          <path
-            d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      ),
+      icon: "🏆",
     },
     ...(isAdminParent
       ? [
           {
             to: "/admin",
-            title: "Home Pod",
+            label: "Home Pod",
             description: "Configure parent admin access.",
-            accentClass: "border-amber-200 bg-amber-50/80 text-amber-900",
-            iconClass: "bg-amber-100 text-amber-700",
-            icon: (
-              <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" aria-hidden="true">
-                <path
-                  d="M12 3 4 7v6c0 5 3.4 7.7 8 8 4.6-.3 8-3 8-8V7l-8-4Zm0 6v4m0 4h.01"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            ),
+            icon: "🛠️",
           },
         ]
       : []),
@@ -242,30 +105,61 @@ export function ParentDashboard({
 
   return (
     <div className="space-y-6">
-      <section className="orca-hero orca-wave rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+      <ParentPageHeader
+        title="Parent Dashboard"
+        description="Jump into the tools you use most and keep an eye on student progress across every class."
+        action={(
+          <Link
+            to="/curriculum-builder"
+            className="rounded-xl bg-cyan-700 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-cyan-800"
+          >
+            Open Builder
+          </Link>
+        )}
+      />
+
+      <section className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-3">
-            <span className="orca-icon-chip" aria-hidden="true">
-              <OrcaMark className="h-6 w-6" alt="" />
-            </span>
+          <div>
             <h2 className="text-xl font-semibold text-slate-900">Parent Quick Actions</h2>
+            <p className="mt-1 text-sm text-slate-600">Jump to the tools you use most.</p>
           </div>
-          <p className="text-sm text-slate-600">Jump to the tools you use most.</p>
         </div>
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {featureCtas.map((cta) => (
+        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+          {quickActions.map((cta) => (
             <Link
               key={cta.to}
               to={cta.to}
-              className={`group rounded-2xl border p-4 transition hover:shadow-sm ${cta.accentClass}`}
+              className="group flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-700 transition hover:bg-slate-100 hover:text-slate-900"
             >
-              <div className={`inline-flex rounded-xl p-2 ${cta.iconClass}`}>{cta.icon}</div>
-              <h3 className="mt-3 text-base font-semibold">{cta.title}</h3>
-              <p className="mt-1 text-sm">{cta.description}</p>
-              <p className="mt-3 text-xs font-medium uppercase tracking-[0.14em]">Open</p>
+              <span className="min-w-0">
+                <span className="flex items-center gap-2 text-sm font-medium">
+                  <span className="text-base" aria-hidden="true">
+                    {cta.icon}
+                  </span>
+                  {cta.label}
+                </span>
+                <span className="mt-1 block truncate text-xs text-slate-500">{cta.description}</span>
+              </span>
+              <span className="text-xs text-slate-400 transition group-hover:text-slate-600">▶</span>
             </Link>
           ))}
         </div>
+
+        <Link
+          to="/curriculum-builder"
+          className="group mt-4 block rounded-2xl border border-cyan-200 bg-gradient-to-r from-cyan-50 via-sky-50 to-indigo-50 p-5 transition hover:shadow-sm"
+        >
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-700">AI Curriculum Builder</p>
+          <h3 className="mt-2 flex items-center gap-2 text-lg font-semibold text-slate-900">
+            <span aria-hidden="true">✦</span>
+            Build A Full Curriculum In Minutes
+          </h3>
+          <p className="mt-2 text-sm text-slate-600">
+            Generate course structures, skill maps, and learning paths with one guided flow.
+          </p>
+          <p className="mt-3 text-sm font-medium text-cyan-900">Launch Builder →</p>
+        </Link>
       </section>
 
       <section className="orca-wave rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">

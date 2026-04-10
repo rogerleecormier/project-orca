@@ -42,7 +42,22 @@ type Props = {
   onClaimReward: (tierId: string) => Promise<void>;
 };
 
+// Truncate a tier title to a safe display length to avoid card overflow
+function truncateTierTitle(title: string, maxLen = 14): string {
+  return title.length > maxLen ? `${title.slice(0, maxLen - 1)}…` : title;
+}
+
 // ── TierCard ──────────────────────────────────────────────────────────────────
+//
+// Fixed-size card: 80×100px. Text is always clamped to prevent overflow.
+// Status variants:
+//   delivered — gold gradient, checkmark badge
+//   claimed   — violet pulse, "Pending" label
+//   unlocked  — cyan glow, sparkle animation, Claim button
+//   locked    — muted gray, XP remaining shown
+
+const CARD_W = 80;
+const CARD_H = 104;
 
 function TierCard({
   tier,
@@ -67,6 +82,10 @@ function TierCard({
           : "locked";
 
   const xpNeeded = Math.max(0, tier.xpThreshold - xpEarned);
+  const shortTitle = truncateTierTitle(tier.title);
+  const xpLabel = tier.xpThreshold >= 1000
+    ? `${(tier.xpThreshold / 1000).toFixed(1).replace(/\.0$/, "")}k XP`
+    : `${tier.xpThreshold} XP`;
 
   async function handleClaim() {
     setClaiming(true);
@@ -80,26 +99,24 @@ function TierCard({
   if (status === "delivered") {
     return (
       <div
-        className="relative flex h-22 w-18 shrink-0 snap-start flex-col items-center justify-center rounded-xl p-2 text-center"
+        className="relative shrink-0 snap-start flex flex-col items-center justify-center rounded-2xl p-2 text-center"
         style={{
-          background: "linear-gradient(135deg, #fbbf24, #d97706)",
+          width: CARD_W,
+          height: CARD_H,
+          background: "linear-gradient(145deg, #fbbf24 0%, #d97706 100%)",
           border: "2px solid #f59e0b",
-          width: 72,
-          height: 88,
+          boxShadow: "0 2px 12px rgba(251,191,36,0.35)",
         }}
       >
-        <span style={{ fontSize: 28 }}>{tier.icon ?? "🎁"}</span>
-        <p
-          className="mt-1 w-full overflow-hidden text-center leading-tight text-white"
-          style={{ fontSize: 10, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
-        >
-          {tier.title}
+        <span className="text-3xl leading-none">{tier.icon ?? "🎁"}</span>
+        <p className="mt-1.5 w-full truncate px-0.5 text-center text-[10px] font-semibold leading-tight text-white">
+          {shortTitle}
         </p>
-        <p className="mt-0.5 text-white" style={{ fontSize: 9 }}>✓ Got it!</p>
-        {/* Green checkmark badge */}
+        <p className="mt-0.5 text-[9px] font-medium text-amber-100">✓ Delivered</p>
         <span
-          className="absolute bottom-1.5 right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 text-white"
-          style={{ fontSize: 8 }}
+          className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500 text-white shadow"
+          style={{ fontSize: 10, fontWeight: 700 }}
+          aria-label="Delivered"
         >
           ✓
         </span>
@@ -110,24 +127,20 @@ function TierCard({
   if (status === "claimed") {
     return (
       <div
-        className="relative flex shrink-0 snap-start flex-col items-center justify-center rounded-xl p-2 text-center"
+        className="relative shrink-0 snap-start flex flex-col items-center justify-center rounded-2xl p-2 text-center"
         style={{
-          width: 72,
-          height: 88,
-          background: "#ede9fe",
+          width: CARD_W,
+          height: CARD_H,
+          background: "linear-gradient(145deg, #ede9fe 0%, #ddd6fe 100%)",
           border: "2px solid #a78bfa",
-          boxShadow: "0 0 0 3px #ddd6fe",
           animation: "reward-pulse 1.8s ease-in-out infinite",
         }}
       >
-        <span style={{ fontSize: 28 }}>{tier.icon ?? "🎁"}</span>
-        <p
-          className="mt-1 w-full text-center leading-tight text-violet-800"
-          style={{ fontSize: 10, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}
-        >
-          {tier.title}
+        <span className="text-3xl leading-none">{tier.icon ?? "🎁"}</span>
+        <p className="mt-1.5 w-full truncate px-0.5 text-center text-[10px] font-semibold leading-tight text-violet-900">
+          {shortTitle}
         </p>
-        <p className="mt-0.5 text-violet-600" style={{ fontSize: 9 }}>Waiting…</p>
+        <p className="mt-0.5 text-[9px] font-medium text-violet-500">Pending…</p>
       </div>
     );
   }
@@ -135,31 +148,32 @@ function TierCard({
   if (status === "unlocked") {
     return (
       <div
-        className="relative flex shrink-0 snap-start flex-col items-center justify-center rounded-xl bg-white p-2 text-center"
-        style={{ width: 72, height: 88, border: "2px solid #22d3ee" }}
+        className="relative shrink-0 snap-start flex flex-col items-center justify-center rounded-2xl bg-white p-2 text-center"
+        style={{
+          width: CARD_W,
+          height: CARD_H,
+          border: "2px solid #22d3ee",
+          boxShadow: "0 0 10px rgba(34,211,238,0.3)",
+        }}
       >
         <span
+          className="text-3xl leading-none"
           style={{
-            fontSize: 28,
-            filter: "drop-shadow(0 0 4px #22d3ee)",
+            filter: "drop-shadow(0 0 5px #22d3ee)",
             animation: "reward-sparkle 1.5s ease-in-out infinite",
             display: "block",
           }}
         >
           {tier.icon ?? "🎁"}
         </span>
-        <p
-          className="mt-1 w-full text-center leading-tight text-slate-800"
-          style={{ fontSize: 10, display: "-webkit-box", WebkitLineClamp: 1, WebkitBoxOrient: "vertical", overflow: "hidden" }}
-        >
-          {tier.title}
+        <p className="mt-1.5 w-full truncate px-0.5 text-center text-[10px] font-semibold leading-tight text-slate-800">
+          {shortTitle}
         </p>
         <button
           type="button"
           disabled={claiming}
           onClick={() => void handleClaim()}
-          className="mt-1 flex h-6 items-center rounded-full bg-cyan-500 px-2 text-white transition hover:bg-cyan-600 disabled:opacity-60"
-          style={{ fontSize: 10, fontWeight: 600 }}
+          className="mt-1.5 rounded-full bg-cyan-500 px-3 py-0.5 text-[10px] font-bold text-white transition hover:bg-cyan-600 disabled:opacity-60"
         >
           {claiming ? "…" : "Claim!"}
         </button>
@@ -170,21 +184,16 @@ function TierCard({
   // Locked
   return (
     <div
-      className="relative flex shrink-0 snap-start flex-col items-center justify-center rounded-xl bg-slate-100 p-2 text-center"
-      style={{ width: 72, height: 88, border: "1.5px solid #e2e8f0" }}
+      className="relative shrink-0 snap-start flex flex-col items-center justify-center rounded-2xl bg-slate-100/80 p-2 text-center"
+      style={{ width: CARD_W, height: CARD_H, border: "1.5px solid #e2e8f0" }}
     >
-      <span style={{ fontSize: 28, opacity: 0.35 }}>{tier.icon ?? "🎁"}</span>
-      <p
-        className="mt-1 w-full text-center leading-tight text-slate-400"
-        style={{ fontSize: 10, display: "-webkit-box", WebkitLineClamp: 1, WebkitBoxOrient: "vertical", overflow: "hidden" }}
-      >
-        {tier.title}
+      <span className="text-3xl leading-none opacity-25">{tier.icon ?? "🎁"}</span>
+      <p className="mt-1.5 w-full truncate px-0.5 text-center text-[10px] font-medium leading-tight text-slate-400">
+        {shortTitle}
       </p>
-      {xpNeeded > 0 ? (
-        <p className="mt-0.5 text-slate-400" style={{ fontSize: 9 }}>
-          {xpNeeded.toLocaleString()} XP
-        </p>
-      ) : null}
+      <p className="mt-0.5 text-[9px] text-slate-400">
+        {xpNeeded > 0 ? xpLabel : "Unlocked"}
+      </p>
     </div>
   );
 }
@@ -196,6 +205,7 @@ export function StudentRewardTrack({
   tiers,
   claims,
   xpEarned,
+  newlyUnlockedTierIds: _newlyUnlockedTierIds,
   onClaimReward,
 }: Props) {
   const fillPct = track.totalXpGoal > 0
@@ -205,85 +215,130 @@ export function StudentRewardTrack({
   const claimByTierId = new Map(claims.map((c) => [c.tierId, c]));
   const sorted = [...tiers].sort((a, b) => a.tierNumber - b.tierNumber);
 
-  const completedTiers = claims.filter(
-    (c) => c.status === "claimed" || c.status === "delivered",
-  ).length;
+  const deliveredCount = claims.filter((c) => c.status === "delivered").length;
+  const claimedCount = claims.filter((c) => c.status === "claimed").length;
+  const unlockedCount = tiers.filter((t) => {
+    const cl = claimByTierId.get(t.id);
+    return !cl && xpEarned >= t.xpThreshold;
+  }).length;
+
+  const xpToNext = sorted.find((t) => xpEarned < t.xpThreshold);
+  const nextXpNeeded = xpToNext ? xpToNext.xpThreshold - xpEarned : 0;
 
   return (
     <>
       {/* Keyframe styles */}
       <style>{`
         @keyframes reward-sparkle {
-          0%, 100% { transform: scale(1); }
-          50%       { transform: scale(1.18) rotate(5deg); }
+          0%, 100% { transform: scale(1) rotate(0deg); }
+          50%       { transform: scale(1.15) rotate(6deg); }
         }
         @keyframes reward-pulse {
-          0%, 100% { box-shadow: 0 0 0 3px #ddd6fe; }
-          50%       { box-shadow: 0 0 0 7px #c4b5fd; }
+          0%, 100% { box-shadow: 0 0 0 2px #ddd6fe; }
+          50%       { box-shadow: 0 0 0 6px #c4b5fd; }
         }
         @keyframes progress-shimmer {
           0%   { background-position: -200% center; }
           100% { background-position: 200% center; }
         }
         @keyframes xp-pop {
-          0%   { transform: scale(0.8); opacity: 0; }
-          60%  { transform: scale(1.1); }
+          0%   { transform: scale(0.85); opacity: 0; }
+          65%  { transform: scale(1.08); }
           100% { transform: scale(1); opacity: 1; }
         }
-        .reward-xp-pop { animation: xp-pop 0.4s cubic-bezier(0.34,1.56,0.64,1) forwards; }
+        .reward-xp-pop { animation: xp-pop 0.45s cubic-bezier(0.34,1.56,0.64,1) both; }
       `}</style>
 
-      <div className="min-w-0 rounded-2xl border border-violet-200 bg-gradient-to-br from-violet-50 to-amber-50 p-4 sm:p-5">
+      <div className="min-w-0 overflow-hidden rounded-2xl border border-violet-200/60 bg-gradient-to-br from-slate-900 via-violet-950 to-indigo-950 p-4 shadow-lg sm:p-5">
         {/* Header */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-start justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2">
-            <span className="text-lg" aria-hidden="true">🏆</span>
-            <h3 className="truncate text-sm font-semibold text-slate-800">{track.title}</h3>
+            <span className="text-xl leading-none" aria-hidden="true">🏆</span>
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-violet-400">Reward Track</p>
+              <h3 className="truncate text-sm font-bold leading-tight text-white">{track.title}</h3>
+            </div>
           </div>
-          <span className="reward-xp-pop shrink-0 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-xs font-semibold text-amber-700">
-            ⭐ {xpEarned.toLocaleString()} XP
-          </span>
+          <div className="reward-xp-pop flex shrink-0 items-center gap-1.5 rounded-full border border-amber-400/30 bg-amber-400/10 px-3 py-1">
+            <span className="text-sm leading-none">⭐</span>
+            <span className="text-sm font-bold text-amber-300">{xpEarned.toLocaleString()}</span>
+            <span className="text-[10px] text-amber-400/70">XP</span>
+          </div>
         </div>
 
-        {/* Progress bar with shimmer */}
-        <div className="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-slate-200">
-          <div
-            className="h-full rounded-full transition-all duration-1000 ease-out"
-            style={{
-              width: `${fillPct}%`,
-              background: fillPct >= 100
-                ? "linear-gradient(90deg, #a78bfa, #fbbf24, #a78bfa)"
-                : "linear-gradient(90deg, #8b5cf6 0%, #a78bfa 40%, #fde68a 70%, #fbbf24 100%)",
-              backgroundSize: "200% auto",
-              animation: fillPct > 0 ? "progress-shimmer 3s linear infinite" : "none",
-              boxShadow: fillPct > 0 ? "0 0 8px rgba(167,139,250,0.5)" : "none",
-            }}
-          />
+        {/* Progress bar */}
+        <div className="mt-3.5">
+          <div className="h-3 w-full overflow-hidden rounded-full bg-white/10">
+            <div
+              className="h-full rounded-full transition-all duration-1000 ease-out"
+              style={{
+                width: `${fillPct}%`,
+                background: fillPct >= 100
+                  ? "linear-gradient(90deg, #a78bfa, #fbbf24, #a78bfa)"
+                  : "linear-gradient(90deg, #7c3aed 0%, #a78bfa 45%, #fde68a 75%, #fbbf24 100%)",
+                backgroundSize: "200% auto",
+                animation: fillPct > 0 ? "progress-shimmer 3s linear infinite" : "none",
+                boxShadow: fillPct > 0 ? "0 0 10px rgba(167,139,250,0.5)" : "none",
+              }}
+            />
+          </div>
+          <div className="mt-1 flex items-center justify-between">
+            <span className="text-[10px] text-white/40">
+              {xpEarned.toLocaleString()} / {track.totalXpGoal.toLocaleString()} XP
+            </span>
+            {nextXpNeeded > 0 ? (
+              <span className="text-[10px] text-violet-300/70">
+                {nextXpNeeded.toLocaleString()} XP to next reward
+              </span>
+            ) : (
+              <span className="text-[10px] font-semibold text-amber-300">All tiers unlocked! 🎉</span>
+            )}
+          </div>
         </div>
 
-        {/* Track row */}
-        <div className="mt-3 flex max-w-full gap-2 overflow-x-auto pb-2 snap-x snap-mandatory">
+        {/* Status chips */}
+        {(deliveredCount > 0 || claimedCount > 0 || unlockedCount > 0) ? (
+          <div className="mt-2.5 flex flex-wrap gap-1.5">
+            {deliveredCount > 0 ? (
+              <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-300">
+                ✓ {deliveredCount} delivered
+              </span>
+            ) : null}
+            {claimedCount > 0 ? (
+              <span className="rounded-full border border-violet-400/30 bg-violet-400/10 px-2 py-0.5 text-[10px] font-semibold text-violet-300">
+                ⏳ {claimedCount} pending
+              </span>
+            ) : null}
+            {unlockedCount > 0 ? (
+              <span className="rounded-full border border-cyan-400/30 bg-cyan-400/10 px-2 py-0.5 text-[10px] font-semibold text-cyan-300">
+                ✨ {unlockedCount} ready to claim
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+
+        {/* Tier scroll track */}
+        <div className="mt-4 flex items-center gap-1.5 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden snap-x snap-mandatory">
           {sorted.map((tier, i) => (
-            <div key={tier.id} className="flex items-center gap-2">
-              <TierCard
-                tier={tier}
-                claim={claimByTierId.get(tier.id)}
-                xpEarned={xpEarned}
-                onClaim={onClaimReward}
-              />
+            <div key={tier.id} className="flex shrink-0 items-center gap-1.5">
+              <div className="flex shrink-0 flex-col items-center gap-1">
+                {/* Tier number label above card */}
+                <span className="text-[8px] font-bold uppercase tracking-wider text-white/30">
+                  T{tier.tierNumber}
+                </span>
+                <TierCard
+                  tier={tier}
+                  claim={claimByTierId.get(tier.id)}
+                  xpEarned={xpEarned}
+                  onClaim={onClaimReward}
+                />
+              </div>
               {i < sorted.length - 1 ? (
-                <span className="shrink-0 text-slate-300" style={{ fontSize: 12 }}>→</span>
+                <span className="shrink-0 text-white/20" style={{ fontSize: 14 }}>›</span>
               ) : null}
             </div>
           ))}
         </div>
-
-        {/* Summary */}
-        <p className="mt-1.5 text-xs text-slate-500">
-          {xpEarned.toLocaleString()} / {track.totalXpGoal.toLocaleString()} XP
-          {" · "}
-          {completedTiers}/{tiers.length} rewards
-        </p>
       </div>
     </>
   );

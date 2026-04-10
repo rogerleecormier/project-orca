@@ -8,6 +8,7 @@ import {
 } from "@tanstack/react-router";
 import { AppShell } from "../components/app-shell";
 import { QueryProvider } from "../components/query-provider";
+import { CurriculumProgressProvider } from "../components/CurriculumProgressPanel";
 import { getRoleSwitcherData } from "../server/functions";
 import appCss from "../styles.css?url";
 
@@ -33,16 +34,18 @@ function RootComponent() {
   return (
     <RootDocument>
       <QueryProvider>
-        <AppShell
-          isAuthenticated={shellData.isAuthenticated}
-          initialRole={shellData.activeRole}
-          isAdminParent={shellData.isAdminParent}
-          activeProfileId={shellData.activeProfileId}
-          profiles={shellData.profiles}
-          pendingRewardsCount={shellData.pendingRewardsCount ?? 0}
-        >
-          <Outlet />
-        </AppShell>
+        <CurriculumProgressProvider>
+          <AppShell
+            isAuthenticated={shellData.isAuthenticated}
+            initialRole={shellData.activeRole}
+            isAdminParent={shellData.isAdminParent}
+            activeProfileId={shellData.activeProfileId}
+            profiles={shellData.profiles}
+            pendingRewardsCount={shellData.pendingRewardsCount ?? 0}
+          >
+            <Outlet />
+          </AppShell>
+        </CurriculumProgressProvider>
       </QueryProvider>
     </RootDocument>
   );

@@ -6,7 +6,7 @@ import {
   useReactTable,
 } from "@tanstack/react-table";
 import { getAdminConsoleData, getViewerContext, setAccountAdminStatus } from "../server/functions";
-import { OrcaMark } from "../components/icons/orca-mark";
+import { ParentPageHeader } from "../components/parent-page-header";
 
 export const Route = createFileRoute("/admin")({
   loader: async () => {
@@ -98,20 +98,11 @@ function AdminConsolePage() {
 
   return (
     <div className="space-y-6">
-      <section className="orca-hero orca-wave rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
-        <p className="text-xs uppercase tracking-[0.2em] text-cyan-700">Admin Console</p>
-        <div className="mt-2 flex items-center gap-3">
-          <span className="orca-icon-chip" aria-hidden="true">
-            <OrcaMark className="h-6 w-6" alt="" />
-          </span>
-          <h1 className="text-2xl font-semibold text-slate-900">
-            {data.organization?.name ?? "Home Pod"}
-          </h1>
-        </div>
-        <p className="mt-2 text-sm text-slate-600">
-          Toggle which parent accounts have admin access to menus and management views.
-        </p>
-      </section>
+      <ParentPageHeader
+        eyebrow="Admin Console"
+        title={data.organization?.name ?? "Home Pod"}
+        description="Toggle which parent accounts have admin access to menus and management views."
+      />
 
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white/90 shadow-sm">
         <div className="border-b border-slate-200 px-6 py-4">

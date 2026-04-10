@@ -11,7 +11,6 @@ import {
   linkAssignmentToNode,
   markNodeComplete,
   populateWebNodeContent,
-  reweaveSkillTree,
   saveTreeViewport,
   unlinkAssignmentFromNode,
   updateNodePositions,
@@ -79,9 +78,7 @@ const STATUS_LABELS: Record<string, string> = {
 const TOOLBAR_TOOLTIPS = {
   deleteEdge: "Delete the selected dependency road between two nodes.",
   savePositions: "Save the node positions after dragging them into place.",
-  autoLayout: "Clean up spacing and reposition the current map without changing its core meaning.",
-  reweave:
-    "Rebuild the dependency roads into a more guided branching structure with alternate local routes.",
+  autoLayout: "Reflow the map using a hierarchical tree layout — no edge crossings, clean branching structure.",
   addNode: "Add a new node at the center of the current view.",
   connect: "Turn on connection mode, then click one node and another to create a dependency road.",
   connectActive: "Exit connection mode.",
@@ -369,7 +366,6 @@ function SkillTreePage() {
   const [unlockToast, setUnlockToast] = useState<string | null>(null);
   const [rewardUnlockBanner, setRewardUnlockBanner] = useState<{ tierTitle: string } | null>(null);
   const [autoLayouting, setAutoLayouting] = useState(false);
-  const [reweaving, setReweaving] = useState(false);
 
   const [populateState, setPopulateState] = useState<PopulateState | null>(null);
 
@@ -645,24 +641,6 @@ function SkillTreePage() {
     }
   }
 
-  async function handleReweave() {
-    setReweaving(true);
-    try {
-      const result = await reweaveSkillTree({
-        data: { treeId: treeData.tree.id },
-      });
-      setNodes(result.nodes as TreeNode[]);
-      setEdges(result.edges as TreeEdge[]);
-      if (Array.isArray(result.nodeProgress)) {
-        setProgressMap(new Map((result.nodeProgress as NodeProgress[]).map((p) => [p.nodeId, p])));
-      }
-      setHasUnsavedPositions(false);
-      setSelectedEdgeId(null);
-    } finally {
-      setReweaving(false);
-    }
-  }
-
   // ── Add node ─────────────────────────────────────────────────────────────────
   async function handleAddNode() {
     const newNode = await upsertSkillTreeNode({
@@ -911,6 +889,15 @@ function SkillTreePage() {
     return new Set(nodes.filter((n) => !highlightedNodeIds.has(n.id)).map((n) => n.id));
   }, [highlightedNodeIds, nodes]);
 
+  // Fork nodes = sources of "fork"-type edges (decision points)
+  const forkNodeIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const edge of edges) {
+      if (edge.edgeType === "fork") set.add(edge.sourceNodeId);
+    }
+    return set;
+  }, [edges]);
+
   const selectedNodeProgress = selectedNodeId ? (progressMap.get(selectedNodeId) ?? null) : null;
   const selectedNodeAssignments = selectedNodeId
     ? (nodeAssignmentsMap.get(selectedNodeId) ?? [])
@@ -985,22 +972,12 @@ function SkillTreePage() {
 
             <button
               type="button"
-              disabled={autoLayouting || reweaving || nodes.length === 0}
+              disabled={autoLayouting || nodes.length === 0}
               onClick={() => void handleAutoLayout()}
               title={TOOLBAR_TOOLTIPS.autoLayout}
               className="rounded-xl border border-cyan-200 bg-cyan-50 px-3 py-1.5 text-xs font-medium text-cyan-700 hover:bg-cyan-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {autoLayouting ? "Reflowing…" : "Auto-Layout"}
-            </button>
-
-            <button
-              type="button"
-              disabled={reweaving || autoLayouting || nodes.length < 3}
-              onClick={() => void handleReweave()}
-              title={TOOLBAR_TOOLTIPS.reweave}
-              className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-medium text-violet-700 hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {reweaving ? "Reweaving…" : "Reweave Tree"}
             </button>
 
             {editMode ? (
@@ -1167,6 +1144,7 @@ function SkillTreePage() {
               selectedNodeId={selectedNodeId}
               newlyAddedNodeIds={newlyAddedNodeIds}
               dimmedNodeIds={dimmedNodeIds}
+              forkNodeIds={forkNodeIds}
               onNodeClick={handleNodeClick}
               onNodeDragStart={handleNodeDragStart}
             />

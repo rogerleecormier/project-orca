@@ -93,7 +93,7 @@ function RegisterPage() {
   };
 
   return (
-    <div className="mx-auto min-h-screen w-full max-w-2xl py-8 px-4">
+    <div className="orca-auth-page">
       <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <p className="text-xs uppercase tracking-[0.2em] text-cyan-700">Account Creation</p>
         <h1 className="mt-2 text-2xl font-semibold text-slate-900">Create Parent Account</h1>

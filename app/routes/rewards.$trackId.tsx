@@ -9,6 +9,7 @@ import {
   updateRewardTrack,
   upsertRewardTier,
 } from "../server/functions";
+import { ParentPageHeader } from "../components/parent-page-header";
 
 // ── Route ─────────────────────────────────────────────────────────────────────
 
@@ -588,70 +589,73 @@ function RewardTrackEditPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-wrap items-center gap-3">
-        <Link
-          to="/rewards"
-          className="shrink-0 text-sm text-slate-500 transition hover:text-slate-900"
-        >
-          ← Reward Tracks
-        </Link>
-        <span className="text-slate-300">|</span>
-        <h1 className="text-lg font-semibold text-slate-900">{track.title}</h1>
-        {initialDetail.profile ? (
-          <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700">
-            {initialDetail.profile.displayName}
-            {initialDetail.profile.gradeLevel ? ` · Grade ${initialDetail.profile.gradeLevel}` : ""}
-          </span>
-        ) : null}
-
-        <div className="ml-auto flex shrink-0 items-center gap-2">
-          {track.isActive ? (
-            <>
-              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
-                ACTIVE
-              </span>
-              {confirmDeactivate ? (
-                <>
-                  <span className="text-xs text-slate-600">Deactivate?</span>
-                  <button
-                    type="button"
-                    disabled={deactivating}
-                    onClick={() => void handleDeactivate()}
-                    className="rounded-xl bg-rose-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-rose-700 disabled:opacity-60"
-                  >
-                    {deactivating ? "…" : "Yes"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setConfirmDeactivate(false)}
-                    className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
-                  >
-                    No
-                  </button>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setConfirmDeactivate(true)}
-                  className="rounded-xl border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition"
-                >
-                  Deactivate
-                </button>
-              )}
-            </>
-          ) : (
-            <button
-              type="button"
-              disabled={activating}
-              onClick={() => void handleActivate()}
-              className="rounded-xl bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60 transition"
+      <ParentPageHeader
+        title={track.title}
+        description={(
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <Link
+              to="/rewards"
+              className="font-medium text-cyan-800 transition hover:underline"
             >
-              {activating ? "Activating…" : "Activate Track"}
-            </button>
-          )}
-        </div>
-      </div>
+              ← Reward Tracks
+            </Link>
+            {initialDetail.profile ? (
+              <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700">
+                {initialDetail.profile.displayName}
+                {initialDetail.profile.gradeLevel ? ` · Grade ${initialDetail.profile.gradeLevel}` : ""}
+              </span>
+            ) : null}
+          </div>
+        )}
+        action={(
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {track.isActive ? (
+              <>
+                <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
+                  ACTIVE
+                </span>
+                {confirmDeactivate ? (
+                  <>
+                    <span className="text-xs text-slate-600">Deactivate?</span>
+                    <button
+                      type="button"
+                      disabled={deactivating}
+                      onClick={() => void handleDeactivate()}
+                      className="rounded-xl bg-rose-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-rose-700 disabled:opacity-60"
+                    >
+                      {deactivating ? "…" : "Yes"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeactivate(false)}
+                      className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+                    >
+                      No
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDeactivate(true)}
+                    className="rounded-xl border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50"
+                  >
+                    Deactivate
+                  </button>
+                )}
+              </>
+            ) : (
+              <button
+                type="button"
+                disabled={activating}
+                onClick={() => void handleActivate()}
+                className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-60"
+              >
+                {activating ? "Activating…" : "Activate Track"}
+              </button>
+            )}
+          </div>
+        )}
+      />
 
       {/* Pending delivery banner */}
       {pendingClaims.length > 0 ? (

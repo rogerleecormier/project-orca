@@ -25,6 +25,84 @@ type AppShellProps = {
 
 const CHAT_SUGGESTION_STORAGE_KEY = "proorca.lessonPlanner.selectedSuggestion.v1";
 
+// ── Curriculum nav group ──────────────────────────────────────────────────────
+
+const CURRICULUM_PATHS = [
+  "/curriculum-builder",
+  "/skill-tree",
+  "/skill-trees",
+  "/lessons",
+  "/classes",
+  "/assignments",
+  "/templates",
+];
+
+function CurriculumNavSection({
+  pathname,
+  onNav,
+}: {
+  pathname: string;
+  onNav: () => void;
+}) {
+  const isCurriculumActive = CURRICULUM_PATHS.some((p) => pathname.startsWith(p));
+  const [open, setOpen] = useState(isCurriculumActive);
+
+  const navItem = (to: string, label: string, match?: string) => {
+    const active = pathname.startsWith(match ?? to);
+    return (
+      <Link
+        to={to}
+        className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition ${
+          active ? "bg-cyan-50 text-cyan-900 font-medium" : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+        }`}
+        onClick={onNav}
+      >
+        {label}
+      </Link>
+    );
+  };
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm font-medium transition ${
+          isCurriculumActive ? "text-cyan-900" : "text-slate-700 hover:bg-slate-100"
+        }`}
+      >
+        <span className="flex items-center gap-2">
+          <span className="text-base">📚</span>
+          Curriculum
+        </span>
+        <span className={`text-xs text-slate-400 transition-transform ${open ? "rotate-90" : ""}`}>▶</span>
+      </button>
+
+      {open && (
+        <div className="ml-4 mt-1 flex flex-col gap-0.5 border-l border-slate-200 pl-3">
+          {navItem("/curriculum-builder", "✦ AI Builder")}
+          {navItem("/skill-trees", "Skill Maps", "/skill-tree")}
+          {navItem("/lessons", "Lessons")}
+          {navItem("/classes", "Classes")}
+          {navItem("/assignments", "Assignments")}
+          {navItem("/templates", "Templates")}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NavLabel({ icon, label }: { icon: string; label: string }) {
+  return (
+    <span className="flex items-center gap-2">
+      <span className="text-base" aria-hidden="true">
+        {icon}
+      </span>
+      {label}
+    </span>
+  );
+}
+
 // ── Inline PIN prompt (student → parent quick-switch) ─────────────────────────
 
 function ParentPinPrompt({
@@ -120,6 +198,7 @@ export function AppShell({
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   });
+  const isFullBleedRoute = pathname.startsWith("/skill-tree/");
 
   if (!isAuthenticated || isLoggingOut) {
     return <>{children}</>;
@@ -218,7 +297,8 @@ export function AppShell({
             <p className="mt-2 text-sm text-slate-600">Edge-native homeschool command center</p>
           </div>
 
-          <nav className="space-y-2">
+          <nav className="space-y-1">
+            {/* ── Dashboard ── */}
             {canAccessParentModules ? (
               <Link
                 to="/"
@@ -227,7 +307,7 @@ export function AppShell({
                 }`}
                 onClick={() => setSidebarOpen(false)}
               >
-                Dashboard
+                <NavLabel icon="🏠" label="Dashboard" />
               </Link>
             ) : null}
 
@@ -239,19 +319,7 @@ export function AppShell({
                 }`}
                 onClick={() => setSidebarOpen(false)}
               >
-                Home Pod
-              </Link>
-            ) : null}
-
-            {canAccessParentModules ? (
-              <Link
-                to="/classes"
-                className={`block w-full rounded-xl px-3 py-2 text-left text-sm font-medium transition ${
-                  pathname.startsWith("/classes") ? "bg-cyan-50 text-cyan-900" : "text-slate-700 hover:bg-slate-100"
-                }`}
-                onClick={() => setSidebarOpen(false)}
-              >
-                Classes
+                <NavLabel icon="🛠️" label="Home Pod" />
               </Link>
             ) : null}
 
@@ -263,34 +331,16 @@ export function AppShell({
                 }`}
                 onClick={() => setSidebarOpen(false)}
               >
-                Students
+                <NavLabel icon="👥" label="Students" />
               </Link>
             ) : null}
 
+            {/* ── Curriculum section ── */}
             {canAccessParentModules ? (
-              <Link
-                to="/assignments"
-                className={`block w-full rounded-xl px-3 py-2 text-left text-sm font-medium transition ${
-                  pathname.startsWith("/assignments") ? "bg-cyan-50 text-cyan-900" : "text-slate-700 hover:bg-slate-100"
-                }`}
-                onClick={() => setSidebarOpen(false)}
-              >
-                Assignments
-              </Link>
+              <CurriculumNavSection pathname={pathname} onNav={() => setSidebarOpen(false)} />
             ) : null}
 
-            {canAccessParentModules ? (
-              <Link
-                to="/templates"
-                className={`block w-full rounded-xl px-3 py-2 text-left text-sm font-medium transition ${
-                  pathname.startsWith("/templates") ? "bg-cyan-50 text-cyan-900" : "text-slate-700 hover:bg-slate-100"
-                }`}
-                onClick={() => setSidebarOpen(false)}
-              >
-                Templates
-              </Link>
-            ) : null}
-
+            {/* ── Other parent tools ── */}
             {canAccessParentModules ? (
               <Link
                 to="/gradebook"
@@ -299,7 +349,7 @@ export function AppShell({
                 }`}
                 onClick={() => setSidebarOpen(false)}
               >
-                Gradebook
+                <NavLabel icon="📘" label="Gradebook" />
               </Link>
             ) : null}
 
@@ -311,31 +361,7 @@ export function AppShell({
                 }`}
                 onClick={() => setSidebarOpen(false)}
               >
-                Week Planner
-              </Link>
-            ) : null}
-
-            {canAccessParentModules ? (
-              <Link
-                to="/skill-trees"
-                className={`block w-full rounded-xl px-3 py-2 text-left text-sm font-medium transition ${
-                  pathname.startsWith("/skill-tree") ? "bg-cyan-50 text-cyan-900" : "text-slate-700 hover:bg-slate-100"
-                }`}
-                onClick={() => setSidebarOpen(false)}
-              >
-                Skill Maps
-              </Link>
-            ) : null}
-
-            {canAccessParentModules ? (
-              <Link
-                to="/curriculum-builder"
-                className={`block w-full rounded-xl px-3 py-2 text-left text-sm font-medium transition ${
-                  pathname.startsWith("/curriculum-builder") ? "bg-cyan-50 text-cyan-900" : "text-slate-700 hover:bg-slate-100"
-                }`}
-                onClick={() => setSidebarOpen(false)}
-              >
-                Curriculum Builder
+                <NavLabel icon="🗓️" label="Week Planner" />
               </Link>
             ) : null}
 
@@ -347,7 +373,7 @@ export function AppShell({
                 }`}
                 onClick={() => setSidebarOpen(false)}
               >
-                Rewards
+                <NavLabel icon="🏆" label="Rewards" />
                 {pendingRewardsCount > 0 ? (
                   <span className="flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-[10px] font-bold text-white">
                     {pendingRewardsCount > 9 ? "9+" : pendingRewardsCount}
@@ -364,10 +390,11 @@ export function AppShell({
                 }`}
                 onClick={() => setSidebarOpen(false)}
               >
-                Settings
+                <NavLabel icon="⚙️" label="Settings" />
               </Link>
             ) : null}
 
+            {/* ── Student session ── */}
             {isStudentSession ? (
               <Link
                 to="/student"
@@ -376,7 +403,7 @@ export function AppShell({
                 }`}
                 onClick={() => setSidebarOpen(false)}
               >
-                Student Workspace
+                <NavLabel icon="🎓" label="Student Workspace" />
               </Link>
             ) : null}
 
@@ -388,7 +415,7 @@ export function AppShell({
                 }`}
                 onClick={() => setSidebarOpen(false)}
               >
-                My Skill Map
+                <NavLabel icon="🧭" label="My Skill Map" />
               </Link>
             ) : null}
           </nav>
@@ -497,7 +524,9 @@ export function AppShell({
             ) : null}
           </header>
 
-          <main className="min-w-0 flex-1 p-4 md:p-8">{children}</main>
+          <main className={`min-w-0 flex-1 ${isFullBleedRoute ? "p-0" : "orca-page-main"}`}>
+            {children}
+          </main>
 
           <LessonPlannerChat
             studentName={fallbackProfile?.displayName ?? "your student"}
