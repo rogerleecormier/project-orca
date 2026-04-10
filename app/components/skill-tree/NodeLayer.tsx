@@ -1,4 +1,5 @@
 import type React from "react";
+import { useState } from "react";
 import { RAMP_COLORS } from "./EdgeLayer";
 import { computeSkillTreeNodeRadius } from "./skillTreeGeometry";
 
@@ -58,6 +59,29 @@ const STATUS_FILL: Record<string, string> = {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
+const STATUS_LABEL: Record<string, string> = {
+  locked:      "Locked",
+  available:   "Available",
+  in_progress: "In Progress",
+  complete:    "Complete",
+  mastery:     "Mastery",
+};
+
+const NODE_TYPE_LABEL: Record<string, string> = {
+  lesson:    "Lesson",
+  milestone: "Chapter",
+  boss:      "Boss",
+  branch:    "Branch",
+  elective:  "Elective",
+};
+
+type TooltipState = {
+  nodeId: string;
+  svgX: number;
+  svgY: number;
+  r: number;
+} | null;
+
 type Props = {
   nodes: SkillTreeNode[];
   progressMap: Map<string, SkillTreeNodeProgress>;
@@ -72,6 +96,7 @@ type Props = {
   startNodeIds?: Set<string>;
   endNodeIds?: Set<string>;
   onNodeClick: (nodeId: string) => void;
+  onNodeDoubleClick?: (nodeId: string) => void;
   onNodeDragStart: (nodeId: string, e: React.MouseEvent) => void;
 };
 
@@ -89,8 +114,11 @@ export function NodeLayer({
   startNodeIds,
   endNodeIds,
   onNodeClick,
+  onNodeDoubleClick,
   onNodeDragStart,
 }: Props) {
+  const [tooltip, setTooltip] = useState<TooltipState>(null);
+
   return (
     <>
       {nodes.map((node) => {
@@ -238,12 +266,10 @@ export function NodeLayer({
 
         const startMarker = isStartNode ? (
           <g transform={`translate(${cx} ${cy - r - 14})`} style={{ pointerEvents: "none" }}>
-            <rect x={-28} y={-9} width={56} height={18} rx={9} fill="#eaf8ff" stroke="#67b9df" strokeWidth={1} />
-            <text x={0} y={0} fontSize={8.5} textAnchor="middle" dominantBaseline="central" fill="#1f628a" fontWeight="700" style={{ userSelect: "none" }}>★ START</text>
+            <rect x={-24} y={-8} width={48} height={16} rx={8} fill="#eaf8ff" stroke="#67b9df" strokeWidth={0.9} />
+            <text x={0} y={0} fontSize={8} textAnchor="middle" dominantBaseline="central" fill="#1f628a" fontWeight="700" style={{ userSelect: "none" }}>★ START</text>
           </g>
         ) : null;
-
-        // endMarker is computed after label variables below
 
         // Selected ring — three wave circles rippling outward from node center
         const selectedRing = isSelected && !isConnectSource ? (
@@ -375,38 +401,11 @@ export function NodeLayer({
           </>
         ) : null;
 
-        // Label — split into two lines at a word boundary instead of hard-truncating
-        const labelFill = isLocked ? "#b0aea6" : "#1e293b";
-        const MAX_CHARS = 18;
-        let titleLine1 = node.title;
-        let titleLine2: string | null = null;
-        if (node.title.length > MAX_CHARS) {
-          // Try to break at a space near the middle
-          const mid = Math.floor(node.title.length / 2);
-          const spaceAfter = node.title.indexOf(" ", mid);
-          const spaceBefore = node.title.lastIndexOf(" ", mid);
-          const breakIdx =
-            spaceAfter !== -1 && (spaceBefore === -1 || spaceAfter - mid <= mid - spaceBefore)
-              ? spaceAfter
-              : spaceBefore !== -1
-              ? spaceBefore
-              : MAX_CHARS;
-          titleLine1 = node.title.slice(0, breakIdx).trim();
-          const remainder = node.title.slice(breakIdx).trim();
-          titleLine2 = remainder.length > MAX_CHARS ? remainder.slice(0, MAX_CHARS - 1) + "…" : remainder;
-        }
-        const labelLineHeight = 13;
-        const labelLines = titleLine2 ? [titleLine1, titleLine2] : [titleLine1];
-        // Base label offset: small fixed gap after the node shape + ring clearance
-        const labelGap = 9;
-        const labelBaseY = cy + r + labelGap;
-
-        // GOAL badge sits below all labels so nothing overlaps
-        const goalBadgeOffsetY = labelGap + labelLines.length * labelLineHeight + (node.xpReward > 0 && !isLocked ? labelLineHeight + 4 : 4) + 8;
+        // GOAL badge: small pill directly below node shape
         const endMarker = isEndNode ? (
-          <g transform={`translate(${cx} ${cy + r + goalBadgeOffsetY})`} style={{ pointerEvents: "none" }}>
-            <rect x={-28} y={-9} width={56} height={18} rx={9} fill="#e2f2fe" stroke="#2a77af" strokeWidth={1} />
-            <text x={0} y={0} fontSize={8.5} textAnchor="middle" dominantBaseline="central" fill="#1a4f78" fontWeight="700" style={{ userSelect: "none" }}>★ GOAL</text>
+          <g transform={`translate(${cx} ${cy + r + 14})`} style={{ pointerEvents: "none" }}>
+            <rect x={-24} y={-8} width={48} height={16} rx={8} fill="#e2f2fe" stroke="#2a77af" strokeWidth={0.9} />
+            <text x={0} y={0} fontSize={8} textAnchor="middle" dominantBaseline="central" fill="#1a4f78" fontWeight="700" style={{ userSelect: "none" }}>★ GOAL</text>
           </g>
         ) : null;
 
@@ -417,9 +416,12 @@ export function NodeLayer({
             key={node.id}
             style={{ cursor, opacity: isDimmed ? 0.15 : 1, transition: "opacity 0.2s" }}
             onClick={(e) => { e.stopPropagation(); onNodeClick(node.id); }}
+            onDoubleClick={(e) => { e.stopPropagation(); onNodeDoubleClick?.(node.id); }}
             onMouseDown={(e) => {
               if (editMode && !connectMode) onNodeDragStart(node.id, e);
             }}
+            onMouseEnter={() => setTooltip({ nodeId: node.id, svgX: cx, svgY: cy, r })}
+            onMouseLeave={() => setTooltip((t) => t?.nodeId === node.id ? null : t)}
           >
             {/* Hover ring (CSS hover) */}
             <circle
@@ -446,69 +448,131 @@ export function NodeLayer({
             {dragHandle}
             {startMarker}
             {endMarker}
-
-            {/* Title label (1–2 lines) with opaque background to avoid edge bleed */}
-            {labelLines.map((line, i) => {
-              const ly = labelBaseY + i * labelLineHeight;
-              const approxW = line.length * 6.4;
-              return (
-                <g key={i} style={{ pointerEvents: "none" }}>
-                  <rect
-                    x={cx - approxW / 2 - 3}
-                    y={ly - 10}
-                    width={approxW + 6}
-                    height={13}
-                    rx={3}
-                    fill="rgba(245,252,255,0.88)"
-                  />
-                  <text
-                    x={cx}
-                    y={ly}
-                    fontSize={isOptional ? 10 : 11}
-                    textAnchor="middle"
-                    dominantBaseline="auto"
-                    fill={labelFill}
-                    fontWeight={isSelected ? "700" : "500"}
-                    style={{ userSelect: "none" }}
-                  >
-                    {line}
-                  </text>
-                </g>
-              );
-            })}
-
-            {/* XP label with background */}
-            {node.xpReward > 0 && !isLocked ? (() => {
-              const xpy = labelBaseY + labelLines.length * labelLineHeight + 2;
-              const xpStr = `${node.xpReward} XP`;
-              const xpW = xpStr.length * 5.8;
-              return (
-                <g style={{ pointerEvents: "none" }}>
-                  <rect
-                    x={cx - xpW / 2 - 3}
-                    y={xpy - 9}
-                    width={xpW + 6}
-                    height={12}
-                    rx={3}
-                    fill="rgba(245,252,255,0.75)"
-                  />
-                  <text
-                    x={cx}
-                    y={xpy}
-                    fontSize={isOptional ? 9 : 10}
-                    textAnchor="middle"
-                    dominantBaseline="auto"
-                    fill="#9ca3af"
-                    style={{ userSelect: "none" }}
-                  >
-                    {xpStr}
-                  </text>
-                </g>
-              );
-            })() : null}
           </g>
         );
       })}
+
+      {/* Hover tooltip — glass panel aligned to the right side of the node */}
+      {tooltip ? (() => {
+        const tn = nodes.find((n) => n.id === tooltip.nodeId);
+        if (!tn) return null;
+        const tp = progressMap.get(tn.id);
+        const tstatus = tp?.status ?? "locked";
+        const tnodeColor = RAMP_COLORS[tn.colorRamp] ?? RAMP_COLORS.blue;
+        const isStart = startNodeIds?.has(tn.id) ?? false;
+        const isEnd = endNodeIds?.has(tn.id) ?? false;
+
+        const TW = 192;
+        // Anchor to the right of the node, vertically centered
+        const tipX = tooltip.svgX + tooltip.r + 14;
+        const tipY = tooltip.svgY - 44;
+
+        return (
+          <foreignObject
+            x={tipX}
+            y={tipY}
+            width={TW}
+            height={160}
+            style={{ pointerEvents: "none", overflow: "visible" }}
+          >
+            <div
+              style={{
+                background: "linear-gradient(145deg, rgba(255,255,255,0.96), rgba(240,249,255,0.92))",
+                border: `1px solid rgba(${tnodeColor === "#378add" ? "55,138,221" : "90,139,184"},0.28)`,
+                borderRadius: "14px",
+                padding: "10px 13px 11px",
+                boxShadow: "0 4px 20px rgba(14,42,70,0.13), 0 1px 4px rgba(14,42,70,0.07)",
+                backdropFilter: "blur(12px)",
+                WebkitBackdropFilter: "blur(12px)",
+                fontFamily: "var(--orca-body-font, sans-serif)",
+                width: `${TW}px`,
+              }}
+            >
+              {/* Sandy top accent line */}
+              <div style={{
+                height: "2px",
+                background: "linear-gradient(90deg, transparent, rgba(200,169,110,0.55), rgba(200,169,110,0.8), rgba(200,169,110,0.55), transparent)",
+                borderRadius: "999px",
+                marginBottom: "8px",
+              }} />
+
+              {/* Node type + role badges */}
+              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "4px", marginBottom: "6px" }}>
+                <span style={{
+                  fontSize: "9px", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
+                  background: `${tnodeColor}18`, border: `1px solid ${tnodeColor}40`,
+                  color: tnodeColor, borderRadius: "6px", padding: "1px 6px",
+                }}>
+                  {NODE_TYPE_LABEL[tn.nodeType] ?? tn.nodeType}
+                </span>
+                {!tn.isRequired && (
+                  <span style={{
+                    fontSize: "9px", fontWeight: 600, letterSpacing: "0.04em",
+                    color: "#5f81a1", background: "rgba(90,139,184,0.1)",
+                    border: "1px solid rgba(90,139,184,0.22)", borderRadius: "6px", padding: "1px 5px",
+                  }}>Optional</span>
+                )}
+                {isStart && (
+                  <span style={{ fontSize: "9px", color: "#1f628a", fontWeight: 700,
+                    background: "rgba(103,185,223,0.15)", border: "1px solid rgba(103,185,223,0.3)",
+                    borderRadius: "6px", padding: "1px 5px" }}>★ Start</span>
+                )}
+                {isEnd && (
+                  <span style={{ fontSize: "9px", color: "#1a4f78", fontWeight: 700,
+                    background: "rgba(42,119,175,0.12)", border: "1px solid rgba(42,119,175,0.28)",
+                    borderRadius: "6px", padding: "1px 5px" }}>★ Goal</span>
+                )}
+              </div>
+
+              {/* Title */}
+              <div style={{
+                fontSize: "12px", fontWeight: 600,
+                color: "#102a43",
+                lineHeight: 1.38, marginBottom: "7px",
+                wordBreak: "break-word",
+              }}>
+                {tn.title}
+              </div>
+
+              {/* Status row */}
+              <div style={{ display: "flex", alignItems: "center", gap: "5px", marginBottom: tn.xpReward > 0 ? "5px" : "0" }}>
+                <span style={{
+                  width: "6px", height: "6px", borderRadius: "50%",
+                  background: STATUS_FILL[tstatus] ?? "#888",
+                  flexShrink: 0,
+                  boxShadow: `0 0 4px ${STATUS_FILL[tstatus] ?? "#888"}66`,
+                }} />
+                <span style={{ fontSize: "10px", color: "#467095" }}>
+                  {STATUS_LABEL[tstatus] ?? tstatus}
+                </span>
+              </div>
+
+              {/* XP row */}
+              {tn.xpReward > 0 && (
+                <div style={{
+                  fontSize: "10px", fontWeight: 600,
+                  color: "#a8895a",
+                  letterSpacing: "0.02em",
+                }}>
+                  {tstatus === "mastery" || tstatus === "complete"
+                    ? `${tp?.xpEarned ?? tn.xpReward} / ${tn.xpReward} XP`
+                    : `${tn.xpReward} XP`}
+                </div>
+              )}
+
+              {/* Hint */}
+              <div style={{
+                marginTop: "7px", fontSize: "9px",
+                color: "#8bafc8",
+                borderTop: "1px solid rgba(90,139,184,0.14)", paddingTop: "6px",
+                letterSpacing: "0.01em",
+              }}>
+                Click to open · Double-click to edit
+              </div>
+            </div>
+          </foreignObject>
+        );
+      })() : null}
 
       {/* Global keyframes */}
       <style>{`

@@ -43,7 +43,8 @@
       "Bash(pnpm deploy:*)",
       "Bash(pnpm run:*)",
       "Bash(node -e ':*)",
-      "Bash(ls -lh /run/media/rogerleecormier/Storage/dev/project-orca/app/components/*.tsx)"
+      "Bash(ls -lh /run/media/rogerleecormier/Storage/dev/project-orca/app/components/*.tsx)",
+      "Read(//run/media-rogerleecormier/Storage/dev/project-orca/app/lib/**)"
     ],
     "additionalDirectories": [
       "/tmp"

@@ -1160,6 +1160,8 @@ export function layoutForceDirected(
 
   const assignBranchY = (id: string, baseY: number, depthFromAnchor: number) => {
     if (finalY.has(id)) return;
+    // Branch root sits at the SAME Y as its spine anchor (depth 0).
+    // Its own children descend from there using BRANCH_SEP.
     const y = baseY + depthFromAnchor * BRANCH_SEP;
     finalY.set(id, y);
     for (const kid of children.get(id) ?? []) {
@@ -1171,7 +1173,7 @@ export function layoutForceDirected(
     const kids = children.get(id) ?? [];
     for (const kid of kids) {
       if (!spineSet.has(kid)) {
-        assignBranchY(kid, finalY.get(id)!, 1);
+        assignBranchY(kid, finalY.get(id)!, 0);  // start at depth 0 = same Y as spine anchor
       }
     }
   }
@@ -1193,55 +1195,70 @@ export function layoutForceDirected(
   // Place all spine nodes at center
   for (const id of spineSet) finalX.set(id, CENTER_X);
 
-  // For each spine node that has branch children, place those subtrees L/R
-  // Gather all branch roots per spine node, sort by input order
-  const placeBranchSubtree = (rootId: string, centerAnchorX: number, side: -1 | 1, levelOffset: number) => {
-    // Use a simple recursive width-first placement:
-    // compute the subtree width, then place root at centerAnchorX + side * offset
+  // For each spine node that has branch children, place those subtrees L/R.
+  // rightEdge / leftEdge are global so branches from different spine nodes
+  // never stack on top of each other.
 
-    // Compute leaf count (subtree width)
-    const leafCount = (id: string): number => {
-      const kids = children.get(id) ?? [];
-      const nonSpineKids = kids.filter((k) => !spineSet.has(k));
-      if (nonSpineKids.length === 0) return 1;
-      return nonSpineKids.reduce((s, k) => s + leafCount(k), 0);
-    };
-
-    // Place a branch subtree rooted at `id` with the given center X
-    const placeSubtree = (id: string, cx: number) => {
-      if (finalX.has(id)) return; // don't overwrite spine nodes
-      finalX.set(id, cx);
-      const kids = (children.get(id) ?? []).filter((k) => !spineSet.has(k));
-      if (kids.length === 0) return;
-      const totalLeaves = kids.reduce((s, k) => s + leafCount(k), 0);
-      const totalWidth = (totalLeaves - 1) * NODE_SEP;
-      let cursor = cx - totalWidth / 2;
-      for (const kid of kids) {
-        const kidLeaves = leafCount(kid);
-        const kidCX = cursor + (kidLeaves - 1) * NODE_SEP / 2;
-        placeSubtree(kid, kidCX);
-        cursor += kidLeaves * NODE_SEP;
-      }
-    };
-
-    const lc = leafCount(rootId);
-    // Offset from spine: levelOffset * NODE_SEP, plus subtree half-width to avoid overlap with spine
-    const halfWidth = ((lc - 1) * NODE_SEP) / 2;
-    const rootX = centerAnchorX + side * (levelOffset * NODE_SEP + halfWidth + NODE_SEP * 0.6);
-    placeSubtree(rootId, rootX);
+  // Helper: leaf count within branch subtree (ignores spine nodes)
+  const branchLeafCount = (id: string): number => {
+    const ks = (children.get(id) ?? []).filter((k) => !spineSet.has(k));
+    return ks.length === 0 ? 1 : ks.reduce((s, k) => s + branchLeafCount(k), 0);
   };
+
+  // Helper: place a branch subtree centered at cx
+  const placeBranchSubtree = (id: string, cx: number) => {
+    if (finalX.has(id)) return;
+    finalX.set(id, cx);
+    const ks = (children.get(id) ?? []).filter((k) => !spineSet.has(k));
+    if (ks.length === 0) return;
+    const totalLeaves = ks.reduce((s, k) => s + branchLeafCount(k), 0);
+    let cursor = cx - ((totalLeaves - 1) * NODE_SEP) / 2;
+    for (const k of ks) {
+      const kLeaves = branchLeafCount(k);
+      placeBranchSubtree(k, cursor + (kLeaves - 1) * NODE_SEP / 2);
+      cursor += kLeaves * NODE_SEP;
+    }
+  };
+
+  let globalRightEdge = CENTER_X;
+  let globalLeftEdge  = CENTER_X;
 
   for (const spineId of spineSet) {
     const kids = children.get(spineId) ?? [];
     const branchKids = kids.filter((k) => !spineSet.has(k));
     if (branchKids.length === 0) continue;
 
+    // Each spine node gets its own L/R counters seeded from the global edges,
+    // so branches from the same spine node pair up correctly (1st R, 1st L, 2nd R…)
+    // while never stepping on branches from other spine nodes.
+    let rightEdge = globalRightEdge;
+    let leftEdge  = globalLeftEdge;
+
     // Alternate L/R: 0→right, 1→left, 2→right, ...
     branchKids.forEach((kid, idx) => {
       const side: -1 | 1 = idx % 2 === 0 ? 1 : -1;
-      const levelOffset = Math.floor(idx / 2) + 1;
-      placeBranchSubtree(kid, CENTER_X, side, levelOffset);
+      const lc = branchLeafCount(kid);
+      const halfWidth = ((lc - 1) * NODE_SEP) / 2;
+      let rootX: number;
+      if (side === 1) {
+        rootX = Math.max(
+          rightEdge + NODE_SEP * 0.6 + halfWidth,
+          CENTER_X + NODE_SEP * 0.6 + halfWidth,
+        );
+        rightEdge = rootX + halfWidth;
+      } else {
+        rootX = Math.min(
+          leftEdge - NODE_SEP * 0.6 - halfWidth,
+          CENTER_X - NODE_SEP * 0.6 - halfWidth,
+        );
+        leftEdge = rootX - halfWidth;
+      }
+      placeBranchSubtree(kid, rootX);
     });
+
+    // Update global edges so the next spine node's branches start outside these
+    globalRightEdge = Math.max(globalRightEdge, rightEdge);
+    globalLeftEdge  = Math.min(globalLeftEdge,  leftEdge);
   }
 
   // Handle any unplaced nodes
@@ -1285,6 +1302,7 @@ export function layoutForceDirected(
       }
     }
   }
+
 
   // ── Normalize so everything fits on canvas ───────────────────────────────────
   const allX  = [...finalX.values()];

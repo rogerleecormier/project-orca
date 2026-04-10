@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { RAMP_COLORS } from "./EdgeLayer";
 import { AssignmentModal, type ModalAssignment } from "../assignment-modal";
 
@@ -54,6 +54,7 @@ type Props = {
   progress: PanelProgress | null;
   nodeAssignments: PanelAssignment[];
   allClassAssignments: PanelAssignment[];
+  initialTab?: "assignments" | "info" | "edit" | "add";
   nodes: PanelNode[];
   edges: PanelEdge[];
   editMode: boolean;
@@ -222,6 +223,7 @@ export function NodeSidePanel({
   editMode,
   isStudent,
   parentPinLength,
+  initialTab,
   onClose,
   onAssignmentLinked,
   onAssignmentUnlinked,
@@ -231,7 +233,7 @@ export function NodeSidePanel({
   onMarkComplete,
 }: Props) {
   const [activeTab, setActiveTab] = useState<"assignments" | "info" | "edit" | "add">(
-    "assignments",
+    initialTab ?? "assignments",
   );
   const [aiGenerating, setAiGenerating] = useState(false);
   const [viewingAssignment, setViewingAssignment] = useState<PanelAssignment | null>(null);
@@ -244,6 +246,11 @@ export function NodeSidePanel({
   const [draftNodeType, setDraftNodeType] = useState(node?.nodeType ?? "lesson");
   const [draftXp, setDraftXp] = useState(node?.xpReward ?? 100);
   const [draftRequired, setDraftRequired] = useState(node?.isRequired ?? false);
+
+  // When initialTab changes (e.g. double-click a new node), jump to that tab
+  useEffect(() => {
+    if (initialTab) setActiveTab(initialTab);
+  }, [initialTab, node?.id]);
 
   // Delete zone
   const [showDelete, setShowDelete] = useState(false);

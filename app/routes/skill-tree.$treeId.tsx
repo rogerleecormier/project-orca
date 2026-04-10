@@ -353,6 +353,7 @@ function SkillTreePage() {
   // ── Interaction state ────────────────────────────────────────────────────────
   const [editMode, setEditMode] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [sidePanelInitialTab, setSidePanelInitialTab] = useState<"assignments" | "info" | "edit" | "add" | undefined>(undefined);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [connectMode, setConnectMode] = useState(false);
   const [connectingFromId, setConnectingFromId] = useState<string | null>(null);
@@ -583,6 +584,12 @@ function SkillTreePage() {
     }
     setSelectedEdgeId(null);
     setSelectedNodeId((prev) => (prev === nodeId ? null : nodeId));
+  }
+
+  function handleNodeDoubleClick(nodeId: string) {
+    setSelectedEdgeId(null);
+    setSelectedNodeId(nodeId);
+    setSidePanelInitialTab(editMode ? "edit" : "info");
   }
 
   // ── Edge click ────────────────────────────────────────────────────────────────
@@ -1170,7 +1177,8 @@ function SkillTreePage() {
               forkNodeIds={forkNodeIds}
               startNodeIds={startNodeIds}
               endNodeIds={endNodeIds}
-              onNodeClick={handleNodeClick}
+              onNodeClick={(id) => { setSidePanelInitialTab(undefined); handleNodeClick(id); }}
+              onNodeDoubleClick={handleNodeDoubleClick}
               onNodeDragStart={handleNodeDragStart}
             />
           </g>
@@ -1216,7 +1224,8 @@ function SkillTreePage() {
           editMode={editMode}
           isStudent={isStudent}
           parentPinLength={null}
-          onClose={() => setSelectedNodeId(null)}
+          initialTab={sidePanelInitialTab}
+          onClose={() => { setSelectedNodeId(null); setSidePanelInitialTab(undefined); }}
           onAssignmentLinked={(id) => void handleAssignmentLinked(id)}
           onAssignmentUnlinked={(id) => void handleAssignmentUnlinked(id)}
           onNodeUpdated={(updated) => void handleNodeUpdated(updated as TreeNode)}
