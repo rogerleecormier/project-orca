@@ -14,43 +14,29 @@ export const RAMP_COLORS: Record<string, string> = {
 };
 
 // Edge type visual config
-//
-//  required  — thick bright spine road, full opacity, strong glow
-//  optional  — thinner dashed side branch for extra XP / enrichment
-//  bonus     — dotted merge-back path (student rejoins main path)
-//  fork      — glowing amber choice edge for alternate core routes
-//
 const EDGE_STYLE = {
   required: {
-    strokeWidth: 3.5,
-    opacity: 0.9,
+    strokeWidth: 2.4,
+    opacity: 0.86,
     dasharray: undefined as string | undefined,
-    glowOpacity: 0.25,
-    glowWidth: 10,
     colorOverride: undefined as string | undefined,
   },
   optional: {
-    strokeWidth: 2,
-    opacity: 0.65,
-    dasharray: "9 5",
-    glowOpacity: 0.10,
-    glowWidth: 7,
+    strokeWidth: 1.5,
+    opacity: 0.72,
+    dasharray: "8 6",
     colorOverride: undefined as string | undefined,
   },
   bonus: {
-    strokeWidth: 1.5,
-    opacity: 0.5,
+    strokeWidth: 1.2,
+    opacity: 0.56,
     dasharray: "4 5",
-    glowOpacity: 0.06,
-    glowWidth: 5,
     colorOverride: undefined as string | undefined,
   },
   fork: {
-    strokeWidth: 3,
-    opacity: 0.85,
-    dasharray: "10 4",
-    glowOpacity: 0.35,
-    glowWidth: 12,
+    strokeWidth: 2.1,
+    opacity: 0.8,
+    dasharray: "10 5",
     colorOverride: "#ef9f27",
   },
 } as const;
@@ -58,7 +44,7 @@ const EDGE_STYLE = {
 const DRAW_ORDER: Record<string, number> = { bonus: 0, optional: 1, required: 2, fork: 3 };
 const ROUTE_ORDER: Record<string, number> = { required: 0, fork: 1, optional: 2, bonus: 3 };
 
-const ENDPOINT_GAP = 8;
+const ENDPOINT_GAP = 1.5;
 const NODE_CLEARANCE = 18;
 const EDGE_CLEARANCE = 22;
 const DEFAULT_XP = 100;
@@ -82,6 +68,7 @@ export type SkillTreeNode = {
   colorRamp: string;
   nodeType?: string;
   xpReward?: number;
+  isRequired?: boolean;
   [key: string]: unknown;
 };
 
@@ -156,7 +143,11 @@ function getNodeCenter(node: SkillTreeNode): Point {
 }
 
 function getNodeVisualRadius(node: SkillTreeNode): number {
-  return computeSkillTreeNodeRadius(node.nodeType ?? "lesson", node.xpReward ?? DEFAULT_XP);
+  return computeSkillTreeNodeRadius(
+    node.nodeType ?? "lesson",
+    node.xpReward ?? DEFAULT_XP,
+    node.isRequired ?? true,
+  );
 }
 
 function getNodeObstacleRadius(node: SkillTreeNode): number {
@@ -313,27 +304,13 @@ function tangentAtPolylineFraction(points: Point[], fraction: number): Point {
   return normalize(sub(points[points.length - 1]!, points[points.length - 2]!));
 }
 
-function buildRoundedPath(points: Point[]): string {
+function buildPolylinePath(points: Point[]): string {
   if (points.length === 0) return "";
   if (points.length === 1) return `M ${points[0]!.x} ${points[0]!.y}`;
-  if (points.length === 2) return `M ${points[0]!.x} ${points[0]!.y} L ${points[1]!.x} ${points[1]!.y}`;
-
   let d = `M ${points[0]!.x} ${points[0]!.y}`;
-  for (let i = 1; i < points.length - 1; i++) {
-    const prev = points[i - 1]!;
-    const curr = points[i]!;
-    const next = points[i + 1]!;
-    const inDir = normalize(sub(curr, prev));
-    const outDir = normalize(sub(next, curr));
-    const inLen = distance(prev, curr);
-    const outLen = distance(curr, next);
-    const radius = Math.min(24, inLen / 2, outLen / 2);
-    const entry = sub(curr, scale(inDir, radius));
-    const exit = add(curr, scale(outDir, radius));
-    d += ` L ${entry.x} ${entry.y} Q ${curr.x} ${curr.y} ${exit.x} ${exit.y}`;
+  for (let i = 1; i < points.length; i++) {
+    d += ` L ${points[i]!.x} ${points[i]!.y}`;
   }
-  const last = points[points.length - 1]!;
-  d += ` L ${last.x} ${last.y}`;
   return d;
 }
 
@@ -423,10 +400,6 @@ function scoreRouteCandidate(
   const segments = polylineSegments(points, edge.id);
   let score = polylineLength(points) * 0.05 + Math.max(0, points.length - 2) * 7;
 
-  if (segments.length === 1 && Math.abs(segments[0]!.a.x - segments[0]!.b.x) < 4) {
-    score += 180;
-  }
-
   for (const node of nodes) {
     if (node.id === edge.sourceNodeId || node.id === edge.targetNodeId) continue;
 
@@ -480,7 +453,7 @@ function routeEdge(
     }
   }
 
-  const path = buildRoundedPath(bestPoints);
+  const path = buildPolylinePath(bestPoints);
   const midPoint = pointAtPolylineFraction(bestPoints, 0.5);
   let labelNormal = normalize(perpendicular(tangentAtPolylineFraction(bestPoints, 0.5)));
   if (labelNormal.y > 0) labelNormal = scale(labelNormal, -1);
@@ -496,19 +469,7 @@ function routeEdge(
 
 function buildRubberBandPath(fromNode: SkillTreeNode, target: Point): string {
   const start = offsetFromNode(fromNode, target);
-  const delta = sub(target, start);
-  const dist = Math.max(length(delta), 1);
-  const dir = normalize(delta);
-  const perp = perpendicular(dir);
-  const seedSide = hashString(fromNode.id) % 2 === 0 ? 1 : -1;
-  const bend = clamp(dist * 0.18, 18, 56) * seedSide;
-  const points = simplifyPolyline([
-    start,
-    add(start, add(scale(dir, dist * 0.25), scale(perp, bend * 0.45))),
-    add(target, add(scale(dir, -dist * 0.18), scale(perp, bend))),
-    target,
-  ]);
-  return buildRoundedPath(points);
+  return buildPolylinePath([start, target]);
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -561,28 +522,9 @@ export function EdgeLayer({
   return (
     <>
       <style>{`
-        @keyframes dash-flow    { to { stroke-dashoffset: -18; } }
-        @keyframes fork-pulse   { 0%,100% { opacity: 0.8; } 50% { opacity: 0.3; } }
-        .rubber-band            { animation: dash-flow 0.4s linear infinite; }
-        .fork-edge-glow         { animation: fork-pulse 1.8s ease-in-out infinite; }
+        @keyframes dash-flow { to { stroke-dashoffset: -18; } }
+        .rubber-band { animation: dash-flow 0.4s linear infinite; }
       `}</style>
-
-      <defs>
-        <filter id="edge-glow-strong" x="-80%" y="-80%" width="260%" height="260%">
-          <feGaussianBlur stdDeviation="4" result="blur" />
-          <feMerge>
-            <feMergeNode in="blur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
-        <filter id="edge-glow-soft" x="-60%" y="-60%" width="220%" height="220%">
-          <feGaussianBlur stdDeviation="2.5" result="blur" />
-          <feMerge>
-            <feMergeNode in="blur" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
-      </defs>
 
       {sortedEdges.map((edge) => {
         const src = nodeMap.get(edge.sourceNodeId);
@@ -614,22 +556,9 @@ export function EdgeLayer({
 
         const btMidX = route.midPoint.x;
         const btMidY = route.midPoint.y;
-        const filter = edge.edgeType === "required" || isFork ? "url(#edge-glow-strong)" : "url(#edge-glow-soft)";
 
         return (
           <g key={edge.id} opacity={dimOpacity} style={{ transition: "opacity 0.2s" }}>
-            <path
-              d={route.d}
-              fill="none"
-              stroke={baseColor}
-              strokeWidth={strokeWidth + style.glowWidth}
-              opacity={isHighlighted || isSelected ? style.glowOpacity * 2.5 : style.glowOpacity}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              filter={filter}
-              className={isFork ? "fork-edge-glow" : undefined}
-              style={{ pointerEvents: "none" }}
-            />
             <path
               d={route.d}
               fill="none"
@@ -638,6 +567,7 @@ export function EdgeLayer({
               strokeDasharray={style.dasharray}
               strokeLinecap="round"
               strokeLinejoin="round"
+              opacity={isSelected ? 1 : isHighlighted ? 0.96 : 0.92}
               style={{ pointerEvents: "none" }}
             />
             <path
@@ -657,7 +587,6 @@ export function EdgeLayer({
                   points="0,-6 6,0 0,6 -6,0"
                   fill="#ef9f27"
                   opacity={0.9}
-                  className="fork-edge-glow"
                 />
                 <text
                   fontSize={7}

@@ -105,7 +105,7 @@ function ZoomControls({
         type="button"
         title="Zoom in"
         onClick={() => onSetViewport({ ...viewport, scale: Math.min(3, viewport.scale * 1.2) })}
-        className="flex h-8 w-8 items-center justify-center rounded-xl border border-slate-300 bg-white/90 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-100"
+        className="skill-map-overlay-panel flex h-8 w-8 items-center justify-center rounded-xl text-sm font-bold text-slate-700 transition hover:-translate-y-0.5"
       >
         +
       </button>
@@ -113,7 +113,7 @@ function ZoomControls({
         type="button"
         title="Zoom out"
         onClick={() => onSetViewport({ ...viewport, scale: Math.max(0.2, viewport.scale / 1.2) })}
-        className="flex h-8 w-8 items-center justify-center rounded-xl border border-slate-300 bg-white/90 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-100"
+        className="skill-map-overlay-panel flex h-8 w-8 items-center justify-center rounded-xl text-sm font-bold text-slate-700 transition hover:-translate-y-0.5"
       >
         −
       </button>
@@ -121,7 +121,7 @@ function ZoomControls({
         type="button"
         title="Reset zoom"
         onClick={() => onSetViewport({ x: 0, y: 0, scale: 1 })}
-        className="flex h-8 w-8 items-center justify-center rounded-xl border border-slate-300 bg-white/90 text-xs text-slate-700 shadow-sm hover:bg-slate-100"
+        className="skill-map-overlay-panel flex h-8 w-8 items-center justify-center rounded-xl text-xs text-slate-700 transition hover:-translate-y-0.5"
       >
         ⊡
       </button>
@@ -133,7 +133,7 @@ function ZoomControls({
 
 function Legend() {
   return (
-    <div className="absolute bottom-4 left-3 z-10 rounded-xl border border-slate-200 bg-white/90 px-3 py-2 shadow-sm backdrop-blur">
+    <div className="skill-map-overlay-panel absolute bottom-4 left-3 z-10 rounded-xl px-3 py-2">
       <div className="flex flex-wrap gap-x-3 gap-y-1">
         {Object.entries(STATUS_LABELS).map(([key, label]) => (
           <div key={key} className="flex items-center gap-1.5">
@@ -169,7 +169,7 @@ function AiExpandPanel({
   const [error, setError] = useState<string | null>(null);
 
   return (
-    <div className="absolute left-3 right-3 top-3 z-10 rounded-2xl border border-cyan-200 bg-white p-4 shadow-xl">
+    <div className="skill-map-overlay-panel absolute left-3 right-3 top-3 z-10 rounded-2xl p-4">
       <div className="mb-3 flex items-center justify-between">
         <p className="text-sm font-semibold text-slate-800">✦ AI Expand from Node</p>
         <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-700">
@@ -183,7 +183,7 @@ function AiExpandPanel({
             value={fromNodeId}
             onChange={(e) => setFromNodeId(e.target.value)}
             disabled={loading}
-            className="rounded-xl border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-800 focus:outline-none"
+            className="rounded-xl border border-[rgba(90,139,184,0.35)] bg-white/85 px-2 py-1.5 text-xs text-slate-800 focus:outline-none"
           >
             {nodes.map((n) => (
               <option key={n.id} value={n.id}>
@@ -201,7 +201,7 @@ function AiExpandPanel({
             value={nodeCount}
             onChange={(e) => setNodeCount(Math.min(6, Math.max(1, Number(e.target.value))))}
             disabled={loading}
-            className="w-16 rounded-xl border border-slate-300 bg-white px-2 py-1.5 text-center text-xs focus:outline-none"
+            className="w-16 rounded-xl border border-[rgba(90,139,184,0.35)] bg-white/85 px-2 py-1.5 text-center text-xs focus:outline-none"
           />
         </div>
         <div className="min-w-[140px] flex-1">
@@ -212,7 +212,7 @@ function AiExpandPanel({
             onChange={(e) => setFocusArea(e.target.value)}
             disabled={loading}
             placeholder="e.g. Experiments"
-            className="w-full rounded-xl border border-slate-300 bg-white px-2 py-1.5 text-xs focus:outline-none"
+            className="w-full rounded-xl border border-[rgba(90,139,184,0.35)] bg-white/85 px-2 py-1.5 text-xs focus:outline-none"
           />
         </div>
         <button
@@ -233,7 +233,7 @@ function AiExpandPanel({
               setLoading(false);
             }
           }}
-          className="rounded-xl bg-cyan-600 px-4 py-2 text-xs font-medium text-white hover:bg-cyan-700 disabled:opacity-50"
+          className="rounded-xl bg-cyan-700 px-4 py-2 text-xs font-medium text-white hover:bg-cyan-800 disabled:opacity-50"
         >
           {loading ? "Generating…" : "✦ Generate"}
         </button>
@@ -268,7 +268,7 @@ function PopulateProgressPanel({
   const succeeded = state.completed - state.failed;
 
   return (
-    <div className="absolute left-3 right-3 top-3 z-20 rounded-2xl border border-slate-200 bg-white p-4 shadow-xl">
+    <div className="skill-map-overlay-panel absolute left-3 right-3 top-3 z-20 rounded-2xl p-4">
       <div className="mb-3 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           {state.phase === "running" && (
@@ -898,6 +898,29 @@ function SkillTreePage() {
     return set;
   }, [edges]);
 
+  const { startNodeIds, endNodeIds } = useMemo(() => {
+    const incoming = new Map(nodes.map((node) => [node.id, 0]));
+    const outgoing = new Map(nodes.map((node) => [node.id, 0]));
+
+    for (const edge of edges) {
+      outgoing.set(edge.sourceNodeId, (outgoing.get(edge.sourceNodeId) ?? 0) + 1);
+      incoming.set(edge.targetNodeId, (incoming.get(edge.targetNodeId) ?? 0) + 1);
+    }
+
+    return {
+      startNodeIds: new Set(
+        nodes
+          .filter((node) => (incoming.get(node.id) ?? 0) === 0)
+          .map((node) => node.id),
+      ),
+      endNodeIds: new Set(
+        nodes
+          .filter((node) => (outgoing.get(node.id) ?? 0) === 0)
+          .map((node) => node.id),
+      ),
+    };
+  }, [nodes, edges]);
+
   const selectedNodeProgress = selectedNodeId ? (progressMap.get(selectedNodeId) ?? null) : null;
   const selectedNodeAssignments = selectedNodeId
     ? (nodeAssignmentsMap.get(selectedNodeId) ?? [])
@@ -921,9 +944,9 @@ function SkillTreePage() {
 
   // ── Render ────────────────────────────────────────────────────────────────────
   return (
-    <div style={{ height: "calc(100vh - 64px)" }} className="flex flex-col">
+    <div style={{ height: "calc(100vh - 64px)" }} className="skill-map-shell flex flex-col">
       {/* ── Toolbar ── */}
-      <div className="flex h-[52px] shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-4">
+      <div className="skill-map-toolbar flex h-[56px] shrink-0 items-center justify-between gap-3 px-4">
         {/* Left */}
         <div className="flex min-w-0 items-center gap-3">
           {isParent ? (
@@ -939,7 +962,7 @@ function SkillTreePage() {
             {treeData.tree.title}
           </span>
           {treeData.tree.subject ? (
-            <span className="shrink-0 rounded-full border border-cyan-200 bg-cyan-50 px-2 py-0.5 text-xs text-cyan-700">
+            <span className="skill-map-chip shrink-0 rounded-full px-2.5 py-1 text-xs">
               {treeData.tree.subject}
             </span>
           ) : null}
@@ -1098,7 +1121,7 @@ function SkillTreePage() {
 
       {/* ── Keyboard shortcut hint (parent edit mode only) ── */}
       {isParent && editMode ? (
-        <div className="flex h-6 shrink-0 items-center border-b border-slate-100 bg-slate-50 px-4">
+        <div className="skill-map-subtoolbar flex h-7 shrink-0 items-center px-4">
           <p className="text-[10px] text-slate-400">
             E = edit mode · C = connect · N = new node · Esc = cancel
           </p>
@@ -1108,7 +1131,7 @@ function SkillTreePage() {
       {/* ── Canvas area ── */}
       <div
         ref={canvasRef}
-        className="relative flex-1 select-none overflow-hidden bg-slate-100"
+        className="skill-map-canvas relative flex-1 select-none overflow-hidden"
         style={{ cursor: isPanning.current ? "grabbing" : "grab" }}
         onMouseDown={handleCanvasMouseDown}
         onWheel={handleWheel}
@@ -1145,6 +1168,8 @@ function SkillTreePage() {
               newlyAddedNodeIds={newlyAddedNodeIds}
               dimmedNodeIds={dimmedNodeIds}
               forkNodeIds={forkNodeIds}
+              startNodeIds={startNodeIds}
+              endNodeIds={endNodeIds}
               onNodeClick={handleNodeClick}
               onNodeDragStart={handleNodeDragStart}
             />
@@ -1160,7 +1185,7 @@ function SkillTreePage() {
                 type="button"
                 onClick={() => void handleAddNode()}
                 title={TOOLBAR_TOOLTIPS.addFirstNode}
-                className="rounded-xl bg-cyan-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-cyan-700 transition"
+                className="rounded-xl bg-cyan-700 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-cyan-800"
               >
                 + Add your first node
               </button>

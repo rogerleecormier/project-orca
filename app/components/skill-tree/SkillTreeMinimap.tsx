@@ -144,7 +144,7 @@ export function SkillTreeMinimap({ nodes, progressMap, viewport, onViewportChang
   }
 
   return (
-    <div className="absolute bottom-4 right-4 z-10 overflow-hidden rounded-lg border border-slate-300 bg-white shadow-md">
+    <div className="skill-map-overlay-panel absolute bottom-4 right-4 z-10 overflow-hidden rounded-xl">
       <canvas
         ref={canvasRef}
         width={W}

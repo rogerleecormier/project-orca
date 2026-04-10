@@ -200,6 +200,15 @@ export function AppShell({
   });
   const isFullBleedRoute = pathname.startsWith("/skill-tree/");
 
+  useEffect(() => {
+    const body = document.body;
+    body.classList.remove("orca-role-parent", "orca-role-student", "orca-role-admin");
+    if (!isAuthenticated) return;
+    if (activeRole === "parent") body.classList.add("orca-role-parent");
+    if (activeRole === "student") body.classList.add("orca-role-student");
+    if (activeRole === "admin") body.classList.add("orca-role-admin");
+  }, [activeRole, isAuthenticated]);
+
   if (!isAuthenticated || isLoggingOut) {
     return <>{children}</>;
   }
@@ -221,6 +230,12 @@ export function AppShell({
   const canAccessParentModules = activeRole === "parent" || activeRole === "admin";
   const isStudentSession = activeRole === "student";
   const fallbackProfile = activeStudentProfile ?? profiles[0] ?? null;
+  const roleShellClass =
+    activeRole === "student"
+      ? "orca-shell-student"
+      : activeRole === "admin"
+      ? "orca-shell-admin"
+      : "orca-shell-parent";
 
   const handleCreateAssignmentFromChat = (suggestion: {
     title: string;
@@ -276,11 +291,11 @@ export function AppShell({
   };
 
   return (
-    <div className="relative min-h-screen">
+    <div className={`relative min-h-screen ${roleShellClass}`}>
       <div className="relative mx-auto flex min-h-screen w-full max-w-[1400px] overflow-x-clip">
         {/* Sidebar */}
         <aside
-          className={`fixed inset-y-0 left-0 z-40 w-72 border-r border-slate-200 bg-white/90 p-5 shadow-xl backdrop-blur transition-transform md:static md:translate-x-0 md:shadow-none ${
+          className={`orca-shell-sidebar fixed inset-y-0 left-0 z-40 w-72 border-r border-slate-200 bg-white/90 p-5 shadow-xl backdrop-blur transition-transform md:static md:translate-x-0 md:shadow-none ${
             sidebarOpen ? "translate-x-0" : "-translate-x-full"
           }`}
         >
@@ -428,7 +443,7 @@ export function AppShell({
         ) : null}
 
         <div className="flex min-w-0 w-full flex-1 flex-col md:ml-0">
-          <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/85 px-4 py-3 backdrop-blur md:px-8">
+          <header className="orca-shell-header sticky top-0 z-20 border-b border-slate-200 bg-white/85 px-4 py-3 backdrop-blur md:px-8">
             <div className="flex flex-wrap items-center gap-3">
               <button
                 className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 md:hidden"
@@ -522,7 +537,7 @@ export function AppShell({
             ) : null}
           </header>
 
-          <main className={`min-w-0 flex-1 orca-page-canvas ${isFullBleedRoute ? "p-0" : "orca-page-main"}`}>
+          <main className={`orca-shell-main min-w-0 flex-1 orca-page-canvas ${isFullBleedRoute ? "p-0" : "orca-page-main"}`}>
             {children}
           </main>
 

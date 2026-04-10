@@ -40,6 +40,14 @@ function diamondPoints(cx: number, cy: number, r: number): string {
   return `${cx},${cy - r} ${cx + r},${cy} ${cx},${cy + r} ${cx - r},${cy}`;
 }
 
+function starPoints(cx: number, cy: number, outerRadius: number, innerRadius: number, points = 5): string {
+  return Array.from({ length: points * 2 }, (_, i) => {
+    const angle = (-90 + i * (180 / points)) * (Math.PI / 180);
+    const radius = i % 2 === 0 ? outerRadius : innerRadius;
+    return `${cx + radius * Math.cos(angle)},${cy + radius * Math.sin(angle)}`;
+  }).join(" ");
+}
+
 const STATUS_FILL: Record<string, string> = {
   locked:      "#d3d1c7",
   available:   "#378add",
@@ -61,6 +69,8 @@ type Props = {
   newlyAddedNodeIds?: Set<string>;
   dimmedNodeIds?: Set<string>;
   forkNodeIds?: Set<string>;
+  startNodeIds?: Set<string>;
+  endNodeIds?: Set<string>;
   onNodeClick: (nodeId: string) => void;
   onNodeDragStart: (nodeId: string, e: React.MouseEvent) => void;
 };
@@ -76,6 +86,8 @@ export function NodeLayer({
   newlyAddedNodeIds,
   dimmedNodeIds,
   forkNodeIds,
+  startNodeIds,
+  endNodeIds,
   onNodeClick,
   onNodeDragStart,
 }: Props) {
@@ -84,20 +96,23 @@ export function NodeLayer({
       {nodes.map((node) => {
         const p = progressMap.get(node.id);
         const status = p?.status ?? "locked";
-        const r = computeSkillTreeNodeRadius(node.nodeType, node.xpReward);
+        const r = computeSkillTreeNodeRadius(node.nodeType, node.xpReward, node.isRequired);
         const cx = node.positionX;
         const cy = node.positionY;
         const nodeColor = RAMP_COLORS[node.colorRamp] ?? RAMP_COLORS.blue;
         const isLocked = status === "locked";
         const isComplete = status === "complete" || status === "mastery";
         const isAvailable = status === "available";
+        const isOptional = !node.isRequired;
         const isDragging = node.id === draggingNodeId;
         const isSelected = node.id === selectedNodeId;
         const isConnectSource = node.id === connectingFromId;
         const isNewlyAdded = newlyAddedNodeIds?.has(node.id) ?? false;
         const isForkNode = forkNodeIds?.has(node.id) ?? false;
+        const isStartNode = startNodeIds?.has(node.id) ?? false;
+        const isEndNode = endNodeIds?.has(node.id) ?? false;
 
-        const shapeOpacity = isLocked ? 0.35 : 1;
+        const shapeOpacity = isLocked ? 0.28 : isOptional ? 0.92 : 1;
         const fillColor = isLocked ? STATUS_FILL.locked : STATUS_FILL[status] ?? nodeColor;
 
         const cursor = connectMode
@@ -116,6 +131,7 @@ export function NodeLayer({
               fillOpacity={shapeOpacity}
               stroke={nodeColor}
               strokeWidth={isDragging || isSelected ? 4 : 3}
+              strokeDasharray={isOptional ? "5 4" : undefined}
             />
           );
         } else if (node.nodeType === "boss") {
@@ -126,6 +142,7 @@ export function NodeLayer({
               fillOpacity={shapeOpacity}
               stroke={nodeColor}
               strokeWidth={isDragging || isSelected ? 4 : 3}
+              strokeDasharray={isOptional ? "5 4" : undefined}
             />
           );
         } else {
@@ -138,6 +155,7 @@ export function NodeLayer({
               fillOpacity={shapeOpacity}
               stroke={nodeColor}
               strokeWidth={isDragging || isSelected ? 3 : 2}
+              strokeDasharray={isOptional ? "4 3" : undefined}
             />
           );
         }
@@ -204,6 +222,72 @@ export function NodeLayer({
             strokeWidth={2.5}
             opacity={0.7}
           />
+        ) : null;
+
+        const roleHaloColor = isEndNode ? "#2a77af" : "#67b9df";
+        const roleHalo = isStartNode || isEndNode ? (
+          <polygon
+            points={starPoints(cx, cy, r + 16, r + 8)}
+            fill={roleHaloColor}
+            fillOpacity={isLocked ? 0.12 : 0.16}
+            stroke={roleHaloColor}
+            strokeWidth={1.5}
+            opacity={0.95}
+          />
+        ) : null;
+
+        const startMarker = isStartNode ? (
+          <g transform={`translate(${cx} ${cy - r - 28})`} style={{ pointerEvents: "none" }}>
+            <rect
+              x={-31}
+              y={-10}
+              width={62}
+              height={20}
+              rx={10}
+              fill="#eaf8ff"
+              stroke="#67b9df"
+              strokeWidth={1.2}
+            />
+            <text
+              x={0}
+              y={0}
+              fontSize={9}
+              textAnchor="middle"
+              dominantBaseline="central"
+              fill="#1f628a"
+              fontWeight="700"
+              style={{ userSelect: "none" }}
+            >
+              ★ START
+            </text>
+          </g>
+        ) : null;
+
+        const endMarker = isEndNode ? (
+          <g transform={`translate(${cx} ${cy + r + 28})`} style={{ pointerEvents: "none" }}>
+            <rect
+              x={-29}
+              y={-10}
+              width={58}
+              height={20}
+              rx={10}
+              fill="#e2f2fe"
+              stroke="#2a77af"
+              strokeWidth={1.2}
+            />
+            <text
+              x={0}
+              y={0}
+              fontSize={9}
+              textAnchor="middle"
+              dominantBaseline="central"
+              fill="#1a4f78"
+              fontWeight="700"
+              style={{ userSelect: "none" }}
+            >
+              ★ GOAL
+            </text>
+          </g>
         ) : null;
 
         // Selected ring — three wave circles rippling outward from node center
@@ -276,15 +360,14 @@ export function NodeLayer({
         // Fork/decision-point nodes get an amber diamond ring + pulsing glow to mark them as choice nodes
         const forkRing = isForkNode ? (
           <>
-            {/* Outer pulsing amber glow */}
             <polygon
-              points={diamondPoints(cx, cy, r + 14)}
+              points={diamondPoints(cx, cy, r + 12)}
               fill="none"
               stroke="#ef9f27"
-              strokeWidth={2.5}
-              style={{ animation: "fork-node-pulse 1.8s ease-in-out infinite" }}
+              strokeWidth={2}
+              opacity={0.4}
+              strokeDasharray="5 4"
             />
-            {/* Inner solid amber diamond outline */}
             <polygon
               points={diamondPoints(cx, cy, r + 8)}
               fill="none"
@@ -367,6 +450,7 @@ export function NodeLayer({
             {pingRing}
             {pulseRing}
             {connectRing}
+            {roleHalo}
             {chapterRing}
             {forkRing}
             {selectedRing}
@@ -374,12 +458,14 @@ export function NodeLayer({
             {contentEl}
             {masteryBadge}
             {dragHandle}
+            {startMarker}
+            {endMarker}
 
             {/* Title label */}
             <text
               x={cx}
-              y={cy + r + 14}
-              fontSize={11}
+              y={cy + r + (isEndNode ? 26 : 14)}
+              fontSize={isOptional ? 10 : 11}
               textAnchor="middle"
               fill={labelFill}
               fontWeight={isSelected ? "700" : "500"}
@@ -392,8 +478,8 @@ export function NodeLayer({
             {node.xpReward > 0 && !isLocked ? (
               <text
                 x={cx}
-                y={cy + r + 27}
-                fontSize={10}
+                y={cy + r + (isEndNode ? 39 : 27)}
+                fontSize={isOptional ? 9 : 10}
                 textAnchor="middle"
                 fill="#888780"
                 style={{ pointerEvents: "none", userSelect: "none" }}
@@ -420,10 +506,6 @@ export function NodeLayer({
           0%   { transform: scale(1);    opacity: 0.75; }
           70%  { transform: scale(1.5);  opacity: 0.15; }
           100% { transform: scale(1.7);  opacity: 0; }
-        }
-        @keyframes fork-node-pulse {
-          0%,100% { opacity: 0.85; }
-          50%     { opacity: 0.2; }
         }
         .node-hover-ring { transition: opacity 0.15s; }
         g:hover .node-hover-ring { opacity: 0.5 !important; }

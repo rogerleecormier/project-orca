@@ -13,13 +13,157 @@ html {
   --orca-foam: #f5f9fd;
   --orca-paper: #ffffff;
   --orca-line: #d7e2ee;
+  --orca-map-bg: #eaf4fb;
+  --orca-map-bg-deep: #d7e9f6;
+  --orca-map-paper: rgba(245, 251, 255, 0.88);
+  --orca-map-paper-strong: rgba(251, 254, 255, 0.95);
+  --orca-map-line: #b9d2e4;
+  --orca-map-muted: #57728b;
+  --orca-map-ink: #17324d;
+  --orca-map-shadow: 0 22px 54px rgba(14, 42, 70, 0.14);
+  --orca-display-font: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  --orca-body-font: "Trebuchet MS", "Lucida Sans Unicode", "Lucida Grande", sans-serif;
   --orca-page-padding-x: clamp(1rem, 2.4vw, 2.25rem);
   --orca-page-padding-y: clamp(1rem, 2.2vw, 2rem);
 }
 
 body.orca-theme {
-  background: #f6f9fd;
+  font-family: var(--orca-body-font);
+  background:
+    radial-gradient(circle at 12% 8%, rgba(42, 119, 175, 0.16), transparent 30%),
+    radial-gradient(circle at 86% 2%, rgba(117, 196, 224, 0.14), transparent 30%),
+    linear-gradient(180deg, #f7fbff 0%, #eaf4fb 100%);
   color: var(--orca-black);
+}
+
+body.orca-theme.orca-role-parent,
+body.orca-theme.orca-role-admin {
+  --orca-map-bg: #e8f4fd;
+  --orca-map-bg-deep: #d7ebf8;
+  --orca-map-paper: rgba(243, 250, 255, 0.88);
+  --orca-map-paper-strong: rgba(250, 254, 255, 0.95);
+  --orca-map-line: #b7d6ec;
+  --orca-map-muted: #507696;
+  --orca-map-ink: #153856;
+  --orca-map-shadow: 0 22px 52px rgba(11, 45, 78, 0.14);
+  background:
+    radial-gradient(circle at 12% 8%, rgba(45, 122, 188, 0.18), transparent 32%),
+    radial-gradient(circle at 86% 2%, rgba(109, 191, 223, 0.14), transparent 32%),
+    linear-gradient(180deg, #f4faff 0%, #e8f4fd 100%);
+}
+
+body.orca-theme.orca-role-student {
+  --orca-map-bg: #edf8ff;
+  --orca-map-bg-deep: #dff1fb;
+  --orca-map-paper: rgba(246, 253, 255, 0.9);
+  --orca-map-paper-strong: rgba(253, 255, 255, 0.97);
+  --orca-map-line: #b9dbef;
+  --orca-map-muted: #5b84a2;
+  --orca-map-ink: #1b4264;
+  --orca-map-shadow: 0 22px 48px rgba(27, 87, 126, 0.14);
+  background:
+    radial-gradient(circle at 10% 6%, rgba(77, 170, 212, 0.2), transparent 30%),
+    radial-gradient(circle at 88% 10%, rgba(129, 210, 233, 0.2), transparent 34%),
+    linear-gradient(180deg, #f6fcff 0%, #e5f5ff 100%);
+}
+
+.orca-shell-parent .orca-shell-sidebar,
+.orca-shell-admin .orca-shell-sidebar {
+  background:
+    radial-gradient(circle at 20% 12%, rgba(111, 197, 231, 0.28), transparent 36%),
+    linear-gradient(185deg, rgba(28, 71, 110, 0.9), rgba(39, 94, 137, 0.88)) !important;
+  border-right-color: rgba(114, 176, 220, 0.28) !important;
+  color: #dcefff;
+}
+
+.orca-shell-parent .orca-shell-sidebar .text-slate-900,
+.orca-shell-admin .orca-shell-sidebar .text-slate-900 {
+  color: #eff8ff !important;
+}
+
+.orca-shell-parent .orca-shell-sidebar .text-slate-700,
+.orca-shell-admin .orca-shell-sidebar .text-slate-700 {
+  color: #c8e6fb !important;
+}
+
+.orca-shell-parent .orca-shell-sidebar .text-slate-600,
+.orca-shell-admin .orca-shell-sidebar .text-slate-600,
+.orca-shell-parent .orca-shell-sidebar .text-slate-500,
+.orca-shell-admin .orca-shell-sidebar .text-slate-500 {
+  color: #9fc8e4 !important;
+}
+
+.orca-shell-parent .orca-shell-sidebar .hover\:bg-slate-100:hover,
+.orca-shell-admin .orca-shell-sidebar .hover\:bg-slate-100:hover {
+  background-color: rgba(113, 176, 219, 0.18) !important;
+}
+
+.orca-shell-parent .orca-shell-sidebar .bg-cyan-50,
+.orca-shell-admin .orca-shell-sidebar .bg-cyan-50 {
+  background-color: rgba(114, 205, 240, 0.26) !important;
+}
+
+.orca-shell-parent .orca-shell-header,
+.orca-shell-admin .orca-shell-header {
+  background:
+    linear-gradient(180deg, rgba(239, 249, 255, 0.94), rgba(225, 241, 253, 0.9)) !important;
+  border-bottom-color: rgba(112, 166, 204, 0.36) !important;
+}
+
+.orca-shell-parent .orca-shell-main,
+.orca-shell-admin .orca-shell-main {
+  background:
+    radial-gradient(circle at 15% 10%, rgba(84, 165, 215, 0.18), transparent 28%),
+    radial-gradient(circle at 90% 8%, rgba(156, 220, 241, 0.16), transparent 34%),
+    linear-gradient(180deg, #edf7ff 0%, #dff0fb 100%) !important;
+}
+
+.orca-shell-student .orca-shell-sidebar {
+  background:
+    radial-gradient(circle at 20% 14%, rgba(112, 219, 240, 0.28), transparent 34%),
+    linear-gradient(185deg, rgba(236, 251, 255, 0.96), rgba(205, 242, 255, 0.92)) !important;
+  border-right-color: rgba(109, 196, 228, 0.36) !important;
+}
+
+.orca-shell-student .orca-shell-sidebar .text-slate-900 {
+  color: #0f3e61 !important;
+}
+
+.orca-shell-student .orca-shell-sidebar .text-slate-700 {
+  color: #1f5f88 !important;
+}
+
+.orca-shell-student .orca-shell-sidebar .text-slate-600,
+.orca-shell-student .orca-shell-sidebar .text-slate-500 {
+  color: #4684aa !important;
+}
+
+.orca-shell-student .orca-shell-sidebar .hover\:bg-slate-100:hover {
+  background-color: rgba(116, 207, 234, 0.2) !important;
+}
+
+.orca-shell-student .orca-shell-sidebar .bg-cyan-50 {
+  background-color: rgba(109, 221, 243, 0.3) !important;
+}
+
+.orca-shell-student .orca-shell-header {
+  background:
+    linear-gradient(180deg, rgba(242, 254, 255, 0.93), rgba(222, 248, 255, 0.88)) !important;
+  border-bottom-color: rgba(126, 212, 239, 0.38) !important;
+}
+
+.orca-shell-student .orca-shell-main {
+  background:
+    radial-gradient(circle at 15% 10%, rgba(90, 206, 235, 0.22), transparent 26%),
+    radial-gradient(circle at 88% 6%, rgba(137, 226, 242, 0.24), transparent 32%),
+    linear-gradient(180deg, #effbff 0%, #daf4ff 100%) !important;
+}
+
+.orca-theme h1,
+.orca-theme h2,
+.orca-theme h3,
+.skill-map-display {
+  font-family: var(--orca-display-font);
 }
 
 .orca-page-main {
@@ -60,12 +204,12 @@ body.orca-theme {
 }
 
 .orca-theme .bg-cyan-50 {
-  background-color: rgba(42, 119, 175, 0.16) !important;
+  background-color: rgba(42, 119, 175, 0.14) !important;
 }
 
 .orca-theme .text-cyan-700,
 .orca-theme .text-cyan-900 {
-  color: #1f5d8b !important;
+  color: #19527f !important;
 }
 
 .orca-theme .border-cyan-600 {
@@ -78,6 +222,85 @@ body.orca-theme {
 
 .orca-theme .hover\:bg-emerald-700:hover {
   background-color: var(--orca-sea-bright) !important;
+}
+
+.orca-theme .bg-slate-50 {
+  background-color: #eef6fc !important;
+}
+
+.orca-theme .bg-slate-100 {
+  background-color: #e2effa !important;
+}
+
+.orca-theme .bg-slate-200 {
+  background-color: #cddff0 !important;
+}
+
+.orca-theme .border-slate-100 {
+  border-color: #d8e8f6 !important;
+}
+
+.orca-theme .border-slate-200 {
+  border-color: #c3d9ec !important;
+}
+
+.orca-theme .border-slate-300 {
+  border-color: #a8c4dd !important;
+}
+
+.orca-theme .text-slate-900 {
+  color: #102a43 !important;
+}
+
+.orca-theme .text-slate-800 {
+  color: #1a3f60 !important;
+}
+
+.orca-theme .text-slate-700 {
+  color: #29577d !important;
+}
+
+.orca-theme .text-slate-600 {
+  color: #467095 !important;
+}
+
+.orca-theme .text-slate-500,
+.orca-theme .text-slate-400 {
+  color: #5f81a1 !important;
+}
+
+.orca-theme .bg-violet-50 {
+  background-color: rgba(72, 127, 191, 0.12) !important;
+}
+
+.orca-theme .bg-violet-100 {
+  background-color: rgba(72, 127, 191, 0.18) !important;
+}
+
+.orca-theme .text-violet-700 {
+  color: #2c6292 !important;
+}
+
+.orca-theme .border-violet-200 {
+  border-color: rgba(72, 127, 191, 0.28) !important;
+}
+
+.orca-theme .bg-amber-50 {
+  background-color: rgba(94, 170, 206, 0.12) !important;
+}
+
+.orca-theme .bg-amber-100 {
+  background-color: rgba(94, 170, 206, 0.18) !important;
+}
+
+.orca-theme .text-amber-600,
+.orca-theme .text-amber-700,
+.orca-theme .text-amber-900 {
+  color: #1f6f9f !important;
+}
+
+.orca-theme .border-amber-200 {
+  border-color: rgba(94, 170, 206, 0.28) !important;
 }
 
 .orca-hero {
@@ -186,4 +409,170 @@ body.orca-theme {
 .orca-rich-content a {
   color: #0f766e;
   text-decoration: underline;
+}
+
+.skill-map-home,
+.skill-map-dashboard,
+.skill-map-shell {
+  position: relative;
+}
+
+.skill-map-home {
+  background:
+    radial-gradient(circle at 14% 4%, rgba(42, 119, 175, 0.16), transparent 26%),
+    radial-gradient(circle at 90% 16%, rgba(75, 166, 202, 0.14), transparent 28%),
+    linear-gradient(180deg, rgba(248, 252, 255, 0.95), rgba(232, 244, 252, 0.9));
+}
+
+.skill-map-home-header,
+.skill-map-home-footer,
+.skill-map-toolbar {
+  background:
+    linear-gradient(180deg, rgba(250, 254, 255, 0.95), rgba(239, 248, 254, 0.88));
+  border-color: rgba(90, 139, 184, 0.24);
+}
+
+.skill-map-subtoolbar {
+  background: rgba(240, 248, 254, 0.86);
+  border-bottom: 1px solid rgba(90, 139, 184, 0.16);
+}
+
+.skill-map-hero {
+  position: relative;
+  overflow: hidden;
+  border-bottom: 1px solid rgba(90, 139, 184, 0.2);
+  background:
+    radial-gradient(circle at 85% 18%, rgba(117, 196, 224, 0.2), transparent 32%),
+    radial-gradient(circle at 12% 12%, rgba(42, 119, 175, 0.16), transparent 28%),
+    linear-gradient(180deg, rgba(247, 252, 255, 0.97), rgba(229, 243, 252, 0.88));
+}
+
+.skill-map-hero::before,
+.skill-map-preview::before,
+.skill-map-canvas::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.skill-map-hero::before {
+  background-image:
+    linear-gradient(rgba(90, 139, 184, 0.09) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(90, 139, 184, 0.09) 1px, transparent 1px);
+  background-size: 52px 52px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.5), transparent);
+}
+
+.skill-map-section-alt {
+  background:
+    linear-gradient(180deg, rgba(245, 251, 255, 0.84), rgba(229, 243, 252, 0.78));
+}
+
+.skill-map-panel,
+.skill-map-overlay-panel,
+.skill-map-action-card,
+.skill-map-step-card {
+  background:
+    linear-gradient(180deg, var(--orca-map-paper-strong), var(--orca-map-paper));
+  border: 1px solid rgba(90, 139, 184, 0.24);
+  box-shadow: var(--orca-map-shadow);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.skill-map-overlay-panel {
+  border-color: rgba(90, 139, 184, 0.3);
+  box-shadow: 0 16px 36px rgba(14, 42, 70, 0.14);
+}
+
+.skill-map-chip {
+  color: #1f5d8b;
+  background: rgba(42, 119, 175, 0.1);
+  border: 1px solid rgba(42, 119, 175, 0.2);
+}
+
+.skill-map-preview {
+  position: relative;
+  overflow: hidden;
+  border-radius: 1.9rem;
+  border: 1px solid rgba(90, 139, 184, 0.26);
+  background:
+    radial-gradient(circle at 18% 16%, rgba(42, 119, 175, 0.15), transparent 23%),
+    radial-gradient(circle at 84% 18%, rgba(75, 166, 202, 0.14), transparent 22%),
+    linear-gradient(180deg, rgba(249, 254, 255, 0.98), rgba(235, 246, 253, 0.92));
+  box-shadow: var(--orca-map-shadow);
+}
+
+.skill-map-preview::before {
+  background-image: radial-gradient(rgba(28, 82, 128, 0.2) 0.8px, transparent 0.8px);
+  background-size: 24px 24px;
+  opacity: 0.15;
+}
+
+.skill-map-preview::after,
+.skill-map-canvas::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.45), transparent 42%),
+    radial-gradient(circle at 30% 0%, rgba(255, 255, 255, 0.45), transparent 36%);
+}
+
+.skill-map-action-card {
+  position: relative;
+}
+
+.skill-map-action-card::after {
+  content: "";
+  position: absolute;
+  left: 1rem;
+  right: 1rem;
+  bottom: 0.8rem;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(55, 138, 221, 0.12), rgba(67, 164, 209, 0.42), rgba(92, 184, 224, 0.16));
+}
+
+body.orca-theme.orca-role-parent .skill-map-action-card::after,
+body.orca-theme.orca-role-admin .skill-map-action-card::after {
+  background: linear-gradient(90deg, rgba(39, 110, 176, 0.14), rgba(30, 137, 188, 0.46), rgba(69, 167, 210, 0.2));
+}
+
+body.orca-theme.orca-role-student .skill-map-action-card::after {
+  background: linear-gradient(90deg, rgba(80, 173, 214, 0.18), rgba(62, 196, 220, 0.5), rgba(125, 214, 232, 0.26));
+}
+
+.skill-map-action-card:hover,
+.skill-map-step-card:hover,
+.skill-map-feature-card:hover {
+  transform: translateY(-2px);
+}
+
+.skill-map-feature-card,
+.skill-map-step-card {
+  box-shadow: 0 16px 36px rgba(24, 35, 54, 0.08);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.skill-map-canvas {
+  background:
+    radial-gradient(circle at 12% 8%, rgba(42, 119, 175, 0.16), transparent 22%),
+    radial-gradient(circle at 84% 12%, rgba(74, 165, 205, 0.14), transparent 24%),
+    linear-gradient(180deg, rgba(246, 252, 255, 0.96), rgba(226, 241, 251, 0.92));
+}
+
+.skill-map-canvas::before {
+  background-image:
+    linear-gradient(rgba(90, 139, 184, 0.09) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(90, 139, 184, 0.09) 1px, transparent 1px);
+  background-size: 48px 48px;
+  opacity: 0.45;
+}
+
+@media (max-width: 768px) {
+  .skill-map-preview {
+    min-height: 380px;
+  }
 }

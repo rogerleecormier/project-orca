@@ -11,6 +11,7 @@ import {
   logoutSession,
 } from "../server/functions";
 import { OrcaMark } from "../components/icons/orca-mark";
+import { SkillMapPreview } from "../components/skill-map-preview";
 
 export const Route = createFileRoute("/")({
   component: IndexRoute,
@@ -485,7 +486,7 @@ function HeaderLoginPanel() {
 
 function LandingHeader() {
   return (
-    <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur">
+    <header className="skill-map-home-header sticky top-0 z-30 backdrop-blur">
       <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
         {/* Logo */}
         <div className="flex items-center gap-2">
@@ -511,45 +512,54 @@ function LandingHeader() {
 
 function HeroSection() {
   return (
-    <section className="orca-hero orca-wave relative overflow-hidden border-b border-slate-200 px-4 py-20 text-center sm:py-28 sm:px-6">
-      <div className="relative mx-auto max-w-3xl">
-        <span className="orca-icon-chip mx-auto mb-6 flex w-fit" aria-hidden="true">
-          <OrcaMark className="h-10 w-10" alt="" />
-        </span>
-        <p className="text-sm font-semibold uppercase tracking-[0.25em] text-cyan-700">
-          Project Orca — ProOrca
-        </p>
-        <h1 className="mt-3 text-4xl font-bold tracking-tight text-slate-900 sm:text-5xl">
-          Your homeschool,{" "}
-          <span
-            style={{
-              background: "linear-gradient(120deg, var(--orca-sea), var(--orca-sea-bright))",
-              WebkitBackgroundClip: "text",
-              WebkitTextFillColor: "transparent",
-            }}
-          >
-            powered by AI
+    <section className="skill-map-hero px-4 py-14 sm:px-6 sm:py-18">
+      <div className="mx-auto grid max-w-6xl gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(340px,440px)] lg:items-center">
+        <div className="relative">
+          <span className="orca-icon-chip mb-6 flex w-fit" aria-hidden="true">
+            <OrcaMark className="h-10 w-10" alt="" />
           </span>
-        </h1>
-        <p className="mx-auto mt-5 max-w-xl text-lg text-slate-600">
-          ProOrca is an edge-native homeschool command center built for parents who want
-          intelligent lesson planning, gamified skill progression, and everything in one place.
-        </p>
-        <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-          <Link
-            to="/login"
-            className="rounded-xl border border-cyan-300 bg-cyan-50 px-6 py-3 text-sm font-semibold text-cyan-700 hover:bg-cyan-100 transition shadow-sm"
-          >
-            Try Demo Account
-          </Link>
-          <Link
-            to="/login"
-            className="rounded-xl border border-slate-300 bg-white px-6 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition"
-          >
-            Sign In
-          </Link>
+          <p className="text-sm font-semibold uppercase tracking-[0.28em] text-cyan-700">
+            Project Orca - ProOrca
+          </p>
+          <h1 className="skill-map-display mt-4 max-w-3xl text-4xl font-semibold tracking-tight text-slate-900 sm:text-5xl lg:text-[3.65rem]">
+            Plan school like a skill map, not a spreadsheet.
+          </h1>
+          <p className="mt-5 max-w-2xl text-lg leading-relaxed text-slate-600">
+            ProOrca gives you a map-first homeschool workspace: build the path, branch into
+            optional side quests, attach assignments, then let AI help keep the whole route moving.
+          </p>
+          <div className="mt-6 flex flex-wrap gap-2">
+            {["Curriculum builder", "Skill maps", "Planner", "Rewards"].map((item) => (
+              <span
+                key={item}
+                className="rounded-full border border-[rgba(90,139,184,0.28)] bg-white/70 px-3 py-1 text-xs font-medium text-[var(--orca-map-muted)]"
+              >
+                {item}
+              </span>
+            ))}
+          </div>
+          <div className="mt-8 flex flex-wrap items-center gap-3">
+            <Link
+              to="/login"
+              className="rounded-xl border border-cyan-300 bg-cyan-50 px-6 py-3 text-sm font-semibold text-cyan-700 shadow-sm transition hover:bg-cyan-100"
+            >
+              Try Demo Account
+            </Link>
+            <Link
+              to="/login"
+              className="rounded-xl border border-[rgba(90,139,184,0.35)] bg-white/80 px-6 py-3 text-sm font-semibold text-slate-700 transition hover:bg-white"
+            >
+              Sign In
+            </Link>
+          </div>
+          <p className="mt-3 text-xs text-slate-500">Demo parent PIN: <strong>1234</strong></p>
         </div>
-        <p className="mt-2 text-xs text-slate-500">Demo parent PIN: <strong>1234</strong></p>
+
+        <SkillMapPreview
+          className="min-h-[440px]"
+          toolbarLabel="Map-first learning flow"
+          showLegend={false}
+        />
       </div>
     </section>
   );
@@ -596,7 +606,7 @@ function AiSpotlightSection() {
           </ul>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white/90 p-5 shadow-sm">
+        <div className="skill-map-panel rounded-[1.75rem] p-5">
           <div className="flex items-center gap-2 border-b border-slate-100 pb-3 mb-4">
             <span className="orca-icon-chip" aria-hidden="true">
               <OrcaMark className="h-5 w-5" alt="" />
@@ -620,15 +630,22 @@ function AiSpotlightSection() {
                 <OrcaMark className="h-4 w-4" alt="" />
               </span>
               <div className="rounded-2xl rounded-tr-none border border-cyan-200 bg-cyan-50/80 px-4 py-2.5 text-sm text-cyan-900 max-w-[85%]">
-                <p className="font-medium">ASSIGNMENT_SUGGESTION</p>
-                <p className="mt-1 text-xs text-cyan-700">
-                  title="Check for Understanding: Ancient Trade Networks"
-                </p>
-                <p className="mt-1 text-xs text-cyan-700">
-                  type=quiz description="Complete a short 5-question checkpoint."
-                </p>
+                <p className="mb-2 text-cyan-950">Here is a suggested quiz checkpoint you can add to the lesson:</p>
+                <div className="rounded-xl border border-cyan-200 bg-white p-3 shadow-sm">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="rounded bg-cyan-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-cyan-800">
+                      Quiz
+                    </span>
+                    <span className="font-medium text-slate-900 text-sm">
+                      Check for Understanding: Ancient Trade Networks
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-600">
+                    Complete a short 5-question checkpoint.
+                  </p>
+                </div>
                 <button
-                  className="mt-2 rounded-lg bg-slate-900 px-3 py-1 text-xs font-medium text-white opacity-80"
+                  className="mt-3 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-medium text-white opacity-90 hover:opacity-100 transition-opacity"
                   tabIndex={-1}
                   aria-hidden="true"
                 >
@@ -644,97 +661,12 @@ function AiSpotlightSection() {
 }
 
 function SkillTreeSpotlightSection() {
-  const statusFill: Record<string, string> = {
-    locked: "#d3d1c7",
-    available: "#378add",
-    in_progress: "#7f77dd",
-    complete: "#1d9e75",
-    mastery: "#ef9f27",
-  };
-
-  const nodes = [
-    { id: "n1", label: "Climate Zones", type: "lesson", status: "mastery", x: 170, y: 70, r: 18, icon: "C", xp: 120 },
-    { id: "n2", label: "Atmosphere", type: "milestone", status: "complete", x: 90, y: 138, r: 24, icon: "A", xp: 220 },
-    { id: "n3", label: "Ocean Currents", type: "branch", status: "in_progress", x: 258, y: 140, r: 18, icon: "O", xp: 160 },
-    { id: "n4", label: "Storm Lab", type: "elective", status: "available", x: 54, y: 226, r: 14, icon: "S", xp: 140 },
-    { id: "n5", label: "Forecast Models", type: "lesson", status: "locked", x: 170, y: 228, r: 18, icon: "F", xp: 180 },
-    { id: "n6", label: "Climate Systems", type: "boss", status: "locked", x: 262, y: 268, r: 24, icon: "★", xp: 420 },
-  ] as const;
-
-  const edgeStyle = {
-    required: { stroke: "#378add", width: 3.5, dash: undefined },
-    optional: { stroke: "#7f77dd", width: 2, dash: "9 5" },
-    bonus: { stroke: "#d3d1c7", width: 1.5, dash: "4 5" },
-  } as const;
-
   return (
-    <section className="border-y border-slate-200 bg-slate-50/70 py-20">
+    <section className="skill-map-section-alt border-y border-slate-200 py-20">
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
         <div className="grid gap-12 lg:grid-cols-2 lg:gap-16 lg:items-center">
           <div className="order-2 lg:order-1">
-            <div className="relative rounded-2xl border border-slate-200 bg-white/90 p-3 shadow-sm overflow-hidden">
-              <div className="absolute left-3 top-3 rounded-lg border border-slate-200 bg-white/95 px-2 py-1 text-[10px] text-slate-600">
-                Builder Mode · E edit · C connect · N new node
-              </div>
-              <svg viewBox="0 0 320 320" className="mt-6 h-[300px] w-full" aria-hidden="true">
-                <line x1="170" y1="70" x2="90" y2="138" stroke={edgeStyle.required.stroke} strokeWidth={edgeStyle.required.width} />
-                <line x1="170" y1="70" x2="258" y2="140" stroke={edgeStyle.optional.stroke} strokeWidth={edgeStyle.optional.width} strokeDasharray={edgeStyle.optional.dash} />
-                <line x1="90" y1="138" x2="54" y2="226" stroke={edgeStyle.bonus.stroke} strokeWidth={edgeStyle.bonus.width} strokeDasharray={edgeStyle.bonus.dash} />
-                <line x1="258" y1="140" x2="170" y2="228" stroke={edgeStyle.bonus.stroke} strokeWidth={edgeStyle.bonus.width} strokeDasharray={edgeStyle.bonus.dash} />
-                <line x1="258" y1="140" x2="262" y2="268" stroke={edgeStyle.bonus.stroke} strokeWidth={edgeStyle.bonus.width} strokeDasharray={edgeStyle.bonus.dash} />
-
-                {nodes.map((node) => {
-                  if (node.type === "milestone") {
-                    const points = "90,112 112,125 112,151 90,164 68,151 68,125";
-                    return (
-                      <g key={node.id}>
-                        <polygon points={points} fill={statusFill[node.status]} stroke="#378add" strokeWidth="3" />
-                        <path d="M81 139 L88 146 L100 131" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" />
-                        <text x="90" y="179" textAnchor="middle" className="fill-slate-600 text-[10px]">{node.label} · {node.xp} XP</text>
-                      </g>
-                    );
-                  }
-                  if (node.type === "boss") {
-                    const points = "262,244 286,268 262,292 238,268";
-                    return (
-                      <g key={node.id}>
-                        <polygon points={points} fill={statusFill[node.status]} stroke="#378add" strokeWidth="3" fillOpacity="0.35" />
-                        <text x="262" y="268" textAnchor="middle" dominantBaseline="central" className="fill-white text-[14px]">★</text>
-                        <text x="262" y="304" textAnchor="middle" className="fill-slate-600 text-[10px]">{node.label} · {node.xp} XP</text>
-                      </g>
-                    );
-                  }
-                  return (
-                    <g key={node.id}>
-                      <circle cx={node.x} cy={node.y} r={node.r + (node.status === "available" ? 6 : 0)} fill="none" stroke="#378add" strokeWidth="1.5" opacity={node.status === "available" ? "0.4" : "0"} />
-                      <circle cx={node.x} cy={node.y} r={node.r} fill={statusFill[node.status]} fillOpacity={node.status === "locked" ? "0.35" : "1"} stroke="#378add" strokeWidth={node.status === "mastery" ? "3" : "2"} />
-                      {node.status === "mastery" || node.status === "complete" ? (
-                        <path d={`M ${node.x - 6} ${node.y} L ${node.x - 2} ${node.y + 5} L ${node.x + 8} ${node.y - 6}`} fill="none" stroke="white" strokeWidth="2.4" strokeLinecap="round" />
-                      ) : (
-                        <text x={node.x} y={node.y} textAnchor="middle" dominantBaseline="central" className="fill-white text-[11px] font-semibold">{node.icon}</text>
-                      )}
-                      <text x={node.x} y={node.y + node.r + 16} textAnchor="middle" className="fill-slate-600 text-[10px]">{node.label} · {node.xp} XP</text>
-                    </g>
-                  );
-                })}
-              </svg>
-
-              <div className="absolute bottom-3 right-3 flex flex-col gap-1 rounded-xl border border-slate-200 bg-white/90 p-2 text-xs shadow-sm">
-                {[
-                  { label: "Mastery", dot: "bg-amber-400" },
-                  { label: "Complete", dot: "bg-emerald-400" },
-                  { label: "In Progress", dot: "bg-violet-500" },
-                  { label: "Available", dot: "bg-blue-500" },
-                  { label: "Locked", dot: "bg-stone-400" },
-                ].map((item) => (
-                  <div key={item.label} className="flex items-center gap-1.5 text-slate-600">
-                    <span className={`h-2 w-2 rounded-full ${item.dot}`} aria-hidden="true" />
-                    {item.label}
-                  </div>
-                ))}
-              </div>
-
-            </div>
+            <SkillMapPreview className="min-h-[420px]" toolbarLabel="Builder Mode · clean route map" />
           </div>
 
           <div className="order-1 lg:order-2">
@@ -745,16 +677,17 @@ function SkillTreeSpotlightSection() {
               Visual progression with builder controls and student-state tracking
             </h2>
             <p className="mt-4 text-slate-600 leading-relaxed">
-              Parent view and student view share the same map with role-specific tools. Parents can
-              edit structure, connect dependencies, and link assignments. Students see progress
-              state changes and XP-driven momentum.
+              Parents and students share the same route view, but the path is easier to read at a
+              glance: start and goal nodes are starred, optional nodes stay visually smaller, and
+              connector lines stay crisp and direct unless they truly need to route around another
+              node.
             </p>
             <ul className="mt-6 space-y-3">
               {[
-                "Statuses: locked, available, in progress, complete, mastery",
-                "Node types: lesson, milestone, boss, branch, elective",
-                "Zoom controls, minimap, viewport save, and keyboard shortcuts",
-                "Node completion unlocks downstream paths and updates XP",
+                "Start and goal nodes are called out with clear star markers",
+                "Optional branches stay visually smaller than the main spine",
+                "Straight connectors are used whenever no detour is needed",
+                "The same aesthetic carries through the home page and builder view",
               ].map((item) => (
                 <li key={item} className="flex items-start gap-3 text-sm text-slate-700">
                   <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-violet-100 text-violet-700">
@@ -822,7 +755,7 @@ function PlannerSpotlightSection() {
           </ul>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm sm:p-5">
+        <div className="skill-map-panel rounded-[1.75rem] p-4 sm:p-5">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
             <div className="flex min-w-0 items-center gap-2">
               <span aria-hidden="true">🗓️</span>
@@ -940,7 +873,7 @@ function ProgressSpotlightSection() {
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
         <div className="grid gap-12 lg:grid-cols-2 lg:gap-16 lg:items-center">
           <div className="order-2 lg:order-1 space-y-4">
-            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="skill-map-panel rounded-2xl p-4">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Gradebook</p>
               <div className="mt-2 overflow-hidden rounded-lg border border-slate-200">
                 <div className="grid grid-cols-[1.2fr_.9fr_.8fr_.8fr] bg-slate-50 px-2 py-1.5 text-[10px] font-semibold text-slate-500">
@@ -1039,7 +972,7 @@ function FeaturesGrid() {
         {FEATURES.map((feature) => (
           <div
             key={feature.title}
-            className={`rounded-2xl border p-5 ${feature.accentClass}`}
+            className={`skill-map-feature-card rounded-2xl border p-5 ${feature.accentClass}`}
           >
             <div className={`inline-flex rounded-xl p-2.5 ${feature.iconClass}`}>
               {feature.icon}
@@ -1055,7 +988,7 @@ function FeaturesGrid() {
 
 function HowItWorksSection() {
   return (
-    <section className="border-t border-slate-200 bg-slate-50/70 py-20">
+    <section className="skill-map-section-alt border-t border-slate-200 py-20">
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
         <div className="text-center">
           <p className="text-xs font-semibold uppercase tracking-[0.25em] text-cyan-700">
@@ -1067,7 +1000,7 @@ function HowItWorksSection() {
         </div>
         <div className="mt-12 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
           {HOW_IT_WORKS.map((item) => (
-            <div key={item.step} className="rounded-2xl border border-slate-200 bg-white/90 p-5 shadow-sm">
+            <div key={item.step} className="skill-map-step-card rounded-2xl p-5">
               <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-sm font-bold text-white">
                 {item.step}
               </div>
@@ -1083,8 +1016,8 @@ function HowItWorksSection() {
 
 function CtaSection() {
   return (
-    <section className="orca-hero orca-wave border-t border-slate-200 py-20 text-center px-4 sm:px-6">
-      <div className="mx-auto max-w-xl">
+    <section className="skill-map-section-alt border-t border-slate-200 px-4 py-20 text-center sm:px-6">
+      <div className="skill-map-panel mx-auto max-w-xl rounded-[2rem] px-6 py-10">
         <span className="orca-icon-chip mx-auto mb-5 flex w-fit" aria-hidden="true">
           <OrcaMark className="h-8 w-8" alt="" />
         </span>
@@ -1116,17 +1049,34 @@ function CtaSection() {
 
 function LandingFooter() {
   return (
-    <footer className="border-t border-slate-200 bg-white px-4 py-8 text-center sm:px-6">
-      <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-2">
-          <span className="orca-icon-chip" aria-hidden="true">
-            <OrcaMark className="h-5 w-5" alt="" />
-          </span>
-          <span className="text-sm font-semibold text-slate-700">ProOrca</span>
+    <footer className="skill-map-home-footer border-t px-4 py-12 sm:px-6">
+      <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-8 md:flex-row md:items-start">
+        <div className="flex flex-col items-center gap-4 md:items-start">
+          <div className="flex items-center gap-2">
+            <span className="orca-icon-chip" aria-hidden="true">
+              <OrcaMark className="h-5 w-5" alt="" />
+            </span>
+            <span className="text-sm font-semibold text-slate-700">ProOrca</span>
+          </div>
+          <p className="text-xs text-slate-500 max-w-xs text-center md:text-left">
+            Edge-native homeschool command center &mdash; built on Cloudflare.
+          </p>
         </div>
-        <p className="text-xs text-slate-500">
-          Edge-native homeschool command center &mdash; built on Cloudflare.
-        </p>
+        <div className="flex flex-wrap justify-center gap-8 text-center sm:gap-16 md:text-left">
+          <div className="flex flex-col gap-3">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Product</p>
+            <Link to="/docs" className="text-sm text-slate-600 hover:text-cyan-700 transition">Documentation</Link>
+            <Link to="/login" className="text-sm text-slate-600 hover:text-cyan-700 transition">Sign In / Demo</Link>
+          </div>
+          <div className="flex flex-col gap-3">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">Legal</p>
+            <span className="text-sm text-slate-600 hover:text-cyan-700 transition cursor-pointer">Privacy Policy</span>
+            <span className="text-sm text-slate-600 hover:text-cyan-700 transition cursor-pointer">Terms of Service</span>
+          </div>
+        </div>
+      </div>
+      <div className="mx-auto mt-12 max-w-6xl border-t border-slate-100 pt-8 text-center md:text-left">
+        <p className="text-[10px] text-slate-400">&copy; {new Date().getFullYear()} ProOrca. All rights reserved.</p>
       </div>
     </footer>
   );
@@ -1134,7 +1084,7 @@ function LandingFooter() {
 
 function LandingPage() {
   return (
-    <div className="min-h-screen">
+    <div className="skill-map-home min-h-screen">
       <LandingHeader />
       <main>
         <HeroSection />

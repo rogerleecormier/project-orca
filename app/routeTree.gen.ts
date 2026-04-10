@@ -21,6 +21,7 @@ import { Route as PlannerRouteImport } from './routes/planner'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as LessonsRouteImport } from './routes/lessons'
 import { Route as GradebookRouteImport } from './routes/gradebook'
+import { Route as DocsRouteImport } from './routes/docs'
 import { Route as CurriculumBuilderRouteImport } from './routes/curriculum-builder'
 import { Route as ClassesRouteImport } from './routes/classes'
 import { Route as AssignmentsRouteImport } from './routes/assignments'
@@ -89,6 +90,11 @@ const GradebookRoute = GradebookRouteImport.update({
   path: '/gradebook',
   getParentRoute: () => rootRouteImport,
 } as any)
+const DocsRoute = DocsRouteImport.update({
+  id: '/docs',
+  path: '/docs',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const CurriculumBuilderRoute = CurriculumBuilderRouteImport.update({
   id: '/curriculum-builder',
   path: '/curriculum-builder',
@@ -131,6 +137,7 @@ export interface FileRoutesByFullPath {
   '/assignments': typeof AssignmentsRoute
   '/classes': typeof ClassesRoute
   '/curriculum-builder': typeof CurriculumBuilderRoute
+  '/docs': typeof DocsRoute
   '/gradebook': typeof GradebookRoute
   '/lessons': typeof LessonsRoute
   '/login': typeof LoginRoute
@@ -152,6 +159,7 @@ export interface FileRoutesByTo {
   '/assignments': typeof AssignmentsRoute
   '/classes': typeof ClassesRoute
   '/curriculum-builder': typeof CurriculumBuilderRoute
+  '/docs': typeof DocsRoute
   '/gradebook': typeof GradebookRoute
   '/lessons': typeof LessonsRoute
   '/login': typeof LoginRoute
@@ -174,6 +182,7 @@ export interface FileRoutesById {
   '/assignments': typeof AssignmentsRoute
   '/classes': typeof ClassesRoute
   '/curriculum-builder': typeof CurriculumBuilderRoute
+  '/docs': typeof DocsRoute
   '/gradebook': typeof GradebookRoute
   '/lessons': typeof LessonsRoute
   '/login': typeof LoginRoute
@@ -197,6 +206,7 @@ export interface FileRouteTypes {
     | '/assignments'
     | '/classes'
     | '/curriculum-builder'
+    | '/docs'
     | '/gradebook'
     | '/lessons'
     | '/login'
@@ -218,6 +228,7 @@ export interface FileRouteTypes {
     | '/assignments'
     | '/classes'
     | '/curriculum-builder'
+    | '/docs'
     | '/gradebook'
     | '/lessons'
     | '/login'
@@ -239,6 +250,7 @@ export interface FileRouteTypes {
     | '/assignments'
     | '/classes'
     | '/curriculum-builder'
+    | '/docs'
     | '/gradebook'
     | '/lessons'
     | '/login'
@@ -261,6 +273,7 @@ export interface RootRouteChildren {
   AssignmentsRoute: typeof AssignmentsRoute
   ClassesRoute: typeof ClassesRoute
   CurriculumBuilderRoute: typeof CurriculumBuilderRoute
+  DocsRoute: typeof DocsRoute
   GradebookRoute: typeof GradebookRoute
   LessonsRoute: typeof LessonsRoute
   LoginRoute: typeof LoginRoute
@@ -362,6 +375,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof GradebookRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/docs': {
+      id: '/docs'
+      path: '/docs'
+      fullPath: '/docs'
+      preLoaderRoute: typeof DocsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/curriculum-builder': {
       id: '/curriculum-builder'
       path: '/curriculum-builder'
@@ -431,6 +451,7 @@ const rootRouteChildren: RootRouteChildren = {
   AssignmentsRoute: AssignmentsRoute,
   ClassesRoute: ClassesRoute,
   CurriculumBuilderRoute: CurriculumBuilderRoute,
+  DocsRoute: DocsRoute,
   GradebookRoute: GradebookRoute,
   LessonsRoute: LessonsRoute,
   LoginRoute: LoginRoute,

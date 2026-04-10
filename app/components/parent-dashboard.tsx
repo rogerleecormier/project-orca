@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { ParentPageHeader } from "./parent-page-header";
 import type { getParentDashboardData } from "../server/functions";
+import { SkillMapPreview } from "./skill-map-preview";
 
 type ParentDashboardData = NonNullable<Awaited<ReturnType<typeof getParentDashboardData>>>;
 
@@ -104,7 +105,7 @@ export function ParentDashboard({
   ];
 
   return (
-    <div className="space-y-6">
+    <div className="skill-map-dashboard space-y-6">
       <ParentPageHeader
         title="Parent Dashboard"
         description="Jump into the tools you use most and keep an eye on student progress across every class."
@@ -118,51 +119,68 @@ export function ParentDashboard({
         )}
       />
 
-      <section className="rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-2">
+      <section className="skill-map-panel rounded-[2rem] p-6">
+        <div className="grid gap-6 xl:grid-cols-[minmax(320px,380px)_minmax(0,1fr)]">
           <div>
-            <h2 className="text-xl font-semibold text-slate-900">Parent Quick Actions</h2>
-            <p className="mt-1 text-sm text-slate-600">Jump to the tools you use most.</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-cyan-700">
+              Home Map
+            </p>
+            <h2 className="skill-map-display mt-3 text-3xl font-semibold text-slate-900">
+              Parent quick actions, laid out like a route board
+            </h2>
+            <p className="mt-3 text-sm leading-relaxed text-slate-600">
+              Keep the most-used tools on a single launch surface while the same skill-map
+              language carries across planning, progress, and assignment work.
+            </p>
+
+            <SkillMapPreview
+              className="mt-5 min-h-[360px]"
+              toolbarLabel="Quick launch route"
+              showLegend={false}
+            />
+          </div>
+
+          <div className="flex flex-col">
+            <div className="grid gap-3 sm:grid-cols-2">
+              {quickActions.map((cta) => (
+                <Link
+                  key={cta.to}
+                  to={cta.to}
+                  className="skill-map-action-card group flex items-center justify-between rounded-2xl px-4 py-4 text-slate-700 transition hover:text-slate-900"
+                >
+                  <span className="min-w-0">
+                    <span className="flex items-center gap-2 text-sm font-medium">
+                      <span className="text-base" aria-hidden="true">
+                        {cta.icon}
+                      </span>
+                      {cta.label}
+                    </span>
+                    <span className="mt-1 block text-xs text-slate-500">{cta.description}</span>
+                  </span>
+                  <span className="text-xs text-slate-400 transition group-hover:text-slate-600">▶</span>
+                </Link>
+              ))}
+            </div>
+
+            <Link
+              to="/curriculum-builder"
+              className="group mt-4 block rounded-[1.6rem] border border-cyan-200 bg-gradient-to-r from-cyan-50/90 via-white to-sky-50/90 p-5 transition hover:shadow-sm"
+            >
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-700">AI Curriculum Builder</p>
+              <h3 className="mt-2 flex items-center gap-2 text-lg font-semibold text-slate-900">
+                <span aria-hidden="true">✦</span>
+                Build a full curriculum in minutes
+              </h3>
+              <p className="mt-2 text-sm text-slate-600">
+                Generate course structures, skill maps, and learning paths with one guided flow.
+              </p>
+              <p className="mt-3 text-sm font-medium text-cyan-900">Launch Builder →</p>
+            </Link>
           </div>
         </div>
-        <div className="mt-4 grid gap-2 sm:grid-cols-2">
-          {quickActions.map((cta) => (
-            <Link
-              key={cta.to}
-              to={cta.to}
-              className="group flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 text-slate-700 transition hover:bg-slate-100 hover:text-slate-900"
-            >
-              <span className="min-w-0">
-                <span className="flex items-center gap-2 text-sm font-medium">
-                  <span className="text-base" aria-hidden="true">
-                    {cta.icon}
-                  </span>
-                  {cta.label}
-                </span>
-                <span className="mt-1 block truncate text-xs text-slate-500">{cta.description}</span>
-              </span>
-              <span className="text-xs text-slate-400 transition group-hover:text-slate-600">▶</span>
-            </Link>
-          ))}
-        </div>
-
-        <Link
-          to="/curriculum-builder"
-          className="group mt-4 block rounded-2xl border border-cyan-200 bg-gradient-to-r from-cyan-50 via-sky-50 to-indigo-50 p-5 transition hover:shadow-sm"
-        >
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-700">AI Curriculum Builder</p>
-          <h3 className="mt-2 flex items-center gap-2 text-lg font-semibold text-slate-900">
-            <span aria-hidden="true">✦</span>
-            Build A Full Curriculum In Minutes
-          </h3>
-          <p className="mt-2 text-sm text-slate-600">
-            Generate course structures, skill maps, and learning paths with one guided flow.
-          </p>
-          <p className="mt-3 text-sm font-medium text-cyan-900">Launch Builder →</p>
-        </Link>
       </section>
 
-      <section className="orca-wave rounded-2xl border border-slate-200 bg-white/90 p-6 shadow-sm">
+      <section className="skill-map-panel orca-wave rounded-[2rem] p-6">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-xs uppercase tracking-[0.2em] text-cyan-700">Parent View</p>
