@@ -237,58 +237,13 @@ export function NodeLayer({
         ) : null;
 
         const startMarker = isStartNode ? (
-          <g transform={`translate(${cx} ${cy - r - 28})`} style={{ pointerEvents: "none" }}>
-            <rect
-              x={-31}
-              y={-10}
-              width={62}
-              height={20}
-              rx={10}
-              fill="#eaf8ff"
-              stroke="#67b9df"
-              strokeWidth={1.2}
-            />
-            <text
-              x={0}
-              y={0}
-              fontSize={9}
-              textAnchor="middle"
-              dominantBaseline="central"
-              fill="#1f628a"
-              fontWeight="700"
-              style={{ userSelect: "none" }}
-            >
-              ★ START
-            </text>
+          <g transform={`translate(${cx} ${cy - r - 14})`} style={{ pointerEvents: "none" }}>
+            <rect x={-28} y={-9} width={56} height={18} rx={9} fill="#eaf8ff" stroke="#67b9df" strokeWidth={1} />
+            <text x={0} y={0} fontSize={8.5} textAnchor="middle" dominantBaseline="central" fill="#1f628a" fontWeight="700" style={{ userSelect: "none" }}>★ START</text>
           </g>
         ) : null;
 
-        const endMarker = isEndNode ? (
-          <g transform={`translate(${cx} ${cy + r + 28})`} style={{ pointerEvents: "none" }}>
-            <rect
-              x={-29}
-              y={-10}
-              width={58}
-              height={20}
-              rx={10}
-              fill="#e2f2fe"
-              stroke="#2a77af"
-              strokeWidth={1.2}
-            />
-            <text
-              x={0}
-              y={0}
-              fontSize={9}
-              textAnchor="middle"
-              dominantBaseline="central"
-              fill="#1a4f78"
-              fontWeight="700"
-              style={{ userSelect: "none" }}
-            >
-              ★ GOAL
-            </text>
-          </g>
-        ) : null;
+        // endMarker is computed after label variables below
 
         // Selected ring — three wave circles rippling outward from node center
         const selectedRing = isSelected && !isConnectSource ? (
@@ -446,6 +401,15 @@ export function NodeLayer({
         const labelGap = 9;
         const labelBaseY = cy + r + labelGap;
 
+        // GOAL badge sits below all labels so nothing overlaps
+        const goalBadgeOffsetY = labelGap + labelLines.length * labelLineHeight + (node.xpReward > 0 && !isLocked ? labelLineHeight + 4 : 4) + 8;
+        const endMarker = isEndNode ? (
+          <g transform={`translate(${cx} ${cy + r + goalBadgeOffsetY})`} style={{ pointerEvents: "none" }}>
+            <rect x={-28} y={-9} width={56} height={18} rx={9} fill="#e2f2fe" stroke="#2a77af" strokeWidth={1} />
+            <text x={0} y={0} fontSize={8.5} textAnchor="middle" dominantBaseline="central" fill="#1a4f78" fontWeight="700" style={{ userSelect: "none" }}>★ GOAL</text>
+          </g>
+        ) : null;
+
         const isDimmed = (dimmedNodeIds?.size ?? 0) > 0 && (dimmedNodeIds?.has(node.id) ?? false);
 
         return (
@@ -483,35 +447,65 @@ export function NodeLayer({
             {startMarker}
             {endMarker}
 
-            {/* Title label (1–2 lines) */}
-            {labelLines.map((line, i) => (
-              <text
-                key={i}
-                x={cx}
-                y={isEndNode ? labelBaseY + 12 + i * labelLineHeight : labelBaseY + i * labelLineHeight}
-                fontSize={isOptional ? 10 : 11}
-                textAnchor="middle"
-                fill={labelFill}
-                fontWeight={isSelected ? "700" : "500"}
-                style={{ pointerEvents: "none", userSelect: "none" }}
-              >
-                {line}
-              </text>
-            ))}
+            {/* Title label (1–2 lines) with opaque background to avoid edge bleed */}
+            {labelLines.map((line, i) => {
+              const ly = labelBaseY + i * labelLineHeight;
+              const approxW = line.length * 6.4;
+              return (
+                <g key={i} style={{ pointerEvents: "none" }}>
+                  <rect
+                    x={cx - approxW / 2 - 3}
+                    y={ly - 10}
+                    width={approxW + 6}
+                    height={13}
+                    rx={3}
+                    fill="rgba(245,252,255,0.88)"
+                  />
+                  <text
+                    x={cx}
+                    y={ly}
+                    fontSize={isOptional ? 10 : 11}
+                    textAnchor="middle"
+                    dominantBaseline="auto"
+                    fill={labelFill}
+                    fontWeight={isSelected ? "700" : "500"}
+                    style={{ userSelect: "none" }}
+                  >
+                    {line}
+                  </text>
+                </g>
+              );
+            })}
 
-            {/* XP label */}
-            {node.xpReward > 0 && !isLocked ? (
-              <text
-                x={cx}
-                y={(isEndNode ? labelBaseY + 12 : labelBaseY) + labelLines.length * labelLineHeight + 2}
-                fontSize={isOptional ? 9 : 10}
-                textAnchor="middle"
-                fill="#9ca3af"
-                style={{ pointerEvents: "none", userSelect: "none" }}
-              >
-                {node.xpReward} XP
-              </text>
-            ) : null}
+            {/* XP label with background */}
+            {node.xpReward > 0 && !isLocked ? (() => {
+              const xpy = labelBaseY + labelLines.length * labelLineHeight + 2;
+              const xpStr = `${node.xpReward} XP`;
+              const xpW = xpStr.length * 5.8;
+              return (
+                <g style={{ pointerEvents: "none" }}>
+                  <rect
+                    x={cx - xpW / 2 - 3}
+                    y={xpy - 9}
+                    width={xpW + 6}
+                    height={12}
+                    rx={3}
+                    fill="rgba(245,252,255,0.75)"
+                  />
+                  <text
+                    x={cx}
+                    y={xpy}
+                    fontSize={isOptional ? 9 : 10}
+                    textAnchor="middle"
+                    dominantBaseline="auto"
+                    fill="#9ca3af"
+                    style={{ userSelect: "none" }}
+                  >
+                    {xpStr}
+                  </text>
+                </g>
+              );
+            })() : null}
           </g>
         );
       })}
