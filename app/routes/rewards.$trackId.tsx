@@ -2,10 +2,11 @@ import { useState } from "react";
 import { Link, createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import {
   activateRewardTrack,
+  aiSuggestRewards,
   deactivateRewardTrack,
-  deliverReward,
   getRewardTrackDetail,
   getViewerContext,
+  setRewardClaimDelivered,
   updateRewardTrack,
   upsertRewardTier,
 } from "../server/functions";
@@ -57,76 +58,26 @@ const CLAIM_STATUS_STYLES: Record<string, string> = {
   delivered: "border-emerald-200 bg-emerald-50 text-emerald-700",
 };
 
-// ── Deliver Reward Inline Form ────────────────────────────────────────────────
-
-function DeliverForm({
-  claimId,
-  onDelivered,
-  onCancel,
-}: {
-  claimId: string;
-  onDelivered: () => void;
-  onCancel: () => void;
-}) {
-  const [note, setNote] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function handleDeliver() {
-    setLoading(true);
-    setError(null);
-    try {
-      await deliverReward({ data: { claimId, parentNote: note.trim() || undefined } });
-      onDelivered();
-    } catch {
-      setError("Could not mark as delivered.");
-      setLoading(false);
-    }
-  }
-
-  return (
-    <div className="mt-2 flex flex-col gap-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
-      <textarea
-        value={note}
-        onChange={(e) => setNote(e.target.value)}
-        placeholder="Optional note for student… (e.g. 'Choose your flavor!')"
-        rows={2}
-        className="resize-none rounded-lg border border-slate-200 px-3 py-2 text-xs focus:border-cyan-500 focus:outline-none"
-      />
-      <div className="flex gap-2">
-        <button
-          type="button"
-          disabled={loading}
-          onClick={() => void handleDeliver()}
-          className="rounded-xl bg-emerald-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
-        >
-          {loading ? "Saving…" : "Mark Delivered ✓"}
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          disabled={loading}
-          className="rounded-xl border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100"
-        >
-          Cancel
-        </button>
-      </div>
-      {error ? <p className="text-xs font-medium text-rose-600">{error}</p> : null}
-    </div>
-  );
-}
+type RewardSuggestionOption = {
+  tierNumber: number;
+  icon: string;
+  title: string;
+  rewardType: string;
+};
 
 // ── Tier Row Editor ───────────────────────────────────────────────────────────
 
 function TierEditorRow({
   tier,
   claim,
-  totalXpGoal,
+  suggestions,
+  onToggleDelivered,
   onSaved,
 }: {
   tier: TierRow;
   claim: ClaimRow | undefined;
-  totalXpGoal: number;
+  suggestions: RewardSuggestionOption[];
+  onToggleDelivered: (claim: ClaimRow, delivered: boolean) => Promise<void>;
   onSaved: () => void;
 }) {
   const [icon, setIcon] = useState(tier.icon ?? "🎁");
@@ -136,7 +87,8 @@ function TierEditorRow({
   const [description, setDescription] = useState(tier.description ?? "");
   const [showNote, setShowNote] = useState(!!tier.description);
   const [saving, setSaving] = useState(false);
-  const [showDeliver, setShowDeliver] = useState(false);
+  const [selectedSuggestion, setSelectedSuggestion] = useState("");
+  const [deliveryUpdating, setDeliveryUpdating] = useState(false);
 
   const isDirty =
     icon !== (tier.icon ?? "🎁") ||
@@ -167,6 +119,14 @@ function TierEditorRow({
     unclaimed: "border-cyan-200 bg-cyan-50 text-cyan-700",
     locked:    "border-slate-200 bg-slate-50 text-slate-400",
   }[status];
+
+  function applySelectedSuggestion() {
+    const selected = suggestions.find((s) => `${s.icon}|${s.title}|${s.rewardType}` === selectedSuggestion);
+    if (!selected) return;
+    setIcon(selected.icon || "🎁");
+    setTitle(selected.title);
+    setRewardType(selected.rewardType);
+  }
 
   async function handleSave() {
     setSaving(true);
@@ -280,25 +240,65 @@ function TierEditorRow({
         </div>
       ) : null}
 
-      {/* Deliver reward inline */}
-      {status === "claimed" ? (
-        showDeliver ? (
-          <DeliverForm
-            claimId={claim!.id}
-            onDelivered={() => { setShowDeliver(false); onSaved(); }}
-            onCancel={() => setShowDeliver(false)}
-          />
-        ) : (
-          <div className="mt-2">
-            <button
-              type="button"
-              onClick={() => setShowDeliver(true)}
-              className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100 transition"
-            >
-              🎁 Mark Delivered
-            </button>
-          </div>
-        )
+      {/* Reward option picker */}
+      {suggestions.length > 0 ? (
+        <div className="mt-2 flex flex-wrap items-center gap-2 rounded-xl border border-cyan-100 bg-cyan-50/60 px-3 py-2">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.1em] text-cyan-800">
+            AI options
+          </span>
+          <select
+            value={selectedSuggestion}
+            onChange={(e) => setSelectedSuggestion(e.target.value)}
+            className="min-w-0 flex-1 rounded-lg border border-cyan-200 bg-white px-2 py-1 text-xs focus:outline-none"
+          >
+            <option value="">Select an option for this milestone</option>
+            {suggestions.map((s) => {
+              const key = `${s.icon}|${s.title}|${s.rewardType}`;
+              return (
+                <option key={key} value={key}>
+                  {s.icon} {s.title} · {REWARD_TYPE_LABELS[s.rewardType] ?? "Treat"}
+                </option>
+              );
+            })}
+          </select>
+          <button
+            type="button"
+            onClick={applySelectedSuggestion}
+            disabled={!selectedSuggestion}
+            className="rounded-lg border border-cyan-300 bg-white px-2.5 py-1 text-xs font-medium text-cyan-800 hover:bg-cyan-100 disabled:opacity-50"
+          >
+            Use
+          </button>
+        </div>
+      ) : null}
+
+      {/* Delivery toggle */}
+      {claim && (status === "claimed" || status === "delivered") ? (
+        <div className="mt-2">
+          <button
+            type="button"
+            disabled={deliveryUpdating}
+            onClick={async () => {
+              setDeliveryUpdating(true);
+              try {
+                await onToggleDelivered(claim, status !== "delivered");
+              } finally {
+                setDeliveryUpdating(false);
+              }
+            }}
+            className={`rounded-xl px-3 py-1.5 text-xs font-medium transition disabled:opacity-60 ${
+              status === "delivered"
+                ? "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                : "border border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100"
+            }`}
+          >
+            {deliveryUpdating
+              ? "Saving…"
+              : status === "delivered"
+                ? "↺ Mark Pending"
+                : "✓ Mark Delivered"}
+          </button>
+        </div>
       ) : null}
     </div>
   );
@@ -315,7 +315,7 @@ function ClaimHistoryTable({
   tiers: TierRow[];
   onDelivered: () => void;
 }) {
-  const [deliverFormClaimId, setDeliverFormClaimId] = useState<string | null>(null);
+  const [updatingClaimId, setUpdatingClaimId] = useState<string | null>(null);
   const tierMap = new Map(tiers.map((t) => [t.id, t]));
 
   if (claims.length === 0) {
@@ -342,68 +342,73 @@ function ClaimHistoryTable({
           {claims.map((claim) => {
             const tier = tierMap.get(claim.tierId);
             const isPending = claim.status === "claimed";
+            const isDelivered = claim.status === "delivered";
             return (
-              <>
-                <tr
-                  key={claim.id}
-                  className={`border-t border-slate-100 ${isPending ? "bg-amber-50/50" : ""}`}
-                >
-                  <td className="py-2.5 pr-4">
-                    {tier ? (
-                      <span className="flex items-center gap-1.5">
-                        <span>{tier.icon ?? "🎁"}</span>
-                        <span className="font-medium text-slate-800">{tier.title}</span>
-                      </span>
-                    ) : (
-                      <span className="text-slate-400">—</span>
-                    )}
-                  </td>
-                  <td className="py-2.5 pr-4">
-                    <span
-                      className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${CLAIM_STATUS_STYLES[claim.status] ?? ""}`}
-                    >
-                      {claim.status.charAt(0).toUpperCase() + claim.status.slice(1)}
+              <tr
+                key={claim.id}
+                className={`border-t border-slate-100 ${isPending ? "bg-amber-50/50" : ""}`}
+              >
+                <td className="py-2.5 pr-4">
+                  {tier ? (
+                    <span className="flex items-center gap-1.5">
+                      <span>{tier.icon ?? "🎁"}</span>
+                      <span className="font-medium text-slate-800">{tier.title}</span>
                     </span>
-                  </td>
-                  <td className="py-2.5 pr-4 text-xs text-slate-500">
-                    {claim.claimedAt ? new Date(claim.claimedAt).toLocaleDateString() : "—"}
-                  </td>
-                  <td className="py-2.5 pr-4 text-xs text-slate-500">
-                    {claim.deliveredAt ? new Date(claim.deliveredAt).toLocaleDateString() : (
-                      isPending ? (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setDeliverFormClaimId(
-                              deliverFormClaimId === claim.id ? null : claim.id,
-                            )
+                  ) : (
+                    <span className="text-slate-400">—</span>
+                  )}
+                </td>
+                <td className="py-2.5 pr-4">
+                  <span
+                    className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${CLAIM_STATUS_STYLES[claim.status] ?? ""}`}
+                  >
+                    {claim.status.charAt(0).toUpperCase() + claim.status.slice(1)}
+                  </span>
+                </td>
+                <td className="py-2.5 pr-4 text-xs text-slate-500">
+                  {claim.claimedAt ? new Date(claim.claimedAt).toLocaleDateString() : "—"}
+                </td>
+                <td className="py-2.5 pr-4 text-xs text-slate-500">
+                  {isPending || isDelivered ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={updatingClaimId === claim.id}
+                        onClick={async () => {
+                          setUpdatingClaimId(claim.id);
+                          try {
+                            await setRewardClaimDelivered({
+                              data: { claimId: claim.id, delivered: !isDelivered },
+                            });
+                            onDelivered();
+                          } finally {
+                            setUpdatingClaimId(null);
                           }
-                          className="rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1 text-[10px] font-semibold text-amber-800 hover:bg-amber-100 transition"
-                        >
-                          Mark Delivered
-                        </button>
-                      ) : "—"
-                    )}
-                  </td>
-                  <td className="py-2.5 text-xs text-slate-500">
-                    {claim.parentNote ?? "—"}
-                  </td>
-                </tr>
-                {deliverFormClaimId === claim.id ? (
-                  <tr key={`deliver-${claim.id}`} className="border-t-0">
-                    <td colSpan={5} className="pb-3 pt-0 pr-4">
-                      <DeliverForm
-                        claimId={claim.id}
-                        onDelivered={() => {
-                          setDeliverFormClaimId(null);
-                          onDelivered();
                         }}
-                        onCancel={() => setDeliverFormClaimId(null)}
-                      />
-                    </td>
-                  </tr>
-                ) : null}
-              </>
+                        className={`rounded-lg border px-2.5 py-1 text-[10px] font-semibold transition disabled:opacity-60 ${
+                          isDelivered
+                            ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                            : "border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100"
+                        }`}
+                      >
+                        {updatingClaimId === claim.id
+                          ? "Saving…"
+                          : isDelivered
+                            ? "Mark Pending"
+                            : "Mark Delivered"}
+                      </button>
+                      {claim.deliveredAt ? (
+                        <span>{new Date(claim.deliveredAt).toLocaleDateString()}</span>
+                      ) : null}
+                    </div>
+                  ) : (
+                    "—"
+                  )}
+                </td>
+                <td className="py-2.5 text-xs text-slate-500">
+                  {claim.parentNote ?? "—"}
+                </td>
+              </tr>
             );
           })}
         </tbody>
@@ -462,7 +467,10 @@ function TrackSettingsPanel({
             tierId: tier.id,
             tierNumber: tier.tierNumber,
             title: tier.title,
-            xpThreshold: Math.round((tier.tierNumber / 10) * totalXpGoal),
+            xpThreshold:
+              tier.isBonusTier || tier.tierNumber > 5
+                ? Math.round(totalXpGoal * 1.2)
+                : Math.round((tier.tierNumber / 5) * totalXpGoal),
           },
         }),
       ),
@@ -557,6 +565,9 @@ function RewardTrackEditPage() {
   const [activating, setActivating] = useState(false);
   const [deactivating, setDeactivating] = useState(false);
   const [confirmDeactivate, setConfirmDeactivate] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiOptionsByTier, setAiOptionsByTier] = useState<Record<number, RewardSuggestionOption[]>>({});
 
   // Map claims by tierId for quick lookup
   const claimByTierId = new Map(
@@ -564,6 +575,7 @@ function RewardTrackEditPage() {
   );
 
   const pendingClaims = initialDetail.claims.filter((c) => c.status === "claimed");
+  const hasBonusTier = initialDetail.tiers.some((tier) => tier.isBonusTier);
 
   async function handleActivate() {
     setActivating(true);
@@ -587,6 +599,53 @@ function RewardTrackEditPage() {
     }
   }
 
+  function mergeSuggestionBatches(
+    existing: Record<number, RewardSuggestionOption[]>,
+    incomingBatches: RewardSuggestionOption[][],
+  ) {
+    const next: Record<number, RewardSuggestionOption[]> = { ...existing };
+    for (const batch of incomingBatches) {
+      for (const suggestion of batch) {
+        const tierNumber = suggestion.tierNumber;
+        const current = next[tierNumber] ?? [];
+        const key = `${suggestion.icon}|${suggestion.title}|${suggestion.rewardType}`;
+        const hasAlready = current.some((s) => `${s.icon}|${s.title}|${s.rewardType}` === key);
+        if (!hasAlready) {
+          next[tierNumber] = [...current, suggestion];
+        }
+      }
+    }
+    return next;
+  }
+
+  async function handleGenerateRewardOptions() {
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const [batchA, batchB] = await Promise.all([
+        aiSuggestRewards({ data: { profileId: track.profileId } }),
+        aiSuggestRewards({ data: { profileId: track.profileId } }),
+      ]);
+      setAiOptionsByTier((prev) =>
+        mergeSuggestionBatches(prev, [batchA, batchB] as RewardSuggestionOption[][]),
+      );
+    } catch {
+      setAiError("Could not generate AI suggestions right now.");
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
+  async function handleToggleDelivered(claim: ClaimRow, delivered: boolean) {
+    await setRewardClaimDelivered({
+      data: {
+        claimId: claim.id,
+        delivered,
+      },
+    });
+    router.invalidate();
+  }
+
   return (
     <div className="space-y-6">
       <ParentPageHeader
@@ -597,7 +656,7 @@ function RewardTrackEditPage() {
               to="/rewards"
               className="font-medium text-cyan-800 transition hover:underline"
             >
-              ← Reward Tracks
+              ← Orca Currents
             </Link>
             {initialDetail.profile ? (
               <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700">
@@ -650,7 +709,7 @@ function RewardTrackEditPage() {
                 onClick={() => void handleActivate()}
                 className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-60"
               >
-                {activating ? "Activating…" : "Activate Track"}
+                {activating ? "Activating…" : "Activate Current"}
               </button>
             )}
           </div>
@@ -664,7 +723,7 @@ function RewardTrackEditPage() {
             ⚡ {pendingClaims.length} reward{pendingClaims.length > 1 ? "s" : ""} claimed and waiting for delivery
           </p>
           <p className="mt-0.5 text-xs text-amber-700">
-            See the Claim History section below to mark them as delivered.
+            See Claim History below to review rewards and toggle delivered status.
           </p>
         </div>
       ) : null}
@@ -674,10 +733,30 @@ function RewardTrackEditPage() {
         {/* LEFT — Tier editor */}
         <section className="space-y-4">
           <div>
-            <h2 className="text-base font-semibold text-slate-900">Reward Tiers</h2>
+            <h2 className="text-base font-semibold text-slate-900">Reward Manager</h2>
             <p className="mt-0.5 text-sm text-slate-500">
               Set a reward at each XP milestone. Students see these as locked until they earn enough XP.
             </p>
+          </div>
+
+          <div className="rounded-2xl border border-cyan-200 bg-cyan-50/70 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-medium text-cyan-900">
+                Need ideas for each milestone?
+              </p>
+              <button
+                type="button"
+                disabled={aiLoading}
+                onClick={() => void handleGenerateRewardOptions()}
+                className="rounded-xl border border-cyan-300 bg-white px-3 py-1.5 text-xs font-semibold text-cyan-800 hover:bg-cyan-100 disabled:opacity-60"
+              >
+                {aiLoading ? "Generating…" : "AI Suggest Reward Options"}
+              </button>
+            </div>
+            <p className="mt-1 text-xs text-cyan-800/80">
+              Generate options, pick the rewards you like for each tier, then save the tier.
+            </p>
+            {aiError ? <p className="mt-2 text-xs font-medium text-rose-600">{aiError}</p> : null}
           </div>
 
           <div className="space-y-3">
@@ -688,48 +767,50 @@ function RewardTrackEditPage() {
                   key={tier.id}
                   tier={tier}
                   claim={claimByTierId.get(tier.id)}
-                  totalXpGoal={track.totalXpGoal}
+                  suggestions={aiOptionsByTier[tier.tierNumber] ?? []}
+                  onToggleDelivered={handleToggleDelivered}
                   onSaved={() => router.invalidate()}
                 />
               ))}
           </div>
 
           {/* Add bonus tier */}
-          <button
-            type="button"
-            onClick={async () => {
-              const maxTier = Math.max(0, ...initialDetail.tiers.map((t) => t.tierNumber));
-              const nextNum = maxTier + 1;
-              await upsertRewardTier({
-                data: {
-                  trackId: track.id,
-                  tierNumber: nextNum,
-                  title: `Bonus Tier ${nextNum}`,
-                  icon: "⭐",
-                  rewardType: "experience",
-                  isBonusTier: true,
-                  xpThreshold: Math.round((nextNum / 10) * track.totalXpGoal),
-                },
-              });
-              router.invalidate();
-            }}
-            className="w-full rounded-xl border border-dashed border-amber-300 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-700 hover:bg-amber-100 transition"
-          >
-            + Add Bonus Tier
-          </button>
+          {!hasBonusTier ? (
+            <button
+              type="button"
+              onClick={async () => {
+                await upsertRewardTier({
+                  data: {
+                    trackId: track.id,
+                    tierNumber: 6,
+                    title: "Bonus Reward",
+                    icon: "⭐",
+                    rewardType: "item",
+                    estimatedValue: "$100-200",
+                    isBonusTier: true,
+                    xpThreshold: Math.round(track.totalXpGoal * 1.2),
+                  },
+                });
+                router.invalidate();
+              }}
+              className="w-full rounded-xl border border-dashed border-amber-300 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-700 hover:bg-amber-100 transition"
+            >
+              + Add Bonus Tier
+            </button>
+          ) : null}
         </section>
 
         {/* RIGHT — Settings + claim history */}
         <aside className="space-y-6">
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="mb-4 text-base font-semibold text-slate-900">Track Settings</h2>
+            <h2 className="mb-4 text-base font-semibold text-slate-900">Current Settings</h2>
             <TrackSettingsPanel
               trackDetail={initialDetail}
               onSaved={() => router.invalidate()}
             />
           </section>
 
-          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <section id="claim-history" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="mb-4 text-base font-semibold text-slate-900">Claim History</h2>
             <ClaimHistoryTable
               claims={initialDetail.claims}

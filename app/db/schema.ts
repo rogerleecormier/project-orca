@@ -244,6 +244,7 @@ export const profiles = sqliteTable(
       .references(() => users.id, { onDelete: "cascade" }),
     displayName: text("display_name").notNull(),
     gradeLevel: text("grade_level"),
+    location: text("location"),
     birthDate: text("birth_date"),
     pinHash: text("pin_hash").notNull(),
     status: text("status", {
@@ -674,6 +675,7 @@ export const rewardTiers = sqliteTable(
     rewardType: text("reward_type").notNull().default("treat"),
     estimatedValue: text("estimated_value"),
     isBonusTier: integer("is_bonus_tier", { mode: "boolean" }).default(false),
+    imageUrl: text("image_url"),
     createdAt: text("created_at")
       .notNull()
       .$defaultFn(() => new Date().toISOString()),

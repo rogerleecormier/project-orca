@@ -44,7 +44,12 @@
       "Bash(pnpm run:*)",
       "Bash(node -e ':*)",
       "Bash(ls -lh /run/media/rogerleecormier/Storage/dev/project-orca/app/components/*.tsx)",
-      "Read(//run/media-rogerleecormier/Storage/dev/project-orca/app/lib/**)"
+      "Read(//run/media-rogerleecormier/Storage/dev/project-orca/app/lib/**)",
+      "Bash(grep -E '\\\\.\\(tsx?|jsx\\)$')",
+      "Bash(grep -E '\\(NodeLayer|EdgeLayer|skill-tree\\\\.$treeId|ai\\\\.ts:1[0-9][0-9][0-9]\\)')",
+      "Bash(grep -E '\\(NodeLayer|EdgeLayer|skill-tree\\\\.$treeId|ai\\\\.ts:1[0-9][0-9][0-9]|ai\\\\.ts:[2-9][0-9][0-9]\\)')",
+      "Bash(node_modules/.bin/drizzle-kit generate:*)",
+      "Bash(node_modules/.bin/wrangler d1:*)"
     ],
     "additionalDirectories": [
       "/tmp"

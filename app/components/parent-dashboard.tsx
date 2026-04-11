@@ -88,8 +88,8 @@ export function ParentDashboard({
     },
     {
       to: "/rewards",
-      label: "Reward Tracks",
-      description: "Set milestone rewards for XP progress. Battle-pass style motivation.",
+      label: "Orca Currents",
+      description: "Set milestone rewards for XP progress with an ocean-themed progression flow.",
       icon: "🏆",
     },
     ...(isAdminParent

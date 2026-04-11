@@ -52,11 +52,13 @@ function StudentsPage() {
 
   const [newStudentName, setNewStudentName] = useState("");
   const [newStudentGrade, setNewStudentGrade] = useState("");
+  const [newStudentLocation, setNewStudentLocation] = useState("");
   const [newStudentBirthDate, setNewStudentBirthDate] = useState("");
   const [newStudentPin, setNewStudentPin] = useState("");
 
   const [editStudentName, setEditStudentName] = useState("");
   const [editStudentGrade, setEditStudentGrade] = useState("");
+  const [editStudentLocation, setEditStudentLocation] = useState("");
   const [editStudentBirthDate, setEditStudentBirthDate] = useState("");
   const [editStudentPin, setEditStudentPin] = useState("");
 
@@ -67,12 +69,14 @@ function StudentsPage() {
     id: string;
     displayName: string;
     gradeLevel: string;
+    location: string;
     birthDate: string;
   }) => {
     setEditError(null);
     setEditingStudentId(student.id);
     setEditStudentName(student.displayName);
     setEditStudentGrade(student.gradeLevel);
+    setEditStudentLocation(student.location);
     setEditStudentBirthDate(student.birthDate);
     setEditStudentPin("");
   };
@@ -81,6 +85,7 @@ function StudentsPage() {
     setEditingStudentId(null);
     setEditStudentName("");
     setEditStudentGrade("");
+    setEditStudentLocation("");
     setEditStudentBirthDate("");
     setEditStudentPin("");
   };
@@ -105,6 +110,7 @@ function StudentsPage() {
         data: {
           displayName: newStudentName.trim(),
           gradeLevel: newStudentGrade.trim(),
+          location: newStudentLocation.trim() || undefined,
           birthDate: newStudentBirthDate || undefined,
           pin: newStudentPin,
         },
@@ -112,6 +118,7 @@ function StudentsPage() {
 
       setNewStudentName("");
       setNewStudentGrade("");
+      setNewStudentLocation("");
       setNewStudentBirthDate("");
       setNewStudentPin("");
       setShowCreateModal(false);
@@ -176,6 +183,7 @@ function StudentsPage() {
           profileId: editingStudentId,
           displayName: editStudentName.trim(),
           gradeLevel: editStudentGrade.trim(),
+          location: editStudentLocation.trim() || undefined,
           birthDate: editStudentBirthDate || undefined,
           pin: editStudentPin || undefined,
         },
@@ -240,6 +248,11 @@ function StudentsPage() {
                           Grade {student.gradeLevel || "Required"}
                         </p>
                         <p className="mt-1 text-xs text-slate-500">
+                          {student.location
+                            ? `Location: ${student.location}`
+                            : "Location not set"}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">
                           {student.birthDate
                             ? `Birth date: ${student.birthDate}`
                             : "Birth date not set"}
@@ -287,6 +300,16 @@ function StudentsPage() {
                             value={editStudentGrade}
                             onChange={(e) => setEditStudentGrade(e.target.value)}
                             className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                          />
+                        </label>
+
+                        <label className="block space-y-2">
+                          <span className="text-sm font-medium text-slate-700">Location (City / Area)</span>
+                          <input
+                            value={editStudentLocation}
+                            onChange={(e) => setEditStudentLocation(e.target.value)}
+                            className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                            placeholder="Raleigh, NC"
                           />
                         </label>
 
@@ -363,6 +386,7 @@ function StudentsPage() {
                       <div>
                         <p className="text-sm font-medium text-slate-700">{student.displayName}</p>
                         <p className="text-xs text-slate-500">Grade {student.gradeLevel || "—"}</p>
+                        <p className="text-xs text-slate-500">{student.location || "Location not set"}</p>
                       </div>
                       <button
                         type="button"
@@ -434,6 +458,19 @@ function StudentsPage() {
                     placeholder="9"
                   />
                   <p className="text-xs text-slate-500">Grade is required for every student profile.</p>
+                </label>
+
+                <label className="block space-y-2">
+                  <span className="text-sm font-medium text-slate-700">Location (City / Area)</span>
+                  <input
+                    value={newStudentLocation}
+                    onChange={(e) => setNewStudentLocation(e.target.value)}
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                    placeholder="Raleigh, NC"
+                  />
+                  <p className="text-xs text-slate-500">
+                    Used for AI local activity suggestions in rewards.
+                  </p>
                 </label>
 
                 <label className="block space-y-2">

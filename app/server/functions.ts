@@ -43,6 +43,7 @@ import {
   generateNodeExpansion,
   generateQuizDraft,
   generateRewardSuggestions,
+  generateRewardSuggestionForTier,
   generateWeekPlanWithAI as aiGenerateWeekPlan,
   type PlannerAssignment,
   type PlannerSkillContext,
@@ -2337,6 +2338,7 @@ const createStudentProfileInlineInput = z.object({
   displayName: studentDisplayNameSchema,
   pin: z.string().regex(/^\d{4,6}$/),
   gradeLevel: studentGradeLevelSchema,
+  location: z.string().trim().max(120).optional(),
   birthDate: z.string().optional(),
 });
 
@@ -2360,6 +2362,7 @@ export const createStudentProfileInline = createServerFn({ method: "POST" })
       parentUserId: session.user.id,
       displayName: data.displayName.trim(),
       gradeLevel: data.gradeLevel.trim(),
+      location: data.location?.trim() || null,
       birthDate: data.birthDate?.trim() || null,
       pinHash,
       status: "active",
@@ -2399,6 +2402,7 @@ export const getManagedStudents = createServerFn({ method: "GET" }).handler(asyn
       id: profile.id,
       displayName: profile.displayName,
       gradeLevel: profile.gradeLevel ?? "",
+      location: profile.location ?? "",
       birthDate: profile.birthDate ?? "",
       status: profile.status,
       createdAt: profile.createdAt,
@@ -2576,6 +2580,7 @@ const updateStudentProfileInput = z.object({
   profileId: z.string().min(1),
   displayName: studentDisplayNameSchema,
   gradeLevel: studentGradeLevelSchema,
+  location: z.string().trim().max(120).optional(),
   birthDate: z.string().optional(),
   pin: z.string().regex(/^\d{4,6}$/).optional(),
 });
@@ -2609,6 +2614,7 @@ export const updateStudentProfile = createServerFn({ method: "POST" })
       .set({
         displayName: data.displayName.trim(),
         gradeLevel: data.gradeLevel.trim(),
+        location: data.location?.trim() || null,
         birthDate: data.birthDate?.trim() || null,
         ...(data.pin ? { pinHash: await hashStudentPin(data.pin) } : {}),
         updatedAt: new Date().toISOString(),
@@ -2809,6 +2815,7 @@ const createStudentProfileInput = z.object({
   displayName: studentDisplayNameSchema,
   pin: z.string().regex(/^\d{4,8}$/),
   gradeLevel: studentGradeLevelSchema,
+  location: z.string().trim().max(120).optional(),
   birthDate: z.string().optional(),
 });
 
@@ -2850,6 +2857,7 @@ export const createStudentProfile = createServerFn({ method: "POST" })
       parentUserId: session.user.id,
       displayName: data.displayName.trim(),
       gradeLevel: data.gradeLevel.trim(),
+      location: data.location?.trim() || null,
       birthDate: data.birthDate?.trim() || null,
       pinHash,
       status: "active",
@@ -8430,9 +8438,22 @@ const createRewardTrackInput = z.object({
       estimatedValue: z.string().optional(),
       isBonusTier: z.boolean().optional(),
       xpThreshold: z.number().int().nonnegative().optional(),
+      imageUrl: z.string().optional(),
     }),
   ),
 });
+
+function computeRewardTierThreshold(input: {
+  tierNumber: number;
+  totalXpGoal: number;
+  isBonusTier?: boolean;
+}) {
+  if (input.isBonusTier || input.tierNumber > 5) {
+    return Math.round(input.totalXpGoal * 1.2);
+  }
+
+  return Math.round((input.tierNumber / 5) * input.totalXpGoal);
+}
 
 export const createRewardTrack = createServerFn({ method: "POST" })
   .inputValidator((data) => createRewardTrackInput.parse(data))
@@ -8477,13 +8498,18 @@ export const createRewardTrack = createServerFn({ method: "POST" })
       trackId,
       organizationId,
       tierNumber: tier.tierNumber,
-      xpThreshold: tier.xpThreshold ?? Math.round((tier.tierNumber / 10) * totalXpGoal),
+      xpThreshold: tier.xpThreshold ?? computeRewardTierThreshold({
+        tierNumber: tier.tierNumber,
+        totalXpGoal,
+        isBonusTier: tier.isBonusTier,
+      }),
       title: tier.title,
       description: tier.description ?? null,
       icon: tier.icon ?? "🎁",
       rewardType: tier.rewardType ?? "treat",
       estimatedValue: tier.estimatedValue ?? null,
       isBonusTier: tier.isBonusTier ?? false,
+      imageUrl: tier.imageUrl ?? null,
       createdAt: now,
       updatedAt: now,
     }));
@@ -8552,6 +8578,7 @@ const upsertRewardTierInput = z.object({
   estimatedValue: z.string().optional(),
   xpThreshold: z.number().int().nonnegative().optional(),
   isBonusTier: z.boolean().optional(),
+  imageUrl: z.string().optional(),
 });
 
 export const upsertRewardTier = createServerFn({ method: "POST" })
@@ -8574,8 +8601,11 @@ export const upsertRewardTier = createServerFn({ method: "POST" })
     if (!track) throw new Error("NOT_FOUND");
 
     const now = new Date().toISOString();
-    const threshold =
-      data.xpThreshold ?? Math.round((data.tierNumber / 10) * track.totalXpGoal);
+    const threshold = data.xpThreshold ?? computeRewardTierThreshold({
+      tierNumber: data.tierNumber,
+      totalXpGoal: track.totalXpGoal,
+      isBonusTier: data.isBonusTier,
+    });
 
     if (data.tierId) {
       await db
@@ -8589,6 +8619,7 @@ export const upsertRewardTier = createServerFn({ method: "POST" })
           estimatedValue: data.estimatedValue ?? null,
           xpThreshold: threshold,
           isBonusTier: data.isBonusTier ?? false,
+          ...(data.imageUrl !== undefined ? { imageUrl: data.imageUrl } : {}),
           updatedAt: now,
         })
         .where(eq(rewardTiers.id, data.tierId));
@@ -8608,6 +8639,7 @@ export const upsertRewardTier = createServerFn({ method: "POST" })
       rewardType: data.rewardType ?? "treat",
       estimatedValue: data.estimatedValue ?? null,
       isBonusTier: data.isBonusTier ?? false,
+      imageUrl: data.imageUrl ?? null,
       createdAt: now,
       updatedAt: now,
     });
@@ -8647,6 +8679,61 @@ export const deleteRewardTier = createServerFn({ method: "POST" })
     await db.delete(rewardTiers).where(eq(rewardTiers.id, data.tierId));
 
     return { success: true };
+  });
+
+// ── Parent write: upload reward tier image ────────────────────────────────────
+
+const uploadRewardImageInput = z.object({
+  tierId: z.string(),
+  // base64-encoded image data (without data URL prefix)
+  base64: z.string().min(1),
+  mimeType: z.string().min(1),
+});
+
+export const uploadRewardImage = createServerFn({ method: "POST" })
+  .inputValidator((data) => uploadRewardImageInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const tier = await db.query.rewardTiers.findFirst({
+      where: eq(rewardTiers.id, data.tierId),
+    });
+    if (!tier) throw new Error("NOT_FOUND");
+
+    const track = await db.query.rewardTracks.findFirst({
+      where: and(
+        eq(rewardTracks.id, tier.trackId),
+        eq(rewardTracks.organizationId, organizationId),
+      ),
+    });
+    if (!track) throw new Error("FORBIDDEN");
+
+    // Store in R2 under rewards/ prefix
+    const ext = data.mimeType.split("/")[1] ?? "jpg";
+    const key = `rewards/${organizationId}/${data.tierId}.${ext}`;
+    const bytes = Uint8Array.from(atob(data.base64), (c) => c.charCodeAt(0));
+    await env.BUCKET.put(key, bytes, {
+      httpMetadata: { contentType: data.mimeType },
+    });
+
+    // Retrieve and return as a data URL so it can be displayed without a public CDN
+    const obj = await env.BUCKET.get(key);
+    if (!obj) throw new Error("Upload failed");
+    const buf = await obj.arrayBuffer();
+    const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+    const dataUrl = `data:${data.mimeType};base64,${b64}`;
+
+    // Persist data URL on the tier row
+    const now = new Date().toISOString();
+    await db.update(rewardTiers).set({ imageUrl: dataUrl, updatedAt: now }).where(eq(rewardTiers.id, data.tierId));
+
+    return { dataUrl };
   });
 
 // ── Parent write: activate track ──────────────────────────────────────────────
@@ -8796,6 +8883,61 @@ export const deliverReward = createServerFn({ method: "POST" })
     return db.query.rewardClaims.findFirst({ where: eq(rewardClaims.id, data.claimId) });
   });
 
+const setRewardClaimDeliveredInput = z.object({
+  claimId: z.string(),
+  delivered: z.boolean(),
+  parentNote: z.string().optional(),
+});
+
+export const setRewardClaimDelivered = createServerFn({ method: "POST" })
+  .inputValidator((data) => setRewardClaimDeliveredInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const claim = await db.query.rewardClaims.findFirst({
+      where: and(
+        eq(rewardClaims.id, data.claimId),
+        eq(rewardClaims.organizationId, organizationId),
+      ),
+    });
+    if (!claim) throw new Error("NOT_FOUND");
+    if (claim.status !== "claimed" && claim.status !== "delivered") {
+      throw new Error("INVALID_STATUS");
+    }
+
+    const now = new Date().toISOString();
+    if (data.delivered) {
+      await db
+        .update(rewardClaims)
+        .set({
+          status: "delivered",
+          deliveredAt: now,
+          deliveredByUserId: session.user.id,
+          parentNote: data.parentNote ?? claim.parentNote ?? null,
+          updatedAt: now,
+        })
+        .where(eq(rewardClaims.id, data.claimId));
+    } else {
+      await db
+        .update(rewardClaims)
+        .set({
+          status: "claimed",
+          deliveredAt: null,
+          deliveredByUserId: null,
+          updatedAt: now,
+        })
+        .where(eq(rewardClaims.id, data.claimId));
+    }
+
+    return db.query.rewardClaims.findFirst({ where: eq(rewardClaims.id, data.claimId) });
+  });
+
 // ── Student: get active reward track ─────────────────────────────────────────
 
 const getActiveRewardTrackForStudentInput = z.object({ profileId: z.string() });
@@ -8925,10 +9067,73 @@ export const aiSuggestRewards = createServerFn({ method: "POST" })
     const suggestions = await generateRewardSuggestions({
       gradeLevel: profile.gradeLevel ?? "unknown",
       studentName: profile.displayName,
+      location: profile.location ?? undefined,
       count: 10,
     });
 
     return suggestions;
+  });
+
+// ── AI: suggest rewards for a single tier + fetch image ───────────────────────
+
+const aiSuggestTierRewardInput = z.object({
+  profileId: z.string(),
+  tierNumber: z.number().int().min(1),
+  count: z.number().int().min(1).max(8).default(5),
+  steeringPrompt: z.string().max(200).optional(),
+});
+
+export const aiSuggestTierReward = createServerFn({ method: "POST" })
+  .inputValidator((data) => aiSuggestTierRewardInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    const profile = await db.query.profiles.findFirst({
+      where: and(
+        eq(profiles.id, data.profileId),
+        eq(profiles.organizationId, organizationId),
+      ),
+    });
+    if (!profile) throw new Error("NOT_FOUND");
+
+    const suggestions = await generateRewardSuggestionForTier({
+      tierNumber: data.tierNumber,
+      gradeLevel: profile.gradeLevel ?? "unknown",
+      studentName: profile.displayName,
+      location: profile.location ?? undefined,
+      steeringPrompt: data.steeringPrompt?.trim() || undefined,
+      count: data.count,
+    });
+
+    // Fetch a photo from Unsplash Source (no API key needed) for each suggestion.
+    // We request a small 200×200 image and convert it to a data URL so it can be
+    // stored directly without a separate CDN endpoint.
+    const withImages = await Promise.all(
+      suggestions.map(async (s) => {
+        try {
+          const query = encodeURIComponent(s.imageSearchQuery);
+          // Unsplash Source returns a random matching photo — deterministic enough
+          // for a preview. Using 200×200 keeps payload small.
+          const url = `https://source.unsplash.com/200x200/?${query}`;
+          const resp = await fetch(url, { redirect: "follow" });
+          if (!resp.ok) return { ...s, imageUrl: null };
+          const buf = await resp.arrayBuffer();
+          const mime = resp.headers.get("content-type") ?? "image/jpeg";
+          const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+          return { ...s, imageUrl: `data:${mime};base64,${b64}` };
+        } catch {
+          return { ...s, imageUrl: null };
+        }
+      }),
+    );
+
+    return withImages;
   });
 
 // ─── Marking Periods ──────────────────────────────────────────────────────────
@@ -9129,15 +9334,49 @@ const richDemoSeedWithPinInput = z.object({
 
 const RICH_DEMO_SCHOOL_YEAR = "2025-2026";
 
-// Keep in sync with DEMO_STUDENTS above — same 3 students, same subjects.
+// Keep in sync with DEMO_STUDENTS above.
 const RICH_DEMO_STUDENTS = [
-  { displayName: "Ava Rivers", gradeLevel: "4", performanceTier: "high" as const },
-  { displayName: "Noah Chen", gradeLevel: "6", performanceTier: "high" as const },
-  { displayName: "Mia Patel", gradeLevel: "8", performanceTier: "medium" as const },
+  {
+    displayName: "Ava Rivers",
+    gradeLevel: "4",
+    performanceTier: "high" as const,
+    location: "Raleigh, NC",
+    rewardTheme: "disney" as const,
+    includeBonusTier: false,
+    rewardSteering: "Disney current inspired by Lilo and Stitch style family-friendly rewards.",
+  },
+  {
+    displayName: "Leo Martinez",
+    gradeLevel: "5",
+    performanceTier: "medium" as const,
+    location: "Orlando, FL",
+    rewardTheme: "food" as const,
+    includeBonusTier: false,
+    rewardSteering: "Food current with fun local treats and a great family dinner as the top regular tier.",
+  },
+  {
+    displayName: "Noah Chen",
+    gradeLevel: "6",
+    performanceTier: "high" as const,
+    location: "Austin, TX",
+    rewardTheme: "pokemon" as const,
+    includeBonusTier: true,
+    rewardSteering: "Pokemon current with collectible rewards and activity experiences.",
+  },
+  {
+    displayName: "Mia Patel",
+    gradeLevel: "8",
+    performanceTier: "medium" as const,
+    location: "Seattle, WA",
+    rewardTheme: "tech" as const,
+    includeBonusTier: true,
+    rewardSteering: "Tech current with gaming/devices progression; includes ideas like Ninja Turtles, cars, and fandom variants in low tiers.",
+  },
 ];
 
 const RICH_DEMO_SUBJECTS_BY_GRADE: Record<string, string[]> = {
   "4": ["Math", "Language Arts"],
+  "5": ["Math", "Language Arts", "Science"],
   "6": ["Math", "Earth Science", "US History"],
   "8": ["Pre-Algebra", "Literature", "Life Science"],
 };
@@ -9161,6 +9400,8 @@ export const RICH_DEMO_SEED_PREVIEW = (() => {
       grade: s.gradeLevel,
       subjects: RICH_DEMO_SUBJECTS_BY_GRADE[s.gradeLevel] ?? [],
       tier: s.performanceTier,
+      location: s.location,
+      rewardTheme: s.rewardTheme,
     })),
     totalStudents: RICH_DEMO_STUDENTS.length,
     totalCourses,
@@ -9310,6 +9551,7 @@ export const seedDemoPhase1 = createServerFn({ method: "POST" })
         parentUserId: session.user.id,
         displayName: student.displayName,
         gradeLevel: student.gradeLevel,
+        location: student.location,
         pinHash,
         status: "active",
         createdAt: now,
@@ -9646,7 +9888,7 @@ export const seedDemoPhase4 = createServerFn({ method: "POST" })
           cluster: node.cluster,
           nodeType: node.nodeType,
         })),
-        { width: 1200, height: 900 },
+        { width: 1800, height: 1400, minNodeDistance: 120 },
       );
       const forkSourceNodeIds: Set<string> =
         (positionMap as Map<string, { x: number; y: number }> & { forkIds?: Set<string> }).forkIds ??
@@ -10142,13 +10384,57 @@ export const seedDemoPhase7 = createServerFn({ method: "POST" })
     const organizationId = await resolveActiveOrganizationId(session.user.id, session.session.activeOrganizationId);
     const now = new Date().toISOString();
 
-    const REWARD_TIERS_TEMPLATE = [
-      { tierNumber: 1, xpThreshold: 500, title: "First Star", icon: "⭐", rewardType: "treat", estimatedValue: "Ice cream outing" },
-      { tierNumber: 2, xpThreshold: 1500, title: "Silver Scholar", icon: "🥈", rewardType: "activity", estimatedValue: "Movie night" },
-      { tierNumber: 3, xpThreshold: 3000, title: "Gold Champion", icon: "🏆", rewardType: "item", estimatedValue: "$15 book store gift card" },
-      { tierNumber: 4, xpThreshold: 5000, title: "Platinum Legend", icon: "💎", rewardType: "experience", estimatedValue: "Day trip of choice" },
-      { tierNumber: 5, xpThreshold: 8000, title: "Master Scholar", icon: "🎓", rewardType: "experience", estimatedValue: "Special family experience", isBonusTier: true },
-    ];
+    type DemoRewardTier = {
+      tierNumber: number;
+      xpThreshold: number;
+      title: string;
+      icon: string;
+      rewardType: "treat" | "activity" | "item" | "screen_time" | "experience";
+      estimatedValue: string;
+      isBonusTier?: boolean;
+    };
+
+    function buildRewardTemplate(theme: "disney" | "pokemon" | "food" | "tech"): DemoRewardTier[] {
+      const baseThresholds = [1200, 2500, 3900, 5400, 7000, 8400];
+      if (theme === "disney") {
+        return [
+          { tierNumber: 1, xpThreshold: baseThresholds[0]!, title: "Disney Treat Pick", icon: "🍦", rewardType: "treat", estimatedValue: "$5-10" },
+          { tierNumber: 2, xpThreshold: baseThresholds[1]!, title: "Disney Movie Night", icon: "🎬", rewardType: "experience", estimatedValue: "$10-25" },
+          { tierNumber: 3, xpThreshold: baseThresholds[2]!, title: "Disney Merch Item", icon: "🧸", rewardType: "item", estimatedValue: "$20-40" },
+          { tierNumber: 4, xpThreshold: baseThresholds[3]!, title: "Theme Activity Day", icon: "🎡", rewardType: "activity", estimatedValue: "$35-70" },
+          { tierNumber: 5, xpThreshold: baseThresholds[4]!, title: "Disney Family Outing", icon: "🏰", rewardType: "experience", estimatedValue: "$60-120" },
+          { tierNumber: 6, xpThreshold: baseThresholds[5]!, title: "Bonus Disney Big Reward", icon: "⭐", rewardType: "item", estimatedValue: "$100-200", isBonusTier: true },
+        ];
+      }
+      if (theme === "pokemon") {
+        return [
+          { tierNumber: 1, xpThreshold: baseThresholds[0]!, title: "Pokemon Card Pack", icon: "🃏", rewardType: "item", estimatedValue: "$5-12" },
+          { tierNumber: 2, xpThreshold: baseThresholds[1]!, title: "Pokemon Deck Upgrade", icon: "🃏", rewardType: "item", estimatedValue: "$12-25" },
+          { tierNumber: 3, xpThreshold: baseThresholds[2]!, title: "Pokemon Activity Night", icon: "🎮", rewardType: "activity", estimatedValue: "$20-40" },
+          { tierNumber: 4, xpThreshold: baseThresholds[3]!, title: "Pokemon Merch Reward", icon: "🎒", rewardType: "item", estimatedValue: "$35-70" },
+          { tierNumber: 5, xpThreshold: baseThresholds[4]!, title: "Pokemon Big Experience", icon: "🏆", rewardType: "experience", estimatedValue: "$60-120" },
+          { tierNumber: 6, xpThreshold: baseThresholds[5]!, title: "Bonus Pokemon Tech", icon: "⭐", rewardType: "item", estimatedValue: "$100-200", isBonusTier: true },
+        ];
+      }
+      if (theme === "food") {
+        return [
+          { tierNumber: 1, xpThreshold: baseThresholds[0]!, title: "Favorite Snack Pick", icon: "🍿", rewardType: "treat", estimatedValue: "$5-10" },
+          { tierNumber: 2, xpThreshold: baseThresholds[1]!, title: "Case Of Soda", icon: "🥤", rewardType: "treat", estimatedValue: "$8-15" },
+          { tierNumber: 3, xpThreshold: baseThresholds[2]!, title: "Food Outing", icon: "🍔", rewardType: "experience", estimatedValue: "$20-40" },
+          { tierNumber: 4, xpThreshold: baseThresholds[3]!, title: "Family Restaurant", icon: "🍽️", rewardType: "experience", estimatedValue: "$35-70" },
+          { tierNumber: 5, xpThreshold: baseThresholds[4]!, title: "Premium Dinner Night", icon: "🍽️", rewardType: "experience", estimatedValue: "$60-120" },
+          { tierNumber: 6, xpThreshold: baseThresholds[5]!, title: "Bonus Tasting Menu", icon: "⭐", rewardType: "experience", estimatedValue: "$100-200", isBonusTier: true },
+        ];
+      }
+      return [
+        { tierNumber: 1, xpThreshold: baseThresholds[0]!, title: "Screen Time Block", icon: "🖥️", rewardType: "screen_time", estimatedValue: "$0-10" },
+        { tierNumber: 2, xpThreshold: baseThresholds[1]!, title: "Game Or Snack Reward", icon: "🎁", rewardType: "treat", estimatedValue: "$8-20" },
+        { tierNumber: 3, xpThreshold: baseThresholds[2]!, title: "Accessory Upgrade", icon: "🎮", rewardType: "item", estimatedValue: "$20-45" },
+        { tierNumber: 4, xpThreshold: baseThresholds[3]!, title: "Tech Activity Outing", icon: "🏎️", rewardType: "activity", estimatedValue: "$35-80" },
+        { tierNumber: 5, xpThreshold: baseThresholds[4]!, title: "Major Tech Item", icon: "📱", rewardType: "item", estimatedValue: "$60-140" },
+        { tierNumber: 6, xpThreshold: baseThresholds[5]!, title: "Bonus Tech Reward", icon: "⭐", rewardType: "item", estimatedValue: "$100-200", isBonusTier: true },
+      ];
+    }
 
     let rewardTracksCreated = 0;
     let weekPlanCreated = 0;
@@ -10165,6 +10451,28 @@ export const seedDemoPhase7 = createServerFn({ method: "POST" })
         columns: { xpEarned: true },
       });
       const totalXp = progressRows.reduce((sum, r) => sum + r.xpEarned, 0);
+      const rewardTemplate = buildRewardTemplate(student.rewardTheme);
+      const trackNamePrefix = student.displayName.split(" ")[0] ?? student.displayName;
+      const trackTitle =
+        student.rewardTheme === "pokemon"
+          ? `${trackNamePrefix}'s Pokemon Current`
+          : student.rewardTheme === "food"
+            ? `${trackNamePrefix}'s Food Current`
+            : student.rewardTheme === "disney"
+              ? `${trackNamePrefix}'s Disney Current`
+              : `${trackNamePrefix}'s Tech Current`;
+      const trackDescription =
+        student.rewardTheme === "pokemon"
+          ? `Pokemon-themed rewards for ${RICH_DEMO_SCHOOL_YEAR}. ${student.rewardSteering}`
+          : student.rewardTheme === "food"
+            ? `Food-themed rewards for ${RICH_DEMO_SCHOOL_YEAR}. ${student.rewardSteering}`
+            : student.rewardTheme === "disney"
+              ? `Disney-themed rewards for ${RICH_DEMO_SCHOOL_YEAR}. ${student.rewardSteering}`
+              : `Tech-themed rewards for ${RICH_DEMO_SCHOOL_YEAR}. ${student.rewardSteering}`;
+      const totalXpGoal = rewardTemplate.find((tier) => tier.tierNumber === 5)?.xpThreshold ?? 7000;
+      const tiersToInsert = student.includeBonusTier
+        ? rewardTemplate
+        : rewardTemplate.filter((tier) => !tier.isBonusTier);
 
       // Create reward track
       const trackId = crypto.randomUUID();
@@ -10173,12 +10481,12 @@ export const seedDemoPhase7 = createServerFn({ method: "POST" })
         organizationId,
         profileId,
         createdByUserId: session.user.id,
-        title: `${student.displayName.split(" ")[0]}'s 2025-2026 Adventure Track`,
-        description: `Earn XP by completing lessons and skill trees throughout the school year!`,
+        title: trackTitle,
+        description: trackDescription,
         isActive: true,
         schoolYear: RICH_DEMO_SCHOOL_YEAR,
         startedAt: "2025-09-01",
-        totalXpGoal: 8000,
+        totalXpGoal,
         createdAt: now,
         updatedAt: now,
       });
@@ -10186,7 +10494,7 @@ export const seedDemoPhase7 = createServerFn({ method: "POST" })
 
       // Create tiers
       const tierIds: string[] = [];
-      for (const tier of REWARD_TIERS_TEMPLATE) {
+      for (const tier of tiersToInsert) {
         const tierId = crypto.randomUUID();
         tierIds.push(tierId);
         await db.insert(rewardTiers).values({

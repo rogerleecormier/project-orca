@@ -158,9 +158,9 @@ const FEATURES = [
     ),
   },
   {
-    title: "Reward Tracks",
+    title: "Orca Currents",
     description:
-      "Track XP snapshots from skill-map progress and auto-unlock claimable tiers. Students claim rewards, parents deliver them, and pending claims stay visible in-app.",
+      "Track XP snapshots from skill-map progress and auto-unlock claimable tiers. Students claim rewards, parents toggle delivery, and pending claims stay visible in-app.",
     accentClass: "border-amber-200 bg-amber-50/80 text-amber-900",
     iconClass: "bg-amber-100 text-amber-700",
     icon: (
@@ -203,7 +203,7 @@ const FEATURES = [
   {
     title: "Student Workspace",
     description:
-      "Give students a focused dashboard with assignments, submission flow, today’s plan, skill-map progress, and reward-track claiming in one place.",
+      "Give students a focused dashboard with assignments, submission flow, today’s plan, skill-map progress, and Orca Current claiming in one place.",
     accentClass: "border-indigo-200 bg-indigo-50/80 text-indigo-900",
     iconClass: "bg-indigo-100 text-indigo-700",
     icon: (
@@ -267,7 +267,7 @@ const HOW_IT_WORKS = [
     step: "4",
     title: "Grade, release, and reward",
     description:
-      "Review submissions, publish results, and let XP progress unlock reward-track tiers students can claim.",
+      "Review submissions, publish results, and let XP progress unlock Orca Current tiers students can claim.",
   },
 ] as const;
 
@@ -898,7 +898,7 @@ function ProgressSpotlightSection() {
             </div>
 
             <div className="rounded-2xl border border-violet-200/60 bg-gradient-to-br from-slate-900 via-violet-950 to-indigo-950 p-4 shadow-sm">
-              <p className="text-xs font-semibold uppercase tracking-wide text-violet-400">Reward Track</p>
+              <p className="text-xs font-semibold uppercase tracking-wide text-violet-400">Orca Current</p>
               <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-800">
                 <div className="h-full w-[38%] rounded-full" style={{ background: "linear-gradient(90deg, var(--orca-sea-bright), var(--orca-sand))" }} />
               </div>
@@ -932,7 +932,7 @@ function ProgressSpotlightSection() {
             <p className="mt-4 text-slate-600 leading-relaxed">
               Quiz submissions can be auto-scored instantly, written responses can be scored with
               AI assistance, and parents control when graded work is released to students. XP then
-              drives reward-track unlocks and claim/delivery workflows.
+              drives Orca Current unlocks and claim/delivery workflows.
             </p>
             <ul className="mt-6 space-y-3">
               {[

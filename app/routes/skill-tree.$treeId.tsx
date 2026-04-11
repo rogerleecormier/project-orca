@@ -392,6 +392,23 @@ function SkillTreePage() {
     return () => obs.disconnect();
   }, []);
 
+  // ── Auto-layout on first load if nodes are not meaningfully spread ───────────
+  // Detects when stored positions are at origin / collapsed (newly generated tree
+  // or tree whose positions were never saved) and runs a silent auto-layout so
+  // the tree is immediately visible in both parent and student views.
+  useEffect(() => {
+    if (treeData.nodes.length < 2) return;
+    const xs = treeData.nodes.map((n) => n.positionX);
+    const ys = treeData.nodes.map((n) => n.positionY);
+    const spreadX = Math.max(...xs) - Math.min(...xs);
+    const spreadY = Math.max(...ys) - Math.min(...ys);
+    // If all nodes are within a 60px square (effectively stacked/un-laid-out)
+    if (spreadX < 60 && spreadY < 60) {
+      void handleAutoLayout();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── Debounced viewport save ──────────────────────────────────────────────────
   const saveViewportTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {

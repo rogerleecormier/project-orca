@@ -122,7 +122,7 @@ const DOC_SECTIONS = [
   },
   {
     id: "reward-tracks",
-    title: "Reward Tracks",
+    title: "Orca Currents",
     content: (
       <div className="space-y-4">
         <h3 className="text-xl font-semibold text-slate-800">Gamifying Progress</h3>
@@ -132,7 +132,7 @@ const DOC_SECTIONS = [
         <h4 className="font-semibold text-slate-800 pt-2">Steps to manage rewards:</h4>
         <ol className="list-decimal pl-5 space-y-2 text-slate-600">
           <li>Navigate to "Rewards" in the parent dashboard.</li>
-          <li>Create a new Reward Track and define tiers (e.g., Tier 1 at 500 XP, Tier 2 at 1000 XP).</li>
+          <li>Create a new Orca Current and define tiers (e.g., Tier 1 at 500 XP, Tier 2 at 1000 XP).</li>
           <li>Assign real-world or digital rewards to each tier.</li>
           <li>When a student reaches an XP threshold, they click "Claim" in their dashboard.</li>
           <li>Review the pending claim in your dashboard and click "Mark as Delivered" once you have fulfilled the reward.</li>

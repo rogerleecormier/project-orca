@@ -44,9 +44,9 @@ const EDGE_STYLE = {
 const DRAW_ORDER: Record<string, number> = { bonus: 0, optional: 1, required: 2, fork: 3 };
 const ROUTE_ORDER: Record<string, number> = { required: 0, fork: 1, optional: 2, bonus: 3 };
 
-const ENDPOINT_GAP = 1.5;
-const NODE_CLEARANCE = 18;
-const EDGE_CLEARANCE = 22;
+const ENDPOINT_GAP = 2;
+const NODE_CLEARANCE = 14;  // padding around obstacle nodes — enough to clear the visual radius without forcing unnecessary detours
+const EDGE_CLEARANCE = 14;  // min spacing between parallel edges
 const DEFAULT_XP = 100;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -307,9 +307,35 @@ function tangentAtPolylineFraction(points: Point[], fraction: number): Point {
 function buildPolylinePath(points: Point[]): string {
   if (points.length === 0) return "";
   if (points.length === 1) return `M ${points[0]!.x} ${points[0]!.y}`;
-  let d = `M ${points[0]!.x} ${points[0]!.y}`;
-  for (let i = 1; i < points.length; i++) {
-    d += ` L ${points[i]!.x} ${points[i]!.y}`;
+  if (points.length === 2) return `M ${points[0]!.x} ${points[0]!.y} L ${points[1]!.x} ${points[1]!.y}`;
+
+  // Convert the point list into a smooth cubic Bézier path.
+  // For each interior segment we compute control points from the
+  // neighbouring points so adjacent segments share tangents → true smooth curve.
+  const p = points;
+  let d = `M ${p[0]!.x.toFixed(1)} ${p[0]!.y.toFixed(1)}`;
+
+  if (p.length === 3) {
+    // Single curve through 3 points: quadratic Bézier
+    d += ` Q ${p[1]!.x.toFixed(1)} ${p[1]!.y.toFixed(1)} ${p[2]!.x.toFixed(1)} ${p[2]!.y.toFixed(1)}`;
+    return d;
+  }
+
+  // Catmull-Rom → cubic Bézier conversion (tension 0.5)
+  // For each segment i → i+1 the control points are derived from neighbours.
+  const cp = (tension: number, a: Point, b: Point, c: Point, d2: Point) => ({
+    cp1: { x: b.x + (c.x - a.x) * tension, y: b.y + (c.y - a.y) * tension },
+    cp2: { x: c.x - (d2.x - b.x) * tension, y: c.y - (d2.y - b.y) * tension },
+  });
+  const tension = 0.48;  // higher tension → fuller, rounder Bézier arcs
+
+  for (let i = 0; i < p.length - 1; i++) {
+    const p0 = p[Math.max(0, i - 1)]!;
+    const p1 = p[i]!;
+    const p2 = p[i + 1]!;
+    const p3 = p[Math.min(p.length - 1, i + 2)]!;
+    const { cp1, cp2 } = cp(tension, p0, p1, p2, p3);
+    d += ` C ${cp1.x.toFixed(1)} ${cp1.y.toFixed(1)} ${cp2.x.toFixed(1)} ${cp2.y.toFixed(1)} ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
   }
   return d;
 }
@@ -340,7 +366,7 @@ function buildRouteCandidates(edge: SkillTreeEdge, src: SkillTreeNode, tgt: Skil
     verticalish ? 140 : 112,
   );
 
-  const multipliers = edge.edgeType === "required" ? [0.7, 1, 1.35] : [0.75, 1.1, 1.45, 1.8];
+  const multipliers = edge.edgeType === "required" ? [0.55, 0.85, 1.2, 1.65, 2.1] : [0.6, 0.95, 1.35, 1.8, 2.3];
   const candidates: Point[][] = [];
   const seen = new Set<string>();
 
@@ -352,6 +378,9 @@ function buildRouteCandidates(edge: SkillTreeEdge, src: SkillTreeNode, tgt: Skil
     seen.add(key);
     candidates.push(clean);
   };
+
+  // Always offer the straight line first — it wins whenever nothing is in the way.
+  pushCandidate([start, end]);
 
   const slantBias = ((seed % 5) - 2) * 0.16;
   if (!verticalish || Math.abs(directVector.y) < 220) {
@@ -373,8 +402,9 @@ function buildRouteCandidates(edge: SkillTreeEdge, src: SkillTreeNode, tgt: Skil
       const endLead = add(end, add(scale(dir, -lead), scale(perp, offset * 0.58)));
       pushCandidate([start, startLead, mid, endLead, end]);
 
+      // Lane-based routes — effective at bypassing clusters
       if (verticalish || Math.abs(directVector.x) < 150) {
-        const laneOffset = clamp(Math.abs(offset) * 1.08, 34, 170) * side;
+        const laneOffset = clamp(Math.abs(offset) * 1.08, 34, 220) * side;
         pushCandidate([
           start,
           { x: start.x + laneOffset * 0.7, y: start.y + verticalDirection * lead * 0.4 },
@@ -383,10 +413,18 @@ function buildRouteCandidates(edge: SkillTreeEdge, src: SkillTreeNode, tgt: Skil
           end,
         ]);
       }
+
+      // Wide-arc bypass — routes well clear of dense node clusters
+      const wideOffset = clamp(Math.abs(offset) * 1.5, 60, 280) * side;
+      pushCandidate([
+        start,
+        { x: start.x + wideOffset * 0.45, y: start.y + verticalDirection * lead * 0.55 },
+        { x: midpoint(start, end).x + wideOffset, y: midpoint(start, end).y },
+        { x: end.x + wideOffset * 0.35, y: end.y - verticalDirection * lead * 0.45 },
+        end,
+      ]);
     }
   }
-
-  pushCandidate([start, end]);
 
   return candidates;
 }
@@ -398,7 +436,10 @@ function scoreRouteCandidate(
   routedSegments: Segment[],
 ): number {
   const segments = polylineSegments(points, edge.id);
-  let score = polylineLength(points) * 0.05 + Math.max(0, points.length - 2) * 7;
+  // Straight lines (2 points) get a strong preference bonus — no complexity penalty,
+  // and a length coefficient half of curved paths. They only lose when blocked.
+  const isStraight = points.length <= 2;
+  let score = polylineLength(points) * (isStraight ? 0.025 : 0.05) + Math.max(0, points.length - 2) * 8;
 
   for (const node of nodes) {
     if (node.id === edge.sourceNodeId || node.id === edge.targetNodeId) continue;
@@ -411,9 +452,10 @@ function scoreRouteCandidate(
     }
 
     if (closestDistance < avoidRadius) {
-      score += 6000 + (avoidRadius - closestDistance) * 180;
-    } else if (closestDistance < avoidRadius + 24) {
-      score += (avoidRadius + 24 - closestDistance) * 22;
+      // Strong penalty for passing through a node — scale by how deep we penetrate
+      score += 9000 + (avoidRadius - closestDistance) * 260;
+    } else if (closestDistance < avoidRadius + 36) {
+      score += (avoidRadius + 36 - closestDistance) * 38;
     }
   }
 
@@ -421,12 +463,12 @@ function scoreRouteCandidate(
     for (const registered of routedSegments) {
       const segmentDistance = distanceBetweenSegments(segment.a, segment.b, registered.a, registered.b);
       if (segmentsIntersect(segment.a, segment.b, registered.a, registered.b)) {
-        score += 2800;
+        score += 3800;
       }
       if (segmentDistance < EDGE_CLEARANCE) {
-        score += (EDGE_CLEARANCE - segmentDistance + 1) * 150;
-      } else if (segmentDistance < EDGE_CLEARANCE + 18) {
-        score += (EDGE_CLEARANCE + 18 - segmentDistance) * 10;
+        score += (EDGE_CLEARANCE - segmentDistance + 1) * 200;
+      } else if (segmentDistance < EDGE_CLEARANCE + 24) {
+        score += (EDGE_CLEARANCE + 24 - segmentDistance) * 14;
       }
     }
   }

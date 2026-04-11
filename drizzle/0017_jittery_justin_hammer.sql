@@ -1,0 +1,1 @@
+ALTER TABLE `reward_tiers` ADD `image_url` text;

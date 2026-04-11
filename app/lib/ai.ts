@@ -1022,9 +1022,9 @@ export function layoutForceDirected(
 
   const W         = options?.width  ?? 1800;
   const H         = options?.height ?? 1400;
-  const NODE_SEP  = Math.max(options?.minNodeDistance ?? 160, 160); // horizontal gap between same-layer nodes
-  const RANK_SEP  = 190;  // vertical gap between layers (spine)
-  const BRANCH_SEP = 140; // tighter vertical gap within branch subtrees
+  const NODE_SEP  = Math.max(options?.minNodeDistance ?? 120, 120); // horizontal gap between branch nodes — tighter now that they alternate sides
+  const RANK_SEP  = 240;  // vertical gap between spine layers — larger to fit branch subtrees
+  const BRANCH_SEP = 110; // vertical gap within branch subtrees
   const FORK_EXTRA = 50;  // extra Y gap before fork decision points
   const PAD_X     = 100;
   const PAD_Y     = 100;
@@ -1150,24 +1150,48 @@ export function layoutForceDirected(
   }
 
   // Branch subtrees hang off spine nodes horizontally.
-  // To compute the max depth a branch can descend without entering the next
-  // spine node's territory, we use the Y gap to the next spine node.
-  // Roots start at anchorY (same row as spine anchor but different X),
-  // children at anchorY + BRANCH_SEP, etc.
-  // The per-row pass only pushes nodes apart that share the exact same Y —
-  // since branch roots are at the same Y as their spine anchor but at a
-  // different X, they won't conflict as long as X placement is correct.
-  const assignBranchY = (id: string, anchorY: number, depth: number) => {
+  // Branch ROOTS start BELOW the spine anchor (depth=1 offset) so they don't
+  // visually collide with the spine node itself. Children go further down.
+  // We cap each branch subtree so it never descends past halfway to the next
+  // spine layer — this prevents overlaps between adjacent spine layers' branches.
+
+  // Build a sorted list of spine Y values so we can compute the gap to next layer.
+  const sortedSpineYs = [...spineLayerY.values()].sort((a, b) => a - b);
+  const nextSpineY = (anchorY: number): number => {
+    for (const sy of sortedSpineYs) {
+      if (sy > anchorY + 1) return sy;
+    }
+    return anchorY + RANK_SEP; // no next spine layer — use default gap
+  };
+
+  const assignBranchY = (id: string, anchorY: number, depth: number, maxY: number) => {
     if (finalY.has(id)) return;
-    finalY.set(id, anchorY + depth * BRANCH_SEP);
-    for (const kid of children.get(id) ?? []) {
-      if (!spineSet.has(kid)) assignBranchY(kid, anchorY, depth + 1);
+    const y = anchorY + depth * BRANCH_SEP;
+    // Clamp to stay within our allocated band (leave 40px margin before next spine node)
+    finalY.set(id, Math.min(y, maxY));
+    const clampedY = finalY.get(id)!;
+    const kids = children.get(id) ?? [];
+    for (const kid of kids) {
+      if (!spineSet.has(kid)) assignBranchY(kid, anchorY, depth + 1, maxY);
+    }
+    // If we hit the cap and still have children, they stack horizontally at maxY
+    if (y > maxY && kids.length > 0) {
+      for (const kid of kids) {
+        if (!spineSet.has(kid) && !finalY.has(kid)) finalY.set(kid, clampedY);
+      }
     }
   };
+
   for (const id of spineSet) {
     const anchorY = finalY.get(id)!;
+    // Allow branches to use up to 80% of the gap to the next spine node
+    const nextY   = nextSpineY(anchorY);
+    const maxBranchY = anchorY + (nextY - anchorY) * 0.82 - BRANCH_SEP * 0.5;
     for (const kid of children.get(id) ?? []) {
-      if (!spineSet.has(kid)) assignBranchY(kid, anchorY, 0);
+      if (!spineSet.has(kid)) {
+        // Start at depth=1 so branch root is BELOW the spine node
+        assignBranchY(kid, anchorY, 1, maxBranchY);
+      }
     }
   }
   for (const n of nodes) {
@@ -1204,20 +1228,29 @@ export function layoutForceDirected(
     }
   };
 
-  for (const spineId of spineSet) {
-    const branchKids = (children.get(spineId) ?? []).filter((k) => !spineSet.has(k));
-    if (branchKids.length === 0) continue;
-    console.log(`[layout] spine=${spineId} branchKids=${branchKids.length}`, branchKids.map(k => ({id:k, leaves:branchLeafCount(k)})));
+  // Track which spine nodes actually have branches, in spine order (top→bottom).
+  // We alternate the PRIMARY side for each such spine node so the tree fans out
+  // evenly on both sides of the spine rather than piling up on one side.
+  const spineNodesWithBranches = spineNodes.filter(
+    (id) => (children.get(id) ?? []).some((k) => !spineSet.has(k)),
+  );
 
-    // Split into left/right halves — odd count gives extra to right
-    const nRight = Math.ceil(branchKids.length / 2);
-    // Sort largest subtrees innermost (closest to spine) on each side
+  for (let si = 0; si < spineNodesWithBranches.length; si++) {
+    const spineId   = spineNodesWithBranches[si]!;
+    const branchKids = (children.get(spineId) ?? []).filter((k) => !spineSet.has(k));
+
+    // Primary side alternates per spine node: even spine index → right-first, odd → left-first.
+    // With a single branch kid the whole cluster goes to the primary side.
+    // With multiple kids they zigzag starting from the primary side.
+    const primaryRight = si % 2 === 0;
+
     const sorted = [...branchKids].sort((a, b) => branchLeafCount(b) - branchLeafCount(a));
     const rightKids: string[] = [];
     const leftKids:  string[] = [];
-    for (const kid of sorted) {
-      if (rightKids.length < nRight) rightKids.push(kid);
-      else leftKids.push(kid);
+    for (let i = 0; i < sorted.length; i++) {
+      const goRight = primaryRight ? i % 2 === 0 : i % 2 !== 0;
+      if (goRight) rightKids.push(sorted[i]!);
+      else         leftKids.push(sorted[i]!);
     }
 
     // Right side: accumulate outward from spine
@@ -1246,32 +1279,33 @@ export function layoutForceDirected(
   }
 
   // ── Per-row separation: push overlapping branch nodes apart ─────────────────
-  // Spine nodes are fixed at SPINE_X. For rows that mix spine + branch nodes,
-  // we push branch nodes outward (left stays left, right stays right).
+  // Group nodes that share approximately the same Y (within BRANCH_SEP * 0.4)
+  // so nodes placed at slightly different Ys still get separated horizontally.
+  // Spine nodes are fixed at SPINE_X — only branch nodes get pushed.
+  const ROW_SNAP = Math.round(BRANCH_SEP * 0.38); // snapping tolerance
+  const snapY = (y: number) => Math.round(y / ROW_SNAP) * ROW_SNAP;
+
   const byY = new Map<number, string[]>();
   for (const n of nodes) {
-    const y = finalY.get(n.id)!;
-    const bucket = byY.get(y) ?? [];
+    const sy = snapY(finalY.get(n.id)!);
+    const bucket = byY.get(sy) ?? [];
     bucket.push(n.id);
-    byY.set(y, bucket);
+    byY.set(sy, bucket);
   }
   for (const [, ids] of byY) {
     if (ids.length <= 1) continue;
-    // Separate left-of-spine and right-of-spine non-spine nodes
     const rightIds = ids.filter((id) => !spineSet.has(id) && finalX.get(id)! >= SPINE_X)
       .sort((a, b) => finalX.get(a)! - finalX.get(b)!);
     const leftIds  = ids.filter((id) => !spineSet.has(id) && finalX.get(id)! < SPINE_X)
-      .sort((a, b) => finalX.get(b)! - finalX.get(a)!); // sorted closest-to-spine first
+      .sort((a, b) => finalX.get(b)! - finalX.get(a)!);
 
-    // Push right nodes further right if too close
-    let rightMin = SPINE_X + NODE_SEP * 0.5;
+    let rightMin = SPINE_X + NODE_SEP * 0.55;
     for (const id of rightIds) {
       const cur = finalX.get(id)!;
       if (cur < rightMin) finalX.set(id, rightMin);
       rightMin = finalX.get(id)! + NODE_SEP;
     }
-    // Push left nodes further left if too close
-    let leftMax = SPINE_X - NODE_SEP * 0.5;
+    let leftMax = SPINE_X - NODE_SEP * 0.55;
     for (const id of leftIds) {
       const cur = finalX.get(id)!;
       if (cur > leftMax) finalX.set(id, leftMax);
@@ -2707,77 +2741,243 @@ export type RewardSuggestion = {
   icon: string;
   title: string;
   rewardType: "treat" | "activity" | "item" | "screen_time" | "experience";
+  imageSearchQuery: string;
 };
 
+// Tier guide communicated to the LLM so suggestions follow a consistent progression:
+//
+//  T1      → low value
+//  T2      → low value+
+//  T3-4    → mid value
+//  T5      → best regular tier
+//  bonus   → optional high-value tier (if parent chooses to set it)
+
+const TIER_GUIDE = `
+Tier rules (follow exactly):
+- Tier 1: low-value reward (~$0-10), simple starter reward
+- Tier 2: low-value reward (~$5-15), slightly better than tier 1
+- Tiers 3-4: low-to-mid reward (~$10-30), clear step-up in quality
+- Tier 5: best regular reward (~$30-80), meaningful activity or item
+- Bonus tier (tier 6): optional high-value reward (~$100-200)
+`.trim();
+
+const VALID_REWARD_TYPES = ["treat", "activity", "item", "screen_time", "experience"] as const;
+
+function coerceRewardType(raw: unknown): RewardSuggestion["rewardType"] {
+  if (typeof raw !== "string") return "treat";
+  const value = raw.trim().toLowerCase();
+  if ((VALID_REWARD_TYPES as readonly string[]).includes(value)) {
+    return value as RewardSuggestion["rewardType"];
+  }
+  if (value.includes("screen")) return "screen_time";
+  if (value.includes("experience")) return "experience";
+  if (value.includes("activity")) return "activity";
+  if (value.includes("item")) return "item";
+  return "treat";
+}
+
+function iconForType(type: RewardSuggestion["rewardType"]): string {
+  switch (type) {
+    case "screen_time": return "🖥️";
+    case "activity": return "🎳";
+    case "item": return "🎁";
+    case "experience": return "🎬";
+    case "treat":
+    default:
+      return "🍿";
+  }
+}
+
+function sanitizeTitle(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  return raw.replace(/\s+/g, " ").trim().slice(0, 50);
+}
+
+function buildFallbackSuggestions(input: {
+  tierNumber: number;
+  count: number;
+  steeringPrompt?: string;
+}): RewardSuggestion[] {
+  const steering = input.steeringPrompt?.trim();
+  const steeringPrefix = steering
+    ? `${steering.split(/\s+/).slice(0, 2).join(" ")} `
+    : "";
+  const perTier: Record<number, Array<Omit<RewardSuggestion, "tierNumber">>> = {
+    1: [
+      { icon: "🖥️", title: `${steeringPrefix}3 Hours Screen Time`.trim(), rewardType: "screen_time", imageSearchQuery: "child computer time at home" },
+      { icon: "🍦", title: `${steeringPrefix}Small Treat Pick`.trim(), rewardType: "treat", imageSearchQuery: "small treat for kids" },
+      { icon: "🃏", title: `${steeringPrefix}Starter Pack Reward`.trim(), rewardType: "item", imageSearchQuery: "starter pack for kids" },
+      { icon: "🎁", title: `${steeringPrefix}Mini Prize Box`.trim(), rewardType: "item", imageSearchQuery: "small prize box for kids" },
+      { icon: "🎮", title: `${steeringPrefix}Game Time Bonus`.trim(), rewardType: "activity", imageSearchQuery: "kids game time at home" },
+    ],
+    2: [
+      { icon: "🥤", title: `${steeringPrefix}Snack And Drink`.trim(), rewardType: "treat", imageSearchQuery: "kids snack and soda" },
+      { icon: "🍕", title: `${steeringPrefix}Favorite Snack Pick`.trim(), rewardType: "treat", imageSearchQuery: "favorite snack for kids" },
+      { icon: "🎁", title: `${steeringPrefix}Small Gift Reward`.trim(), rewardType: "item", imageSearchQuery: "small gift item for child" },
+      { icon: "🎯", title: `${steeringPrefix}Fun Activity Pick`.trim(), rewardType: "activity", imageSearchQuery: "fun indoor activity kids" },
+      { icon: "📚", title: `${steeringPrefix}Book Or Comic Pick`.trim(), rewardType: "item", imageSearchQuery: "kids comic book selection" },
+    ],
+    3: [
+      { icon: "🎁", title: `${steeringPrefix}Mid Tier Item`.trim(), rewardType: "item", imageSearchQuery: "mid tier reward item kids" },
+      { icon: "🎳", title: `${steeringPrefix}Local Activity Pass`.trim(), rewardType: "activity", imageSearchQuery: "local kids activity pass" },
+      { icon: "🎨", title: `${steeringPrefix}Creative Kit Reward`.trim(), rewardType: "item", imageSearchQuery: "kids creative activity kit" },
+      { icon: "🍔", title: `${steeringPrefix}Food Outing Reward`.trim(), rewardType: "experience", imageSearchQuery: "family food outing" },
+      { icon: "🛍️", title: `${steeringPrefix}Store Pick Reward`.trim(), rewardType: "item", imageSearchQuery: "toy store gift pick" },
+    ],
+    4: [
+      { icon: "🏞️", title: `${steeringPrefix}Family Activity Day`.trim(), rewardType: "activity", imageSearchQuery: "family activity day outing" },
+      { icon: "🎁", title: `${steeringPrefix}Premium Small Item`.trim(), rewardType: "item", imageSearchQuery: "premium small gift for child" },
+      { icon: "🎮", title: `${steeringPrefix}Game Accessory Reward`.trim(), rewardType: "item", imageSearchQuery: "gaming accessory for kids" },
+      { icon: "🎟️", title: `${steeringPrefix}Event Ticket Reward`.trim(), rewardType: "experience", imageSearchQuery: "family event ticket kids" },
+      { icon: "🧩", title: `${steeringPrefix}Advanced Kit Reward`.trim(), rewardType: "item", imageSearchQuery: "advanced kit for kids" },
+    ],
+    5: [
+      { icon: "🎬", title: `${steeringPrefix}Family Theater Night`.trim(), rewardType: "experience", imageSearchQuery: "family movie theater night" },
+      { icon: "🏆", title: `${steeringPrefix}Top Tier Item`.trim(), rewardType: "item", imageSearchQuery: "top tier reward for kids" },
+      { icon: "🎡", title: `${steeringPrefix}Big Outing Day`.trim(), rewardType: "experience", imageSearchQuery: "big family outing day" },
+      { icon: "🛒", title: `${steeringPrefix}Special Store Trip`.trim(), rewardType: "experience", imageSearchQuery: "special shopping trip with parent" },
+      { icon: "🎁", title: `${steeringPrefix}Major Choice Reward`.trim(), rewardType: "item", imageSearchQuery: "major choice reward gift" },
+    ],
+    6: [
+      { icon: "⭐", title: `${steeringPrefix}Bonus Major Reward`.trim(), rewardType: "item", imageSearchQuery: "high value kid reward item" },
+      { icon: "💻", title: `${steeringPrefix}Bonus Tech Pick`.trim(), rewardType: "item", imageSearchQuery: "popular kid tech gift" },
+      { icon: "🎢", title: `${steeringPrefix}Bonus Big Experience`.trim(), rewardType: "experience", imageSearchQuery: "major family experience day" },
+      { icon: "🎁", title: `${steeringPrefix}Bonus Choice Prize`.trim(), rewardType: "item", imageSearchQuery: "bonus reward prize for child" },
+      { icon: "🏅", title: `${steeringPrefix}Bonus Celebration Reward`.trim(), rewardType: "experience", imageSearchQuery: "family celebration reward" },
+    ],
+  };
+
+  const pool = perTier[input.tierNumber] ?? perTier[6]!;
+  return pool.slice(0, input.count).map((item) => ({
+    tierNumber: input.tierNumber,
+    ...item,
+  }));
+}
+
+export async function generateRewardSuggestionForTier(input: {
+  tierNumber: number;
+  gradeLevel: string;
+  studentName: string;
+  location?: string;
+  steeringPrompt?: string;
+  count: number; // how many options to suggest for this one tier
+}): Promise<RewardSuggestion[]> {
+  const isBonus = input.tierNumber > 5;
+  const locationContext = input.location?.trim()
+    ? `Student location: ${input.location.trim()}. Prefer local, realistic activities nearby and include budget-friendly local options when possible.`
+    : "Student location is unknown. Prefer broadly available activities and cost-effective options.";
+  const steeringContext = input.steeringPrompt?.trim()
+    ? `Steering focus for this current: ${input.steeringPrompt.trim()}. Keep rewards aligned with this focus.`
+    : "";
+
+  const prompt = [
+    `You are helping a homeschool parent choose a reward for tier ${input.tierNumber} of a reward track for a student named ${input.studentName} in grade ${input.gradeLevel}.`,
+    locationContext,
+    steeringContext,
+    "",
+    TIER_GUIDE,
+    "",
+    `Generate exactly ${input.count} different reward options appropriate for tier ${input.tierNumber}.`,
+    "Each option must be specific and concrete (e.g. 'new board game' not 'toy').",
+    "screen_time rewards must always specify '3 hours extra' in the title.",
+    "Reward quality should improve each tier. Higher tiers should generally cost more, but include at least one cost-effective option where it still fits the tier.",
+    isBonus
+      ? "This is a bonus tier — suggest a major $100-200 reward with clear value."
+      : "",
+    "",
+    "Return ONLY a JSON array:",
+    `[{ "tierNumber": ${input.tierNumber}, "icon": "🎁", "title": "Reward title", "rewardType": "item", "imageSearchQuery": "specific reward photo search" }, ...]`,
+    "Rules: title max 5 words, icon must match the item, imageSearchQuery is a specific product/activity search phrase for finding a photo (2-6 words), rewardType one of: treat | activity | item | screen_time | experience",
+    "Return ONLY the JSON array. No markdown.",
+  ].filter(Boolean).join("\n");
+
+  const targetCount = Math.max(1, Math.min(input.count, 8));
+  const collected: RewardSuggestion[] = [];
+  const seen = new Set<string>();
+
+  for (let attempt = 0; attempt < 3 && collected.length < targetCount; attempt++) {
+    const remaining = targetCount - collected.length;
+    const usedTitles = collected.map((s) => s.title).join(", ");
+    const result = await env.AI.run(DEFAULT_LLM_MODEL, {
+      messages: [
+        { role: "system", content: "You are a helpful assistant. Output only valid JSON arrays. Be specific and creative with reward suggestions." },
+        {
+          role: "user",
+          content: attempt === 0
+            ? `${prompt}\nEnsure all ${targetCount} options are distinct and strongly reflect steering focus when provided.`
+            : `${prompt}
+
+Return ${remaining} additional options not overlapping with: ${usedTitles || "none"}.
+IMPORTANT: Return ONLY the raw JSON array. No markdown fences, no explanation.`,
+        },
+      ],
+      max_tokens: 600,
+    });
+
+    const parsed = extractJsonPayload(toModelText(result));
+    if (!Array.isArray(parsed)) continue;
+    for (const item of parsed) {
+      if (!item || typeof item !== "object") continue;
+      const rec = item as Record<string, unknown>;
+      const title = sanitizeTitle(rec.title);
+      if (!title) continue;
+      const rewardType = coerceRewardType(rec.rewardType);
+      const iconRaw = typeof rec.icon === "string" ? rec.icon.trim() : "";
+      const icon = iconRaw || iconForType(rewardType);
+      const rawQuery = typeof rec.imageSearchQuery === "string" && rec.imageSearchQuery.trim()
+        ? rec.imageSearchQuery
+        : title;
+      const normalizedKey = `${title.toLowerCase()}|${rewardType}`;
+      if (seen.has(normalizedKey)) continue;
+      seen.add(normalizedKey);
+      collected.push({
+        tierNumber: typeof rec.tierNumber === "number" ? rec.tierNumber : input.tierNumber,
+        icon,
+        title,
+        rewardType,
+        imageSearchQuery: rawQuery.slice(0, 80),
+      });
+      if (collected.length >= targetCount) break;
+    }
+  }
+  if (collected.length >= targetCount) {
+    return collected.slice(0, targetCount);
+  }
+
+  const fallback = buildFallbackSuggestions({
+    tierNumber: input.tierNumber,
+    count: targetCount,
+    steeringPrompt: input.steeringPrompt,
+  });
+  for (const item of fallback) {
+    const normalizedKey = `${item.title.toLowerCase()}|${item.rewardType}`;
+    if (seen.has(normalizedKey)) continue;
+    collected.push(item);
+    seen.add(normalizedKey);
+    if (collected.length >= targetCount) break;
+  }
+  return collected.slice(0, targetCount);
+}
+
+// Keep the old bulk function for the create-track wizard (still used there)
 export async function generateRewardSuggestions(input: {
   gradeLevel: string;
   studentName: string;
+  location?: string;
+  steeringPrompt?: string;
   count: number;
 }): Promise<RewardSuggestion[]> {
-  const prompt = [
-    `Suggest ${input.count} age-appropriate rewards for a homeschool student named ${input.studentName} in grade ${input.gradeLevel}.`,
-    "Rewards should escalate in excitement from tier 1 (small treat) to tier 10 (big reward).",
-    "Mix types: food treats, activities, toys/items, screen time, experiences.",
-    `Return ONLY a JSON array of exactly ${input.count} objects:`,
-    '[{ "tierNumber": 1, "icon": "🍦", "title": "Ice cream cone", "rewardType": "treat" }, ...]',
-    "rewardType must be one of: treat | activity | item | screen_time | experience",
-    "title must be short (max 4 words). Return ONLY the JSON array. No markdown, no prose.",
-  ].join("\n");
-
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const result = await env.AI.run(DEFAULT_LLM_MODEL, {
-      messages: [
-        { role: "system", content: "You are a helpful assistant. Output only valid JSON arrays." },
-        {
-          role: "user",
-          content:
-            attempt === 0
-              ? prompt
-              : `${prompt}\n\nIMPORTANT: Return ONLY the raw JSON array. No markdown fences.`,
-        },
-      ],
-      max_tokens: 800,
-    });
-
-    const responseText = toModelText(result);
-    const parsed = extractJsonPayload(responseText);
-
-    if (Array.isArray(parsed)) {
-      const validTypes = ["treat", "activity", "item", "screen_time", "experience"] as const;
-      const suggestions: RewardSuggestion[] = [];
-      for (const item of parsed) {
-        if (
-          item &&
-          typeof item === "object" &&
-          typeof (item as Record<string, unknown>).tierNumber === "number" &&
-          typeof (item as Record<string, unknown>).title === "string" &&
-          typeof (item as Record<string, unknown>).icon === "string"
-        ) {
-          const rec = item as Record<string, unknown>;
-          const rewardType = validTypes.includes(rec.rewardType as typeof validTypes[number])
-            ? (rec.rewardType as RewardSuggestion["rewardType"])
-            : "treat";
-          suggestions.push({
-            tierNumber: rec.tierNumber as number,
-            icon: rec.icon as string,
-            title: (rec.title as string).slice(0, 40),
-            rewardType,
-          });
-        }
-      }
-      if (suggestions.length > 0) return suggestions;
-    }
-  }
-
-  // Fallback: return generic suggestions
-  const fallbackTypes: RewardSuggestion["rewardType"][] = [
-    "treat", "treat", "activity", "item", "screen_time",
-    "activity", "item", "experience", "screen_time", "experience",
-  ];
-  return Array.from({ length: input.count }, (_, i) => ({
-    tierNumber: i + 1,
-    icon: "🎁",
-    title: `Tier ${i + 1} Reward`,
-    rewardType: fallbackTypes[i] ?? "treat",
-  }));
+  const results = await Promise.all(
+    Array.from({ length: input.count }, (_, i) =>
+      generateRewardSuggestionForTier({
+        tierNumber: i + 1,
+        gradeLevel: input.gradeLevel,
+        studentName: input.studentName,
+        location: input.location,
+        steeringPrompt: input.steeringPrompt,
+        count: 1,
+      }).then((s) => s[0]),
+    ),
+  );
+  return results.filter((s): s is RewardSuggestion => s !== undefined);
 }
