@@ -1028,7 +1028,6 @@ export function layoutForceDirected(
   const FORK_EXTRA = 50;  // extra Y gap before fork decision points
   const PAD_X     = 100;
   const PAD_Y     = 100;
-  const CENTER_X  = W / 2;
 
   const nodeMap    = new Map(nodes.map((n) => [n.id, n]));
   const inputOrder = new Map(nodes.map((n, i) => [n.id, i]));
@@ -1131,81 +1130,66 @@ export function layoutForceDirected(
   }
 
   // ── Y assignment ─────────────────────────────────────────────────────────────
-  // Spine nodes are placed at RANK_SEP intervals.
-  // Branch nodes get BRANCH_SEP intervals from their spine anchor.
+  // Spine nodes: evenly spaced at RANK_SEP.
+  // Branch nodes: placed at the SAME Y as their spine anchor, with children
+  //   descending at BRANCH_SEP. They never share a Y row with spine nodes from
+  //   other levels, so the per-row enforcement pass can't scramble them.
   const finalY = new Map<string, number>();
 
-  // First pass: assign Y to spine nodes
+  // Map each spine node to its absolute Y
   const spineNodes = [...spineSet].sort((a, b) => layerOf.get(a)! - layerOf.get(b)!);
   let spineY = PAD_Y;
   const spineLayerY = new Map<number, number>();
   for (const id of spineNodes) {
     const l = layerOf.get(id)!;
     if (!spineLayerY.has(l)) {
-      if (spineLayerY.size > 0) {
-        spineY += forkSet.has(id) ? RANK_SEP + FORK_EXTRA : RANK_SEP;
-      }
+      if (spineLayerY.size > 0) spineY += forkSet.has(id) ? RANK_SEP + FORK_EXTRA : RANK_SEP;
       spineLayerY.set(l, spineY);
     }
     finalY.set(id, spineLayerY.get(l)!);
   }
 
-  // Second pass: assign Y to branch nodes relative to their spine anchor
-  const getSpineAncestor = (id: string): string | null => {
-    if (spineSet.has(id)) return id;
-    const p = parent.get(id);
-    if (!p) return null;
-    return getSpineAncestor(p);
-  };
-
-  const assignBranchY = (id: string, baseY: number, depthFromAnchor: number) => {
+  // Branch subtrees hang off spine nodes horizontally.
+  // To compute the max depth a branch can descend without entering the next
+  // spine node's territory, we use the Y gap to the next spine node.
+  // Roots start at anchorY (same row as spine anchor but different X),
+  // children at anchorY + BRANCH_SEP, etc.
+  // The per-row pass only pushes nodes apart that share the exact same Y —
+  // since branch roots are at the same Y as their spine anchor but at a
+  // different X, they won't conflict as long as X placement is correct.
+  const assignBranchY = (id: string, anchorY: number, depth: number) => {
     if (finalY.has(id)) return;
-    // Branch root sits at the SAME Y as its spine anchor (depth 0).
-    // Its own children descend from there using BRANCH_SEP.
-    const y = baseY + depthFromAnchor * BRANCH_SEP;
-    finalY.set(id, y);
+    finalY.set(id, anchorY + depth * BRANCH_SEP);
     for (const kid of children.get(id) ?? []) {
-      if (!spineSet.has(kid)) assignBranchY(kid, baseY, depthFromAnchor + 1);
+      if (!spineSet.has(kid)) assignBranchY(kid, anchorY, depth + 1);
     }
   };
-
   for (const id of spineSet) {
-    const kids = children.get(id) ?? [];
-    for (const kid of kids) {
-      if (!spineSet.has(kid)) {
-        assignBranchY(kid, finalY.get(id)!, 0);  // start at depth 0 = same Y as spine anchor
-      }
+    const anchorY = finalY.get(id)!;
+    for (const kid of children.get(id) ?? []) {
+      if (!spineSet.has(kid)) assignBranchY(kid, anchorY, 0);
     }
   }
-
-  // Handle any orphan non-spine nodes without a spine ancestor
   for (const n of nodes) {
-    if (!finalY.has(n.id)) {
-      finalY.set(n.id, PAD_Y + layerOf.get(n.id)! * BRANCH_SEP);
-    }
+    if (!finalY.has(n.id)) finalY.set(n.id, PAD_Y + layerOf.get(n.id)! * BRANCH_SEP);
   }
 
   // ── X assignment ─────────────────────────────────────────────────────────────
-  // Spine nodes sit at CENTER_X.
-  // Branch subtrees fan left/right from their spine anchor, alternating sides.
-  // We use a modified RT within each branch subtree, then translate to L/R.
+  // Spine always at SPINE_X (half of canvas).
+  // For each spine node, its branch children are split left/right and placed
+  // symmetrically. Subtree widths determine exact offsets.
+  const SPINE_X = W / 2;
+  const finalX  = new Map<string, number>();
 
-  const finalX = new Map<string, number>();
+  for (const id of spineSet) finalX.set(id, SPINE_X);
 
-  // Place all spine nodes at center
-  for (const id of spineSet) finalX.set(id, CENTER_X);
-
-  // For each spine node that has branch children, place those subtrees L/R.
-  // rightEdge / leftEdge are global so branches from different spine nodes
-  // never stack on top of each other.
-
-  // Helper: leaf count within branch subtree (ignores spine nodes)
+  // Leaf count within a branch subtree (spine nodes count as 0 width)
   const branchLeafCount = (id: string): number => {
     const ks = (children.get(id) ?? []).filter((k) => !spineSet.has(k));
     return ks.length === 0 ? 1 : ks.reduce((s, k) => s + branchLeafCount(k), 0);
   };
 
-  // Helper: place a branch subtree centered at cx
+  // Place a branch subtree with root centered at cx, children spread by NODE_SEP
   const placeBranchSubtree = (id: string, cx: number) => {
     if (finalX.has(id)) return;
     finalX.set(id, cx);
@@ -1215,63 +1199,55 @@ export function layoutForceDirected(
     let cursor = cx - ((totalLeaves - 1) * NODE_SEP) / 2;
     for (const k of ks) {
       const kLeaves = branchLeafCount(k);
-      placeBranchSubtree(k, cursor + (kLeaves - 1) * NODE_SEP / 2);
+      placeBranchSubtree(k, cursor + ((kLeaves - 1) * NODE_SEP) / 2);
       cursor += kLeaves * NODE_SEP;
     }
   };
 
-  let globalRightEdge = CENTER_X;
-  let globalLeftEdge  = CENTER_X;
-
   for (const spineId of spineSet) {
-    const kids = children.get(spineId) ?? [];
-    const branchKids = kids.filter((k) => !spineSet.has(k));
+    const branchKids = (children.get(spineId) ?? []).filter((k) => !spineSet.has(k));
     if (branchKids.length === 0) continue;
+    console.log(`[layout] spine=${spineId} branchKids=${branchKids.length}`, branchKids.map(k => ({id:k, leaves:branchLeafCount(k)})));
 
-    // Each spine node gets its own L/R counters seeded from the global edges,
-    // so branches from the same spine node pair up correctly (1st R, 1st L, 2nd R…)
-    // while never stepping on branches from other spine nodes.
-    let rightEdge = globalRightEdge;
-    let leftEdge  = globalLeftEdge;
+    // Split into left/right halves — odd count gives extra to right
+    const nRight = Math.ceil(branchKids.length / 2);
+    // Sort largest subtrees innermost (closest to spine) on each side
+    const sorted = [...branchKids].sort((a, b) => branchLeafCount(b) - branchLeafCount(a));
+    const rightKids: string[] = [];
+    const leftKids:  string[] = [];
+    for (const kid of sorted) {
+      if (rightKids.length < nRight) rightKids.push(kid);
+      else leftKids.push(kid);
+    }
 
-    // Alternate L/R: 0→right, 1→left, 2→right, ...
-    branchKids.forEach((kid, idx) => {
-      const side: -1 | 1 = idx % 2 === 0 ? 1 : -1;
-      const lc = branchLeafCount(kid);
-      const halfWidth = ((lc - 1) * NODE_SEP) / 2;
-      let rootX: number;
-      if (side === 1) {
-        rootX = Math.max(
-          rightEdge + NODE_SEP * 0.6 + halfWidth,
-          CENTER_X + NODE_SEP * 0.6 + halfWidth,
-        );
-        rightEdge = rootX + halfWidth;
-      } else {
-        rootX = Math.min(
-          leftEdge - NODE_SEP * 0.6 - halfWidth,
-          CENTER_X - NODE_SEP * 0.6 - halfWidth,
-        );
-        leftEdge = rootX - halfWidth;
-      }
+    // Right side: accumulate outward from spine
+    let rightCursor = SPINE_X;
+    for (const kid of rightKids) {
+      const halfW = ((branchLeafCount(kid) - 1) * NODE_SEP) / 2;
+      const rootX = rightCursor + NODE_SEP * 0.75 + halfW;
       placeBranchSubtree(kid, rootX);
-    });
+      rightCursor = rootX + halfW;
+    }
 
-    // Update global edges so the next spine node's branches start outside these
-    globalRightEdge = Math.max(globalRightEdge, rightEdge);
-    globalLeftEdge  = Math.min(globalLeftEdge,  leftEdge);
-  }
-
-  // Handle any unplaced nodes
-  let orphanX = CENTER_X + NODE_SEP * 3;
-  for (const n of nodes) {
-    if (!finalX.has(n.id)) {
-      finalX.set(n.id, orphanX);
-      orphanX += NODE_SEP;
+    // Left side: accumulate outward from spine (negative direction)
+    let leftCursor = SPINE_X;
+    for (const kid of leftKids) {
+      const halfW = ((branchLeafCount(kid) - 1) * NODE_SEP) / 2;
+      const rootX = leftCursor - NODE_SEP * 0.75 - halfW;
+      placeBranchSubtree(kid, rootX);
+      leftCursor = rootX - halfW;
     }
   }
 
-  // ── Global layer separation enforcement ──────────────────────────────────────
-  // Guarantee no two nodes in the same layer are closer than NODE_SEP horizontally.
+  // Orphan fallback
+  let orphanX = SPINE_X + NODE_SEP * 3;
+  for (const n of nodes) {
+    if (!finalX.has(n.id)) { finalX.set(n.id, orphanX); orphanX += NODE_SEP; }
+  }
+
+  // ── Per-row separation: push overlapping branch nodes apart ─────────────────
+  // Spine nodes are fixed at SPINE_X. For rows that mix spine + branch nodes,
+  // we push branch nodes outward (left stays left, right stays right).
   const byY = new Map<number, string[]>();
   for (const n of nodes) {
     const y = finalY.get(n.id)!;
@@ -1279,57 +1255,52 @@ export function layoutForceDirected(
     bucket.push(n.id);
     byY.set(y, bucket);
   }
-
   for (const [, ids] of byY) {
     if (ids.length <= 1) continue;
-    ids.sort((a, b) => finalX.get(a)! - finalX.get(b)!);
-    // Forward pass: push right
-    for (let i = 1; i < ids.length; i++) {
-      const prev = finalX.get(ids[i - 1]!)!;
-      const cur  = finalX.get(ids[i]!)!;
-      if (cur - prev < NODE_SEP) finalX.set(ids[i]!, prev + NODE_SEP);
+    // Separate left-of-spine and right-of-spine non-spine nodes
+    const rightIds = ids.filter((id) => !spineSet.has(id) && finalX.get(id)! >= SPINE_X)
+      .sort((a, b) => finalX.get(a)! - finalX.get(b)!);
+    const leftIds  = ids.filter((id) => !spineSet.has(id) && finalX.get(id)! < SPINE_X)
+      .sort((a, b) => finalX.get(b)! - finalX.get(a)!); // sorted closest-to-spine first
+
+    // Push right nodes further right if too close
+    let rightMin = SPINE_X + NODE_SEP * 0.5;
+    for (const id of rightIds) {
+      const cur = finalX.get(id)!;
+      if (cur < rightMin) finalX.set(id, rightMin);
+      rightMin = finalX.get(id)! + NODE_SEP;
     }
-    // Re-center the whole layer around the spine nodes in this layer if any
-    const spineInLayer = ids.filter((id) => spineSet.has(id));
-    if (spineInLayer.length > 0) {
-      // find where spine sits now vs where it should (CENTER_X)
-      const spineX = finalX.get(spineInLayer[0]!)!;
-      const shift  = CENTER_X - spineX;
-      if (Math.abs(shift) > 1) {
-        for (const id of ids) {
-          finalX.set(id, finalX.get(id)! + shift);
-        }
-      }
+    // Push left nodes further left if too close
+    let leftMax = SPINE_X - NODE_SEP * 0.5;
+    for (const id of leftIds) {
+      const cur = finalX.get(id)!;
+      if (cur > leftMax) finalX.set(id, leftMax);
+      leftMax = finalX.get(id)! - NODE_SEP;
     }
   }
 
-
-  // ── Normalize so everything fits on canvas ───────────────────────────────────
-  const allX  = [...finalX.values()];
-  const allY  = [...finalY.values()];
-  const minX  = Math.min(...allX);
-  const maxX  = Math.max(...allX);
-  const minY  = Math.min(...allY);
-  const maxY  = Math.max(...allY);
-  const spanX = maxX - minX || 1;
-  const spanY = maxY - minY || 1;
-
+  // ── Normalize: fit to canvas, keeping spine at horizontal center ──────────────
   const usableW = W - PAD_X * 2;
   const usableH = H - PAD_Y * 2;
 
-  // Only scale down if it doesn't fit; never scale up (would make it too sparse)
-  const scaleX = spanX > usableW ? usableW / spanX : 1;
-  const scaleY = spanY > usableH ? usableH / spanY : 1;
+  const allXVals = [...finalX.values()];
+  const allYVals = [...finalY.values()];
+  const minX = Math.min(...allXVals);
+  const maxX = Math.max(...allXVals);
+  const minY = Math.min(...allYVals);
+  const maxY = Math.max(...allYVals);
+  const scaleX = (maxX - minX) > usableW ? usableW / (maxX - minX) : 1;
+  const scaleY = (maxY - minY) > usableH ? usableH / (maxY - minY) : 1;
 
-  // Re-center after scaling
-  const scaledSpanX = spanX * scaleX;
-  const offsetX     = PAD_X + (usableW - scaledSpanX) / 2;
+  // After scaling, shift X so the spine (SPINE_X) lands at W/2
+  const spineShift = W / 2 - SPINE_X * scaleX;
 
   const result = new Map<string, { x: number; y: number }>();
   for (const n of nodes) {
-    const rx = (finalX.get(n.id)! - minX) * scaleX + offsetX;
-    const ry = (finalY.get(n.id)! - minY) * scaleY + PAD_Y;
-    result.set(n.id, { x: Math.round(rx), y: Math.round(ry) });
+    result.set(n.id, {
+      x: Math.round(finalX.get(n.id)! * scaleX + spineShift),
+      y: Math.round((finalY.get(n.id)! - minY) * scaleY + PAD_Y),
+    });
   }
 
   // Tag fork nodes on the result map so the caller can mark them
