@@ -82,6 +82,15 @@ export type StoredAssignment = {
   linkedFollowUpType?: string;
 };
 
+// Tracks a committed video assignment waiting for transcript enrichment
+export type VideoEnrichEntry = {
+  assignmentId: string;   // real DB id after commit
+  nodeId: string;         // real DB node id
+  classId: string;
+  title: string;
+  status: "pending" | "running" | "done" | "skipped";
+};
+
 export type CourseJobStatus =
   | "pending"
   | "spine_running"
@@ -93,6 +102,8 @@ export type CourseJobStatus =
   | "assignments_running"
   | "assignments_done"
   | "layout_done"
+  | "enriching_running"   // Wave 4: transcript fetch + quiz gen per video
+  | "enriching_done"      // Wave 4 complete
   | "committed"
   | "failed";
 
@@ -105,10 +116,13 @@ export type CourseJob = {
   spineNodes: StoredSpineNode[];
   rawNodes: StoredRawNode[];
   assignments: StoredAssignment[];
+  committedClassId?: string;   // set after DB commit so Wave 4 can use it
   committedTreeId?: string;
+  committedNodeIdMap?: Record<string, string>;  // tempId → realId, for Wave 4
   chapterProgress: ClusterProgress[];
   branchProgress: ClusterProgress[];
   assignmentProgress: ClusterProgress[];
+  videoEnrichProgress: VideoEnrichEntry[];
 };
 
 export type CurriculumJobOverallStatus =
@@ -143,9 +157,11 @@ export function saveCurriculumJob(job: CurriculumJob): void {
         ...cj,
         assignments: cj.assignments.map((a) => ({
           ...a,
-          // Truncate text contentRef to 500 chars to save space; commit reads from
-          // the generated assignments that are passed directly, not from localStorage.
-          contentRef: a.contentType === "text" ? a.contentRef.slice(0, 500) : a.contentRef,
+          // Strip text contentRef from localStorage entirely — full HTML is large and
+          // truncating it causes readings to appear cut off in the review UI.
+          // The full content lives in React state and is passed directly to commit;
+          // localStorage only needs to survive a refresh to resume the build pipeline.
+          contentRef: a.contentType === "text" ? "" : a.contentRef,
         })),
       })),
     };
@@ -191,7 +207,34 @@ export function updateCurriculumJobCourse(
     ),
   };
   saveCurriculumJob(updated);
+  // Return the full updated job (before stripping) so callers can pass it
+  // directly to React state without re-reading the stripped localStorage copy.
   return updated;
+}
+
+/**
+ * Merge a patch into an in-memory job without touching localStorage.
+ * Used by the build orchestrator to keep React state complete (unstripped)
+ * while localStorage only holds the compact resume copy.
+ */
+export function mergeJobCourse(
+  job: CurriculumJob,
+  slotId: string,
+  patch: Partial<CourseJob>,
+): CurriculumJob {
+  return {
+    ...job,
+    courseJobs: job.courseJobs.map((cj) =>
+      cj.slotId === slotId ? { ...cj, ...patch } : cj,
+    ),
+  };
+}
+
+export function mergeJobRoot(
+  job: CurriculumJob,
+  patch: Partial<CurriculumJob>,
+): CurriculumJob {
+  return { ...job, ...patch };
 }
 
 export function removeCurriculumJobCourse(
@@ -230,26 +273,56 @@ export function updateCurriculumJobRoot(
 
 // ── Progress computation ──────────────────────────────────────────────────────
 
+// Base weight for each coarse status (before intra-stage interpolation)
+const STATUS_WEIGHT: Record<CourseJobStatus, number> = {
+  pending:             0,
+  spine_running:       0.05,
+  spine_done:          0.15,
+  lessons_running:     0.20,
+  lessons_done:        0.40,
+  branches_running:    0.45,
+  branches_done:       0.55,
+  assignments_running: 0.55, // interpolated up to 0.78 via assignmentProgress
+  assignments_done:    0.78,
+  layout_done:         0.80,
+  enriching_running:   0.80, // interpolated up to 0.95 via videoEnrichProgress
+  enriching_done:      0.95,
+  committed:           1.0,
+  failed:              0,
+};
+
 export function computeOverallProgress(job: CurriculumJob): number {
   const total = job.courseJobs.length;
   if (total === 0) return 0;
 
-  const WEIGHTS = {
-    pending: 0,
-    spine_running: 0.05,
-    spine_done: 0.15,
-    lessons_running: 0.25,
-    lessons_done: 0.45,
-    branches_running: 0.5,
-    branches_done: 0.65,
-    assignments_running: 0.75,
-    assignments_done: 0.90,
-    layout_done: 0.95,
-    committed: 1.0,
-    failed: 0,
-  } satisfies Record<CourseJobStatus, number>;
+  const sum = job.courseJobs.reduce((acc, cj) => {
+    let weight = STATUS_WEIGHT[cj.status] ?? 0;
 
-  const sum = job.courseJobs.reduce((acc, cj) => acc + (WEIGHTS[cj.status] ?? 0), 0);
+    // Wave 3: interpolate 0.55 → 0.78 as nodes complete
+    if (cj.status === "assignments_running") {
+      const totalNodes = cj.assignmentProgress.length;
+      const doneNodes = cj.assignmentProgress.filter(
+        (p) => p.status === "done" || p.status === "skipped",
+      ).length;
+      if (totalNodes > 0) {
+        weight = 0.55 + (doneNodes / totalNodes) * 0.23;
+      }
+    }
+
+    // Wave 4: interpolate 0.80 → 0.95 as videos complete
+    if (cj.status === "enriching_running") {
+      const totalVideos = cj.videoEnrichProgress.length;
+      const doneVideos = cj.videoEnrichProgress.filter(
+        (v) => v.status === "done" || v.status === "skipped",
+      ).length;
+      if (totalVideos > 0) {
+        weight = 0.80 + (doneVideos / totalVideos) * 0.15;
+      }
+    }
+
+    return acc + weight;
+  }, 0);
+
   return Math.round((sum / total) * 100);
 }
 
@@ -326,6 +399,7 @@ export function createInitialCurriculumJob(
       chapterProgress: [],
       branchProgress: [],
       assignmentProgress: [],
+      videoEnrichProgress: [],
     })),
     overallStatus: "building",
     wave1Done: false,

@@ -10,6 +10,7 @@ import { useState } from "react";
 import { RichContent } from "./rich-content";
 import { RichTextEditor } from "./rich-text-editor";
 import { QuizBuilder, type QuizQuestion } from "./quiz-builder";
+import { VideoSearch, type VideoData } from "./video-search";
 import { updateAssignmentRecord, uploadAssignmentFile } from "../server/functions";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -105,6 +106,18 @@ function parseJson<T>(s: string | null | undefined): T | null {
   try { return JSON.parse(s) as T; } catch { return null; }
 }
 
+/**
+ * AI generates essay contentRef as plain text (the prompt string).
+ * The modal expects { questions: string[] }. This normalizes both formats.
+ */
+function parseEssayRef(ref: string | null | undefined): { questions: string[] } {
+  if (!ref) return { questions: [] };
+  const parsed = parseJson<{ questions?: string[] }>(ref);
+  if (parsed?.questions && Array.isArray(parsed.questions)) return { questions: parsed.questions };
+  // Plain-text prompt from AI — treat the whole string as a single question
+  return { questions: [ref.trim()] };
+}
+
 function buildDueAt(date: string, time: string, includeTime: boolean): string | null {
   if (!date) return null;
   if (includeTime && time) return new Date(`${date}T${time}`).toISOString();
@@ -153,11 +166,22 @@ function AssignmentContentView({ assignment, allAssignments }: { assignment: Mod
     const videos = payload?.videos ?? [];
     if (!videos.length) return <p className="text-xs text-slate-400">No video linked.</p>;
     return (
-      <div className="space-y-2">
+      <div className="space-y-4">
         {videos.map((v, i) => (
-          <div key={i} className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
-            <p className="text-sm font-medium text-slate-800">{v.title}</p>
-            {v.channel ? <p className="text-xs text-slate-500 mt-0.5">{v.channel}</p> : null}
+          <div key={i} className="rounded-xl overflow-hidden border border-slate-200 bg-slate-50">
+            <div className="relative w-full" style={{ paddingBottom: "56.25%" }}>
+              <iframe
+                src={`https://www.youtube.com/embed/${v.videoId}`}
+                title={v.title}
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                allowFullScreen
+                className="absolute inset-0 w-full h-full"
+              />
+            </div>
+            <div className="px-4 py-3">
+              <p className="text-sm font-medium text-slate-800">{v.title}</p>
+              {v.channel ? <p className="text-xs text-slate-500 mt-0.5">{v.channel}</p> : null}
+            </div>
           </div>
         ))}
       </div>
@@ -191,17 +215,28 @@ function AssignmentContentView({ assignment, allAssignments }: { assignment: Mod
   }
 
   if (type === "essay_questions") {
-    const payload = parseJson<{ questions?: string[] }>(ref);
-    const questions = payload?.questions ?? [];
+    const questions = parseEssayRef(ref).questions;
     if (!questions.length) return <p className="text-xs text-slate-400">No prompts yet.</p>;
     return (
-      <div className="space-y-2">
-        {questions.map((q, i) => (
-          <div key={i} className="rounded-xl border border-violet-100 bg-violet-50 px-4 py-3">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-violet-400 mb-1">Prompt {i + 1}</p>
-            <p className="text-sm text-slate-700">{q}</p>
-          </div>
-        ))}
+      <div className="space-y-3">
+        {questions.map((q, i) => {
+          // Split writing guidelines (appended by AI) from the essay prompt itself
+          const guidelineIdx = q.indexOf("Writing guidelines:");
+          const prompt = guidelineIdx > 0 ? q.slice(0, guidelineIdx).trim() : q.trim();
+          const guidelines = guidelineIdx > 0 ? q.slice(guidelineIdx).trim() : null;
+          return (
+            <div key={i} className="rounded-xl border border-violet-100 bg-violet-50 px-4 py-3 space-y-2">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-violet-400">Prompt {questions.length > 1 ? i + 1 : ""}</p>
+              <p className="text-sm text-slate-700 leading-relaxed">{prompt}</p>
+              {guidelines && (
+                <div className="border-t border-violet-100 pt-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-violet-400 mb-1">Writing Guidelines</p>
+                  <p className="text-xs text-slate-500 leading-relaxed">{guidelines.replace(/^Writing guidelines:\s*/i, "")}</p>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     );
   }
@@ -284,8 +319,8 @@ export function AssignmentModal({
 
   // Essay
   const [essayQuestions, setEssayQuestions] = useState<string[]>(() => {
-    const p = parseJson<{ questions?: string[] }>(assignment.contentRef);
-    return p?.questions ?? [""];
+    const qs = parseEssayRef(assignment.contentRef).questions;
+    return qs.length ? qs : [""];
   });
 
   // Movie
@@ -293,6 +328,18 @@ export function AssignmentModal({
   const [movieSynopsis, setMovieSynopsis] = useState(() => parseJson<{ synopsis?: string }>(assignment.contentRef)?.synopsis ?? "");
   const [moviePlatforms, setMoviePlatforms] = useState<string[]>(() => parseJson<{ whereToWatch?: string[] }>(assignment.contentRef)?.whereToWatch ?? []);
   const [movieCustomPlatform, setMovieCustomPlatform] = useState("");
+
+  // Video
+  const [videoVideos, setVideoVideos] = useState<VideoData[]>(() => {
+    const p = parseJson<{ videos?: Array<Partial<VideoData> & { videoId: string }> }>(assignment.contentRef);
+    return (p?.videos ?? []).map(v => ({
+      videoId: v.videoId,
+      title: v.title ?? "",
+      channel: v.channel ?? "",
+      description: v.description,
+      thumbnail: v.thumbnail,
+    }));
+  });
 
   const typeLbl = ASSIGNMENT_TYPE_LABELS[assignment.contentType] ?? assignment.contentType;
   const typeBadge = TYPE_BADGE[assignment.contentType] ?? "bg-slate-50 text-slate-700 border-slate-200";
@@ -307,6 +354,7 @@ export function AssignmentModal({
       const platforms = movieCustomPlatform.trim() ? [...moviePlatforms, movieCustomPlatform.trim()] : moviePlatforms;
       return JSON.stringify({ title: movieTitle.trim() || title.trim(), synopsis: movieSynopsis.trim(), whereToWatch: platforms });
     }
+    if (type === "video") return JSON.stringify({ videos: videoVideos });
     return contentRef || undefined;
   }
 
@@ -505,6 +553,7 @@ export function AssignmentModal({
               movieSynopsis={movieSynopsis}
               moviePlatforms={moviePlatforms}
               movieCustomPlatform={movieCustomPlatform}
+              videoVideos={videoVideos}
               linkedAssignmentId={linkedAssignmentId}
               classId={classId}
               linkedNodeId={linkedNodeId}
@@ -523,6 +572,7 @@ export function AssignmentModal({
               onMovieSynopsisChange={setMovieSynopsis}
               onMoviePlatformsChange={setMoviePlatforms}
               onMovieCustomPlatformChange={setMovieCustomPlatform}
+              onVideoVideosChange={setVideoVideos}
               onLinkedAssignmentChange={setLinkedAssignmentId}
               onClassIdChange={(nextClassId) => {
                 setClassId(nextClassId);
@@ -592,6 +642,7 @@ function AssignmentFullEditFields({
   movieSynopsis,
   moviePlatforms,
   movieCustomPlatform,
+  videoVideos,
   linkedAssignmentId,
   classId,
   linkedNodeId,
@@ -610,6 +661,7 @@ function AssignmentFullEditFields({
   onMovieSynopsisChange,
   onMoviePlatformsChange,
   onMovieCustomPlatformChange,
+  onVideoVideosChange,
   onLinkedAssignmentChange,
   onClassIdChange,
   onLinkedNodeIdChange,
@@ -626,6 +678,7 @@ function AssignmentFullEditFields({
   movieSynopsis: string;
   moviePlatforms: string[];
   movieCustomPlatform: string;
+  videoVideos: VideoData[];
   linkedAssignmentId: string;
   classId: string;
   linkedNodeId: string;
@@ -644,6 +697,7 @@ function AssignmentFullEditFields({
   onMovieSynopsisChange: (v: string) => void;
   onMoviePlatformsChange: (v: string[]) => void;
   onMovieCustomPlatformChange: (v: string) => void;
+  onVideoVideosChange: (v: VideoData[]) => void;
   onLinkedAssignmentChange: (v: string) => void;
   onClassIdChange: (v: string) => void;
   onLinkedNodeIdChange: (v: string) => void;
@@ -695,6 +749,18 @@ function AssignmentFullEditFields({
             value={contentRef}
             onChange={e => onContentRefChange(e.target.value)}
             className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+          />
+        </div>
+      ) : null}
+
+      {type === "video" ? (
+        <div className="space-y-1">
+          <label className="text-sm font-medium text-slate-700">Video</label>
+          <VideoSearch
+            videos={videoVideos}
+            onVideosChange={onVideoVideosChange}
+            disabled={saving}
+            enableQuizGeneration={false}
           />
         </div>
       ) : null}

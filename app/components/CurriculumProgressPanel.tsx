@@ -11,11 +11,13 @@ import {
   type BuilderAssignmentPrefs,
   type CurriculumJob,
   type CourseJob,
+  type CourseJobStatus,
   type CurriculumDesignInput,
   type CourseSlot,
   type StoredSpineNode,
   type StoredRawNode,
   type StoredAssignment,
+  type VideoEnrichEntry,
   clearCurriculumJob,
   computeOverallProgress,
   createAssignmentPrefsForWeight,
@@ -26,14 +28,19 @@ import {
   updateCurriculumJobCourse,
   removeCurriculumJobCourse,
   updateCurriculumJobRoot,
+  mergeJobCourse,
+  mergeJobRoot,
 } from "../lib/curriculumStore";
 import {
+  autoLayoutSkillTree,
   curriculumBuildBranch,
   curriculumBuildChapter,
   curriculumBuildSpine,
   curriculumCommitCourse,
+  curriculumEnrichVideo,
   curriculumGenerateAssignments,
   curriculumGenerateLessonReading,
+  curriculumGenerateQuizFromContent,
   curriculumLayoutNodes,
 } from "../server/functions";
 
@@ -62,28 +69,61 @@ export function useCurriculumProgress() {
 }
 
 // ── Build orchestration ───────────────────────────────────────────────────────
-// All state mutations go directly to localStorage via updateCurriculumJobCourse /
-// updateCurriculumJobRoot so that subsequent loadCurriculumJob() reads are always
-// consistent. React state is synced at the end of each wave via notifyReact().
+// Two parallel copies of the job are maintained:
+//   • localStorage (via updateCurriculumJobCourse) — compact, text contentRefs
+//     stripped to "" so the ~5 MB quota is not exceeded. Used only for resume.
+//   • in-memory `mem` — full unstripped copy passed to React state via
+//     notifyReact(mem). This is what the UI and commit step read from.
 
 async function runCurriculumBuild(
   job: CurriculumJob,
-  notifyReact: () => void,
+  notifyReact: (full: CurriculumJob) => void,
 ): Promise<void> {
   const jobId = job.jobId;
   const { designInput } = job;
   const prefs: BuilderAssignmentPrefs =
     designInput.assignmentPrefs ?? createAssignmentPrefsForWeight(designInput.assignmentWeight);
 
-  // Direct localStorage helpers — bypasses React batching so reads are always fresh
+  // `mem` is the authoritative full in-memory copy; localStorage is the stripped resume copy.
+  let mem: CurriculumJob = job;
+
   function patchCourse(slotId: string, patch: Partial<CourseJob>) {
+    // Update localStorage (stripped)
     updateCurriculumJobCourse(jobId, slotId, patch);
+    // Update in-memory (full)
+    mem = mergeJobCourse(mem, slotId, patch);
+    notifyReact(mem);
   }
   function patchRoot(patch: Partial<CurriculumJob>) {
     updateCurriculumJobRoot(jobId, patch);
+    mem = mergeJobRoot(mem, patch);
+    notifyReact(mem);
   }
+  // fresh() still reads localStorage for cross-closure consistency checks
+  // (e.g. reading chapterProgress accumulated by parallel branches)
   function fresh() {
     return loadCurriculumJob();
+  }
+  // freshMem() returns the current in-memory job for reads that need full content
+  function freshMem() {
+    return mem;
+  }
+
+  // ── Resume sanitization ───────────────────────────────────────────────────
+  // If the page was refreshed mid-build, courses stuck in a *_running status
+  // won't be picked up by any wave filter. Reset them to their previous "done"
+  // state so the right wave picks them up for re-processing.
+  const RUNNING_TO_RESTART: Record<string, CourseJobStatus> = {
+    spine_running:       "pending",
+    lessons_running:     "spine_done",
+    branches_running:    "lessons_done",
+    assignments_running: "branches_done",
+  };
+  for (const cj of (fresh()?.courseJobs ?? [])) {
+    const resetTo = RUNNING_TO_RESTART[cj.status];
+    if (resetTo) {
+      patchCourse(cj.slotId, { status: resetTo });
+    }
   }
 
   // ── Wave 1: Build all spines concurrently ─────────────────────────────────
@@ -97,7 +137,6 @@ async function runCurriculumBuild(
         const slot = wave1Job.courses.find((s) => s.id === cj.slotId);
         if (!slot) return;
         patchCourse(cj.slotId, { status: "spine_running" });
-        notifyReact();
         try {
           const result = await curriculumBuildSpine({
             data: {
@@ -119,12 +158,10 @@ async function runCurriculumBuild(
             errorMessage: err instanceof Error ? err.message : String(err),
           });
         }
-        notifyReact();
       }),
   );
 
   patchRoot({ wave1Done: true });
-  notifyReact();
 
   // ── Wave 2a: Chapter clusters ─────────────────────────────────────────────
   const afterWave1 = fresh();
@@ -134,7 +171,6 @@ async function runCurriculumBuild(
   for (const cj of spineDone) {
     patchCourse(cj.slotId, { status: "lessons_running" });
   }
-  notifyReact();
 
   await Promise.all(
     spineDone.flatMap((cj) => {
@@ -182,32 +218,77 @@ async function runCurriculumBuild(
             ],
           });
         }
-        notifyReact();
       });
     }),
   );
 
+  // ── Post-Wave-2a: re-wire spine so milestones connect through chapter lessons ──
+  // Without this, spine_N → spine_N+1 directly while chapter lessons hang off to the side.
+  // With this, the required chain becomes: spine_N → ch_lesson_0 → … → ch_lesson_last → spine_N+1
+  for (const cj of freshMem().courseJobs) {
+    if (cj.status !== "lessons_running") continue;
+
+    const rawNodes = [...(freshMem().courseJobs.find((j) => j.slotId === cj.slotId)?.rawNodes ?? [])];
+
+    // Build a map: milestoneId → last chapter lesson tempId for that milestone
+    const lastLessonForMilestone = new Map<string, string>();
+    const chapterPrefixToNodes = new Map<string, StoredRawNode[]>();
+    for (const n of rawNodes) {
+      if (!n.tempId.startsWith("ch_")) continue;
+      // ch_{milestoneId}_{index} → prefix is ch_{milestoneId}
+      const match = n.tempId.match(/^(ch_.+)_\d+$/);
+      if (!match) continue;
+      const pfx = match[1]!;
+      if (!chapterPrefixToNodes.has(pfx)) chapterPrefixToNodes.set(pfx, []);
+      chapterPrefixToNodes.get(pfx)!.push(n);
+    }
+    for (const [pfx, nodes] of chapterPrefixToNodes) {
+      // Sort by tempId suffix number to find the last
+      const sorted = [...nodes].sort((a, b) => {
+        const ai = parseInt(a.tempId.replace(/^.*_(\d+)$/, "$1"), 10);
+        const bi = parseInt(b.tempId.replace(/^.*_(\d+)$/, "$1"), 10);
+        return ai - bi;
+      });
+      const lastNode = sorted[sorted.length - 1];
+      if (!lastNode) continue;
+      // Extract milestoneId from prefix: ch_{milestoneId} → strip "ch_" prefix
+      const milestoneId = pfx.replace(/^ch_/, "");
+      lastLessonForMilestone.set(milestoneId, lastNode.tempId);
+    }
+
+    // Re-wire: for any node whose prerequisites include a milestone that has chapter lessons,
+    // replace that milestone reference with the last lesson's tempId (so spine flows through lessons).
+    // Exclusions:
+    //   - The chapter cluster nodes themselves (ch_*) — they already point to the milestone correctly
+    //   - Optional nodes (isRequired=false) — they branch off milestones/lessons directly
+    const rewired = rawNodes.map((n) => {
+      if (n.tempId.startsWith("ch_")) return n; // chapter lessons stay anchored to their milestone
+      const newPrereqs = n.prerequisites.map((prereq) => {
+        const lastLesson = lastLessonForMilestone.get(prereq);
+        // Only re-wire required nodes (spine milestones, bosses) that point to a milestone
+        return (lastLesson && n.isRequired) ? lastLesson : prereq;
+      });
+      const changed = newPrereqs.some((p, i) => p !== n.prerequisites[i]);
+      return changed ? { ...n, prerequisites: newPrereqs } : n;
+    });
+
+    patchCourse(cj.slotId, { rawNodes: rewired });
+  }
+
   // Mark lessons_done
-  const afterChapters = fresh();
-  if (!afterChapters) return;
-  for (const cj of afterChapters.courseJobs) {
+  for (const cj of freshMem().courseJobs) {
     if (cj.status === "lessons_running") patchCourse(cj.slotId, { status: "lessons_done" });
   }
-  notifyReact();
 
   // ── Wave 2b: Branch clusters ──────────────────────────────────────────────
-  const afterLessonsDone = fresh();
-  if (!afterLessonsDone) return;
-
-  const lessonsDone = afterLessonsDone.courseJobs.filter((cj) => cj.status === "lessons_done");
+  const lessonsDone = freshMem().courseJobs.filter((cj) => cj.status === "lessons_done");
   for (const cj of lessonsDone) {
     patchCourse(cj.slotId, { status: "branches_running" });
   }
-  notifyReact();
 
   await Promise.all(
     lessonsDone.flatMap((cj) => {
-      const slot = afterLessonsDone.courses.find((s) => s.id === cj.slotId);
+      const slot = mem.courses.find((s) => s.id === cj.slotId);
       if (!slot) return [];
 
       const chapterLessons = cj.rawNodes.filter(
@@ -243,38 +324,51 @@ async function runCurriculumBuild(
         } catch (err) {
           console.error(`[Wave2b] branch failed "${lesson.title}" (${lesson.tempId}) course=${cj.slotId}:`, err instanceof Error ? err.message : err);
         }
-        notifyReact();
       });
     }),
   );
 
-  const afterBranches = fresh();
-  if (!afterBranches) return;
-  for (const cj of afterBranches.courseJobs) {
+  for (const cj of freshMem().courseJobs) {
     if (cj.status === "branches_running") patchCourse(cj.slotId, { status: "branches_done" });
   }
   patchRoot({ wave2Done: true });
-  notifyReact();
 
   // ── Wave 3: Assignments + readings + layout ───────────────────────────────
-  const afterWave2 = fresh();
-  if (!afterWave2) return;
-
-  const branchesDone = afterWave2.courseJobs.filter((cj) => cj.status === "branches_done");
+  const branchesDone = freshMem().courseJobs.filter((cj) => cj.status === "branches_done");
   for (const cj of branchesDone) {
     patchCourse(cj.slotId, { status: "assignments_running" });
   }
-  notifyReact();
 
   await Promise.all(
     branchesDone.map(async (cj) => {
-      const slot = afterWave2.courses.find((s) => s.id === cj.slotId);
+      const slot = mem.courses.find((s) => s.id === cj.slotId);
       if (!slot) return;
 
       const nodesToProcess = cj.rawNodes.length > 0 ? cj.rawNodes : cj.spineNodes;
       const allAssignments: StoredAssignment[] = [];
 
+      // Seed per-node progress tracker
+      patchCourse(cj.slotId, {
+        assignmentProgress: nodesToProcess.map((n) => ({
+          nodeId: n.tempId,
+          nodeTitle: n.title,
+          status: "pending" as const,
+          nodeCount: 0,
+        })),
+      });
+
       for (const node of nodesToProcess) {
+        // Mark running — read from mem so progress array is unstripped
+        const curProgress = freshMem().courseJobs.find((j) => j.slotId === cj.slotId)?.assignmentProgress ?? [];
+        patchCourse(cj.slotId, {
+          assignmentProgress: curProgress.map((p) =>
+            p.nodeId === node.tempId ? { ...p, status: "running" as const } : p,
+          ),
+        });
+
+        let nodeAssignmentCount = 0;
+        let nodeStatus: "done" | "skipped" = "done";
+
         try {
           const result = await curriculumGenerateAssignments({
             data: {
@@ -308,29 +402,117 @@ async function runCurriculumBuild(
                   nodeType: node.nodeType,
                 },
               });
+
+              // Strip HTML tags to get plain text for quiz generation
+              const readingPlainText = readingResult.html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+
               const readingAssignment: StoredAssignment = {
                 nodeId: node.tempId,
                 contentType: "text",
                 title: `Reading: ${node.title}`,
                 description: `Grade-appropriate reading passage for ${node.title}.`,
-                contentRef: readingResult.html,
+                contentRef: readingResult.html,  // full HTML — lives only in mem, stripped in localStorage
               };
+
+              // Regenerate any quiz assignments using the reading content as source
               const nonText = nodeAssignments.filter((a) => a.contentType !== "text");
-              allAssignments.push(readingAssignment, ...nonText);
+              const enrichedAssignments = await Promise.all(
+                nonText.map(async (a) => {
+                  if (a.contentType !== "quiz") return a;
+                  try {
+                    const quizResult = await curriculumGenerateQuizFromContent({
+                      data: {
+                        topic: node.title,
+                        gradeLevel: designInput.gradeLevel,
+                        sourceText: readingPlainText.slice(0, 4000),
+                        questionCount: 5,
+                      },
+                    });
+                    return { ...a, contentRef: quizResult.contentRef };
+                  } catch {
+                    return a; // keep original on failure
+                  }
+                }),
+              );
+
+              allAssignments.push(readingAssignment, ...enrichedAssignments);
+              nodeAssignmentCount = 1 + enrichedAssignments.length;
             } catch (err) {
               console.error(`[Wave3] reading failed "${node.title}" (${node.tempId}):`, err instanceof Error ? err.message : err);
               allAssignments.push(...nodeAssignments);
+              nodeAssignmentCount = nodeAssignments.length;
             }
+          } else if (node.nodeType === "milestone" || node.nodeType === "boss") {
+            // Build chapter context from all assignments already collected for this chapter's lesson nodes.
+            // Chapter lesson nodes use tempIds prefixed with "ch_<milestoneId>_" (from generateChapterCluster).
+            // For boss nodes, gather across ALL chapter nodes collected so far.
+            const chapterPrefix = `ch_${node.tempId}_`;
+            const isChapterNode = (tempId: string) =>
+              node.nodeType === "boss"
+                ? true  // boss covers the full course
+                : tempId.startsWith(chapterPrefix);
+
+            // Collect reading text from lesson nodes in this chapter
+            const chapterReadings = allAssignments
+              .filter((a) => a.contentType === "text" && isChapterNode(a.nodeId) && a.contentRef)
+              .map((a) => a.contentRef!.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim())
+              .filter(Boolean);
+
+            // Collect question strings from prior quizzes in this chapter to avoid repetition
+            const priorQuizQuestions = allAssignments
+              .filter((a) => a.contentType === "quiz" && isChapterNode(a.nodeId) && a.contentRef)
+              .flatMap((a) => {
+                try {
+                  const parsed = JSON.parse(a.contentRef!) as { questions?: Array<{ question: string }> };
+                  return (parsed.questions ?? []).map((q) => q.question).filter(Boolean);
+                } catch { return []; }
+              });
+
+            const chapterSourceText = chapterReadings.join("\n\n").slice(0, 3500)
+              || (node.description ?? "");
+
+            const enrichedAssignments = await Promise.all(
+              nodeAssignments.map(async (a) => {
+                if (a.contentType !== "quiz") return a;
+                try {
+                  const quizResult = await curriculumGenerateQuizFromContent({
+                    data: {
+                      topic: node.title,
+                      gradeLevel: designInput.gradeLevel,
+                      sourceText: chapterSourceText,
+                      questionCount: 5,
+                      priorQuestions: priorQuizQuestions,
+                    },
+                  });
+                  return { ...a, contentRef: quizResult.contentRef };
+                } catch {
+                  return a;
+                }
+              }),
+            );
+            allAssignments.push(...enrichedAssignments);
+            nodeAssignmentCount = enrichedAssignments.length;
           } else {
             allAssignments.push(...nodeAssignments);
+            nodeAssignmentCount = nodeAssignments.length;
           }
         } catch (err) {
           console.error(`[Wave3] assignments failed "${node.title}" (${node.tempId}):`, err instanceof Error ? err.message : err);
+          nodeStatus = "skipped";
         }
+
+        // Mark done — read progress from mem to preserve other nodes' state
+        const doneProgress = freshMem().courseJobs.find((j) => j.slotId === cj.slotId)?.assignmentProgress ?? [];
+        patchCourse(cj.slotId, {
+          assignmentProgress: doneProgress.map((p) =>
+            p.nodeId === node.tempId
+              ? { ...p, status: nodeStatus, nodeCount: nodeAssignmentCount }
+              : p,
+          ),
+        });
       }
 
       patchCourse(cj.slotId, { assignments: allAssignments, status: "assignments_done" });
-      notifyReact();
 
       // Layout
       try {
@@ -352,12 +534,20 @@ async function runCurriculumBuild(
         console.error(`[Wave3] layout failed course=${cj.slotId}:`, err instanceof Error ? err.message : err);
         patchCourse(cj.slotId, { status: "layout_done" });
       }
-      notifyReact();
     }),
   );
 
-  patchRoot({ wave3Done: true, overallStatus: "review" });
-  notifyReact();
+  // Only enter review if every course reached layout_done.
+  // Courses stuck at earlier stages get marked failed so the user sees what went wrong.
+  const LAYOUT_DONE_STATUSES = new Set(["layout_done", "assignments_done"]);
+  for (const cj of freshMem().courseJobs) {
+    if (!LAYOUT_DONE_STATUSES.has(cj.status) && cj.status !== "failed") {
+      patchCourse(cj.slotId, { status: "failed", errorMessage: "Content generation did not complete." });
+    }
+  }
+
+  const anyReady = freshMem().courseJobs.some((cj) => LAYOUT_DONE_STATUSES.has(cj.status));
+  patchRoot({ wave3Done: true, overallStatus: anyReady ? "review" : "failed" });
 }
 
 // ── Provider ──────────────────────────────────────────────────────────────────
@@ -366,8 +556,8 @@ export function CurriculumProgressProvider({ children }: { children: ReactNode }
   const [job, setJob] = useState<CurriculumJob | null>(() => loadCurriculumJob());
   const buildingRef = useRef(false);
 
-  const notifyReact = useCallback(() => {
-    setJob(loadCurriculumJob());
+  const notifyReact = useCallback((full: CurriculumJob) => {
+    setJob(full);
   }, []);
 
   // Resume or start building when job enters "building" state
@@ -379,8 +569,8 @@ export function CurriculumProgressProvider({ children }: { children: ReactNode }
       .catch((err) => {
         const msg = err instanceof Error ? err.message : String(err);
         console.error("[CurriculumBuild] fatal top-level error:", msg);
-        updateCurriculumJobRoot(job.jobId, { overallStatus: "failed" } as Partial<CurriculumJob>);
-        notifyReact();
+        const failedJob = updateCurriculumJobRoot(job.jobId, { overallStatus: "failed" } as Partial<CurriculumJob>);
+        if (failedJob) notifyReact(failedJob);
       })
       .finally(() => {
         buildingRef.current = false;
@@ -425,9 +615,11 @@ const STATUS_LABELS: Record<string, string> = {
   lessons_done: "Lessons ready",
   branches_running: "Building branches…",
   branches_done: "Branches ready",
-  assignments_running: "Generating assignments…",
-  assignments_done: "Assignments ready",
-  layout_done: "Laying out…",
+  assignments_running: "Generating content…",
+  assignments_done: "Content ready",
+  layout_done: "Layout done",
+  enriching_running: "Fetching transcripts…",
+  enriching_done: "Transcripts done",
   committed: "Complete",
   failed: "Failed",
 };
@@ -441,23 +633,42 @@ const STATUS_COLORS: Record<string, string> = {
   branches_running: "text-purple-500",
   branches_done: "text-purple-400",
   assignments_running: "text-amber-500",
-  assignments_done: "text-green-400",
-  layout_done: "text-green-400",
+  assignments_done: "text-amber-400",
+  layout_done: "text-amber-400",
+  enriching_running: "text-teal-400",
+  enriching_done: "text-teal-300",
   committed: "text-emerald-400",
   failed: "text-rose-500",
 };
 
 const isActiveStatus = (status: string) =>
-  status.endsWith("_running") || status === "spine_running";
+  status.endsWith("_running");
 
 function CourseProgressRow({ courseJob, onRemove }: { courseJob: CourseJob; onRemove?: () => void }) {
   const color = STATUS_COLORS[courseJob.status] ?? "text-slate-400";
   const active = isActiveStatus(courseJob.status);
   const canRemove = courseJob.status !== "committed" && onRemove;
 
+  // Assignment generation progress
+  const runningNode = courseJob.status === "assignments_running"
+    ? courseJob.assignmentProgress.find((p) => p.status === "running")
+    : null;
+  const doneNodeCount = courseJob.assignmentProgress.filter(
+    (p) => p.status === "done" || p.status === "skipped",
+  ).length;
+  const totalNodeCount = courseJob.assignmentProgress.length;
+
+  // Video enrichment progress
+  const enrichProgress = courseJob.videoEnrichProgress ?? [];
+  const doneVideoCount = enrichProgress.filter((v) => v.status === "done" || v.status === "skipped").length;
+  const totalVideoCount = enrichProgress.length;
+  const runningVideo = courseJob.status === "enriching_running"
+    ? enrichProgress.find((v) => v.status === "running")
+    : null;
+
   return (
-    <div className="flex items-center gap-2 py-1.5 border-b border-slate-800 last:border-0">
-      <div className="shrink-0 w-4 h-4 flex items-center justify-center">
+    <div className="flex items-start gap-2 py-1.5 border-b border-slate-800 last:border-0">
+      <div className="shrink-0 w-4 h-4 flex items-center justify-center mt-0.5">
         {courseJob.status === "committed" && (
           <span className="text-emerald-400 text-xs">✓</span>
         )}
@@ -476,12 +687,34 @@ function CourseProgressRow({ courseJob, onRemove }: { courseJob: CourseJob; onRe
       </div>
       <div className="flex-1 min-w-0">
         <p className="text-xs font-medium text-slate-300 truncate">{courseJob.name}</p>
-        <p className={`text-xs ${color}`}>
-          {STATUS_LABELS[courseJob.status] ?? courseJob.status}
+        <p className={`text-xs ${color} truncate`}>
+          {courseJob.status === "assignments_running" && totalNodeCount > 0
+            ? `Content ${doneNodeCount}/${totalNodeCount}${runningNode ? ` — ${runningNode.nodeTitle}` : "…"}`
+            : courseJob.status === "enriching_running" && totalVideoCount > 0
+            ? `Videos ${doneVideoCount}/${totalVideoCount}${runningVideo ? ` — ${runningVideo.title}` : "…"}`
+            : STATUS_LABELS[courseJob.status] ?? courseJob.status}
           {courseJob.errorMessage && (
-            <span className="ml-1 text-rose-400 text-xs" title={courseJob.errorMessage}>— {courseJob.errorMessage.slice(0, 80)}</span>
+            <span className="ml-1 text-rose-400 text-xs" title={courseJob.errorMessage}>— {courseJob.errorMessage.slice(0, 60)}</span>
           )}
         </p>
+        {/* Mini progress bar during assignment generation */}
+        {courseJob.status === "assignments_running" && totalNodeCount > 0 && (
+          <div className="mt-1 w-full h-1 bg-slate-800 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-amber-500 rounded-full transition-all duration-300"
+              style={{ width: `${Math.round((doneNodeCount / totalNodeCount) * 100)}%` }}
+            />
+          </div>
+        )}
+        {/* Mini progress bar during video enrichment */}
+        {courseJob.status === "enriching_running" && totalVideoCount > 0 && (
+          <div className="mt-1 w-full h-1 bg-slate-800 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-teal-500 rounded-full transition-all duration-300"
+              style={{ width: `${Math.round((doneVideoCount / totalVideoCount) * 100)}%` }}
+            />
+          </div>
+        )}
       </div>
       {courseJob.status === "committed" && courseJob.committedTreeId && (
         <a
@@ -514,7 +747,11 @@ function CurriculumProgressPanel() {
   if (!job) return null;
 
   const allDone = job.overallStatus === "done";
-  const canApprove = job.overallStatus === "review";
+  // Require every course to have finished layout before approve is shown.
+  // This prevents the button from appearing if some courses stalled mid-generation.
+  const REVIEW_TERMINAL = new Set(["layout_done", "assignments_done", "enriching_running", "enriching_done", "committed"]);
+  const allCoursesReadyForApproval = job.courseJobs.length > 0 && job.courseJobs.every((cj) => REVIEW_TERMINAL.has(cj.status));
+  const canApprove = job.overallStatus === "review" && allCoursesReadyForApproval;
   const canCommit = canApprove && !committing;
 
   function handleRemoveCourse(slotId: string) {
@@ -544,9 +781,11 @@ function CurriculumProgressPanel() {
     setCommitError(null);
 
     const { designInput } = job;
+    const jobId = job.jobId;
 
+    // ── Step 1: DB commit — fast, no AI ──────────────────────────────────────
     for (const cj of job.courseJobs) {
-      if (cj.status === "committed") continue;
+      if (cj.status === "committed" || cj.status === "enriching_running" || cj.status === "enriching_done") continue;
       const slot = job.courses.find((s) => s.id === cj.slotId);
       if (!slot) continue;
 
@@ -591,9 +830,29 @@ function CurriculumProgressPanel() {
           },
         });
 
-        updateCurriculumJobCourse(job.jobId, cj.slotId, {
-          status: "committed",
+        // Trigger autolayout on the committed tree — reads from DB, runs full
+        // fork detection + edge classification, and persists proper positions.
+        // Errors are non-fatal: the tree is usable even with the draft layout.
+        try {
+          await autoLayoutSkillTree({ data: { treeId: result.treeId } });
+        } catch (err) {
+          console.warn(`[CurriculumBuild] autolayout failed for tree ${result.treeId}:`, err instanceof Error ? err.message : err);
+        }
+
+        // Seed Wave 4 progress from the video assignments returned by commit
+        const videoEntries: VideoEnrichEntry[] = (result.videoAssignments ?? []).map((v) => ({
+          assignmentId: v.assignmentId,
+          nodeId: v.nodeId,
+          classId: result.classId,
+          title: v.title,
+          status: "pending" as const,
+        }));
+
+        updateCurriculumJobCourse(jobId, cj.slotId, {
+          status: "enriching_running",
           committedTreeId: result.treeId,
+          committedClassId: result.classId,
+          videoEnrichProgress: videoEntries,
         });
         refreshJob();
       } catch (err) {
@@ -606,7 +865,82 @@ function CurriculumProgressPanel() {
       }
     }
 
-    updateCurriculumJobRoot(job.jobId, { overallStatus: "done" });
+    // ── Step 2: Wave 4 — transcript + quiz enrichment, concurrent ─────────────
+    // Run all courses in parallel; within each course cap at 5 concurrent videos.
+    const latestJob = loadCurriculumJob();
+    if (latestJob) {
+      const enrichingCourses = latestJob.courseJobs.filter(
+        (cj) => cj.status === "enriching_running",
+      );
+
+      await Promise.all(
+        enrichingCourses.map(async (cj) => {
+          const videos = cj.videoEnrichProgress;
+          if (videos.length === 0) {
+            updateCurriculumJobCourse(jobId, cj.slotId, { status: "enriching_done" });
+            refreshJob();
+            return;
+          }
+
+          // Process in chunks of 5 concurrently
+          const CONCURRENCY = 5;
+          for (let i = 0; i < videos.length; i += CONCURRENCY) {
+            const chunk = videos.slice(i, i + CONCURRENCY);
+            await Promise.all(
+              chunk.map(async (v) => {
+                // Mark running
+                const cur = loadCurriculumJob()?.courseJobs.find((j) => j.slotId === cj.slotId);
+                updateCurriculumJobCourse(jobId, cj.slotId, {
+                  videoEnrichProgress: (cur?.videoEnrichProgress ?? videos).map((e) =>
+                    e.assignmentId === v.assignmentId ? { ...e, status: "running" as const } : e,
+                  ),
+                });
+                refreshJob();
+
+                let finalStatus: "done" | "skipped" = "done";
+                try {
+                  await curriculumEnrichVideo({
+                    data: {
+                      assignmentId: v.assignmentId,
+                      classId: v.classId,
+                      nodeId: v.nodeId,
+                      gradeLevel: designInput.gradeLevel,
+                    },
+                  });
+                } catch (err) {
+                  console.error(`[Wave4] enrich failed "${v.title}":`, err instanceof Error ? err.message : err);
+                  finalStatus = "skipped";
+                }
+
+                // Mark done/skipped
+                const cur2 = loadCurriculumJob()?.courseJobs.find((j) => j.slotId === cj.slotId);
+                updateCurriculumJobCourse(jobId, cj.slotId, {
+                  videoEnrichProgress: (cur2?.videoEnrichProgress ?? videos).map((e) =>
+                    e.assignmentId === v.assignmentId ? { ...e, status: finalStatus } : e,
+                  ),
+                });
+                refreshJob();
+              }),
+            );
+          }
+
+          updateCurriculumJobCourse(jobId, cj.slotId, { status: "enriching_done" });
+          refreshJob();
+        }),
+      );
+    }
+
+    // ── Step 3: Mark everything committed ────────────────────────────────────
+    const finalJob = loadCurriculumJob();
+    if (finalJob) {
+      for (const cj of finalJob.courseJobs) {
+        if (cj.status === "enriching_done" || cj.status === "enriching_running") {
+          updateCurriculumJobCourse(jobId, cj.slotId, { status: "committed" });
+        }
+      }
+    }
+
+    updateCurriculumJobRoot(jobId, { overallStatus: "done" });
     setCommitting(false);
     refreshJob();
   }
@@ -678,7 +1012,9 @@ function CurriculumProgressPanel() {
                   {committing ? (
                     <>
                       <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      Committing…
+                      {job.courseJobs.some((cj) => cj.status === "enriching_running")
+                        ? "Fetching transcripts…"
+                        : "Saving courses…"}
                     </>
                   ) : (
                     "Approve & Create Courses ✦"

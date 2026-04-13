@@ -1406,11 +1406,13 @@ function parseCurriculumNode(item: unknown): CurriculumNodeSuggestion | null {
       : defaultXp;
 
   const cluster = r.cluster === "specialization" ? "specialization" : "core";
-  // isRequired: respect explicit field; fall back to cluster ("core" = required)
+  // isRequired: respect explicit field first.
+  // Fallback rule: specialization nodes are NEVER required; elective nodes are NEVER required.
+  // Only core, non-elective nodes are required by default when the field is absent.
   const isRequired =
     typeof r.isRequired === "boolean"
       ? r.isRequired
-      : cluster === "core" && r.nodeType !== "elective";
+      : cluster === "core" && r.nodeType !== "elective" && r.nodeType !== "branch";
 
   return {
     tempId: r.tempId,
@@ -1867,12 +1869,18 @@ export async function generateCurriculumSpine(input: {
     input.focusSteering ? `Curriculum focus/steering: ${input.focusSteering} — weave relevant examples and contexts into chapter titles and descriptions.` : "",
     `Grade-level calibration: ${calibration}`,
     "",
-    `Generate a JSON array of ${chapterCount + 3} nodes. Rules:`,
-    "- spine_0: the course root (depth 0, prerequisites [], nodeType 'milestone', colorRamp 'teal', xpReward 100, isRequired true)",
-    `- spine_1 through spine_${Math.ceil(chapterCount / 2)}: left-lane chapter milestones (each depends on the previous, depth 1+, colorRamp 'teal', nodeType 'milestone', isRequired true)`,
-    `- spine_${Math.ceil(chapterCount / 2) + 1} through spine_${chapterCount}: right-lane chapter milestones (spine_${Math.ceil(chapterCount / 2) + 1} depends on spine_0, rest chain from there, colorRamp 'teal', nodeType 'milestone', isRequired true)`,
-    `- spine_${chapterCount + 1}: mid-term boss (nodeType 'boss', colorRamp 'blue', xpReward 450, isRequired true, prerequisites [spine_${Math.ceil(chapterCount / 2)}, spine_${chapterCount}])`,
-    `- spine_${chapterCount + 2}: final boss (nodeType 'boss', colorRamp 'blue', xpReward 700, isRequired true, prerequisites [spine_${chapterCount + 1}])`,
+    `Generate a JSON array of exactly ${chapterCount + 3} nodes forming a SINGLE UNBROKEN LINEAR CHAIN. Rules:`,
+    "- spine_0: course root (depth 0, prerequisites [], nodeType 'milestone', colorRamp 'teal', xpReward 100, isRequired true, cluster 'core')",
+    `- spine_1 through spine_${chapterCount}: chapter milestones. EXACT prerequisite chain: spine_1.prerequisites=['spine_0'], spine_2.prerequisites=['spine_1'], spine_3.prerequisites=['spine_2'], continuing until spine_${chapterCount}.prerequisites=['spine_${chapterCount - 1}']. All: colorRamp='teal', nodeType='milestone', isRequired=true, cluster='core'.`,
+    `- spine_${chapterCount + 1}: mid-term boss — nodeType='boss', colorRamp='blue', xpReward=450, isRequired=true, cluster='core', prerequisites=['spine_${Math.floor(chapterCount / 2)}']`,
+    `- spine_${chapterCount + 2}: final boss — nodeType='boss', colorRamp='blue', xpReward=700, isRequired=true, cluster='core', prerequisites=['spine_${chapterCount + 1}']`,
+    "",
+    "ABSOLUTE RULES — violating any of these makes the output invalid:",
+    "  1. Every spine_N (N≥1) must depend on EXACTLY the previous milestone: spine_N.prerequisites=['spine_{N-1}']. No exceptions.",
+    "  2. Do NOT have two nodes with the same prerequisite. No forking.",
+    "  3. Do NOT have any node with prerequisites=[] except spine_0.",
+    "  4. All nodes must have isRequired=true and cluster='core'.",
+    "  5. The chain must be: spine_0 → spine_1 → spine_2 → ... → spine_${chapterCount} → mid-boss → final-boss.",
     "",
     "Each node must have these exact fields:",
     '{"tempId":"spine_0","title":"Course Name","description":"One sentence.","icon":"🌟","colorRamp":"teal","nodeType":"milestone","cluster":"core","depth":0,"xpReward":100,"isRequired":true,"prerequisites":[],"suggestedAssignments":[]}',
@@ -2005,14 +2013,13 @@ export async function generateCurriculumWebFromSpine(input: {
     "  XP: hub 200–350, satellites 150–450.",
     "",
     `━━━ ZONE C — STUDENT CHOICE FORKS (~${choiceCount} nodes) ━━━`,
-    "  cluster='core', isRequired=false, nodeType='lesson', colorRamp='blue' or 'teal'",
-    `  At ${Math.max(1, Math.floor(scale.choiceCount / 6))} spine milestone(s), offer TWO alternate approach paths:`,
+    "  cluster='specialization', isRequired=false, nodeType='lesson', colorRamp='amber' or 'coral'",
+    `  At ${Math.max(1, Math.floor(scale.choiceCount / 6))} spine milestone(s), offer TWO alternate OPTIONAL approach paths:`,
     "    Path A: 3 lesson nodes (chain), prerequisite starts from the milestone.",
     "    Path B: 3 lesson nodes (chain), also starting from the same milestone.",
     "  The two paths cover the same content unit from different angles (e.g., visual vs. analytical, historical vs. applied).",
-    "  These are TRUE FORKS in the main course flow, not optional side quests.",
-    "  Keep the paths balanced: same number of nodes, similar XP totals, similar rigor, and comparable assignment weight so no path is the obvious shortcut.",
-    "  Student should be able to complete ONE path to advance, while the other path remains available later for extra XP.",
+    "  IMPORTANT: These are OPTIONAL enrichment forks, NOT part of the required course path. cluster='specialization', isRequired=false for ALL Zone C nodes.",
+    "  Keep the paths balanced: same number of nodes, similar XP totals, similar rigor.",
     "  Label clearly in description which path this belongs to (e.g., 'Path A: Visual approach').",
     "  XP: 150–300.",
     "",
@@ -2024,6 +2031,7 @@ export async function generateCurriculumWebFromSpine(input: {
     "  XP: 350–1000 (deepest nodes should be 700–1000).",
     "",
     "GLOBAL RULES:",
+    "  • REQUIRED PATH: Only Zone A connectors may have isRequired=true. ALL Zone B, C, and D nodes must have isRequired=false and cluster='specialization'. The required course path is the spine milestones plus Zone A connectors ONLY.",
     "  • Every node must have exactly 1 prerequisite (the chain structure handles this).",
     "  • Mix subjects naturally — let the curriculum topic drive what goes in each zone.",
     "  • Vary depth: Zone A depth = milestone depth ± 1, Zone B depth = milestone depth + 1-2, Zone C depth = milestone depth + 1-3, Zone D depth = starting point + 3-5.",
@@ -2037,7 +2045,7 @@ export async function generateCurriculumWebFromSpine(input: {
       prerequisites: ["spine_N or web_M (exactly 1)"],
       cluster: "core | specialization",
       depth: "integer",
-      isRequired: "true for Zone A | false for B/C/D",
+      isRequired: "true ONLY for Zone A connectors | false for ALL Zone B/C/D nodes",
       title: "2–4 words",
       description: "1–2 sentences",
       icon: "single emoji",
@@ -2273,11 +2281,16 @@ export async function generateAssignmentsForNode(input: {
   const isLesson = node.nodeType === "lesson" || node.nodeType === "branch";
   const isElective = node.nodeType === "elective";
 
+  // Pre-compute essay writing guidelines for this grade level
+  const essayGuide = essayWritingGuidelines(input.gradeLevel, input.ageYears);
+
   if (isMilestone) {
     // Chapter entry nodes — overview, activation, and chapter-level assessment.
     // Best practice: chapter openers include a "hook" to activate prior knowledge,
     // an overview of learning objectives, and 1-2 intro media before the first lesson.
-    tasks.push('1 chapter overview: contentType="text", contentRef=a detailed 5-paragraph HTML chapter introduction using <p> tags (500-700 words): paragraph 1 hooks the student with a compelling question or real-world connection, paragraph 2 builds essential background knowledge, paragraph 3 previews key concepts and learning goals, paragraph 4 explains why the topic matters in authentic contexts for this grade/age band, paragraph 5 connects to prior and upcoming learning. Keep depth high and grade-calibrated; do not oversimplify to be brief. Title like "Chapter Intro: <topic>"');
+    // NOTE: contentRef for text assignments uses __GENERATE__:<prompt> so the commit
+    // step can generate full reading HTML in a dedicated high-token call.
+    tasks.push('1 chapter overview: contentType="text", contentRef=__GENERATE__:Write a detailed 5-paragraph chapter introduction. Title like "Chapter Intro: <topic>"');
     if (prefs.chapterIntroVideo) {
       tasks.push('2 intro videos: contentType="video" — (1) a broad overview video (YouTube search query), title like "Watch: <topic> Overview"; (2) a more specific video connecting to the first key concept, title like "Watch: <topic> Introduction"');
     }
@@ -2287,7 +2300,7 @@ export async function generateAssignmentsForNode(input: {
       tasks.push(`${prefs.quizzesPerChapter} chapter checkpoint quiz(zes): contentType="quiz", contentRef=a JSON array of exactly 5 question objects [{"question":"...","options":["A","B","C","D"],"answer":"B"},...] covering the chapter's core concepts, title like "Chapter Quiz: <topic>"`);
     }
     if (prefs.essaysPerChapter > 0) {
-      tasks.push(`${prefs.essaysPerChapter} chapter reflection essay(s): contentType="essay_questions", contentRef=a thoughtful open-ended question (2-3 sentences) asking the student to connect the chapter theme to their own life or prior knowledge, title like "Reflect: <topic>"`);
+      tasks.push(`${prefs.essaysPerChapter} chapter reflection essay(s): contentType="essay_questions", contentRef=a thought-provoking open-ended prompt (3-5 sentences) that pushes critical thinking — ask the student to connect the chapter theme to a larger question, evaluate a claim, or consider cause and effect. End with a specific question they must answer. Include these writing guidelines verbatim at the end of the contentRef: "${essayGuide}". Title like "Reflect: <topic>"`);
     }
     if (prefs.includeMovies) {
       tasks.push('1 movie assignment: contentType="movie", contentRef=a JSON object {"title":"Exact Movie Title","synopsis":"1-2 sentence description of the film and why it is relevant to this topic","whereToWatch":["Netflix","Disney+","Amazon Prime Video"]} — list ONLY the streaming platforms where this specific movie is actually available; use your knowledge of streaming libraries. Title like "Watch: <Movie Title>"');
@@ -2297,7 +2310,7 @@ export async function generateAssignmentsForNode(input: {
     // Best practice (UbD, Bloom's Taxonomy): each lesson should include input (reading/video),
     // guided practice, and a formative check. 4-5 assignments per lesson is standard.
     if (prefs.readingPerNode) {
-      tasks.push('1 reading lesson: contentType="text", contentRef=a thorough 6-paragraph HTML reading passage using <p> tags (700-950 words): paragraph 1 introduces the concept with a relatable hook, paragraphs 2-4 build deep conceptual understanding with multiple concrete examples and explicit vocabulary development for the grade level, paragraph 5 explains common misconceptions and clarifies them, paragraph 6 summarizes key takeaways and sets up follow-up synthesis. Prioritize depth and explanatory detail over brevity. Title like "Reading: <topic>"');
+      tasks.push('1 reading lesson: contentType="text", contentRef=__GENERATE__:Write a thorough 6-paragraph reading passage on the concept. Title like "Reading: <topic>"');
     }
     if (prefs.videosPerLesson > 0) {
       tasks.push(`${prefs.videosPerLesson} targeted video(s): contentType="video", contentRef=a specific YouTube search query for an educational video on this exact concept (not just the general topic), title like "Video: <topic>"`);
@@ -2306,13 +2319,13 @@ export async function generateAssignmentsForNode(input: {
     // this is the "exit ticket" equivalent that drives mastery-based progression
     tasks.push('1 formative check quiz: contentType="quiz", contentRef=a JSON array of exactly 5 question objects [{"question":"...","options":["A","B","C","D"],"answer":"B"},...] that directly assesses understanding of THIS lesson\'s specific content — questions should require students to synthesize ideas from the reading and apply them, not just recall isolated facts. Title like "Check: <topic>"');
     // Practice activity — writing response to deepen understanding
-    tasks.push('1 practice activity: contentType="essay_questions", contentRef=a short-answer question (2-4 sentences) asking the student to synthesize, explain, and apply the concept in their own words with evidence from the reading. Title like "Practice: <topic>"');
+    tasks.push(`1 practice activity: contentType="essay_questions", contentRef=a critical-thinking prompt (3-5 sentences) that asks the student to synthesize the concept, defend a position, or apply ideas to a real-world scenario — not just summarize or recall facts. The prompt should pose a genuine question worth thinking about. Include these writing guidelines verbatim at the end of the contentRef: "${essayGuide}". Title like "Practice: <topic>"`);
   } else if (isElective) {
     // Elective/deep-dive nodes — optional enrichment and specialization.
     // Best practice: electives should go beyond recall into analysis, synthesis, creation (Bloom's upper levels).
     // These are the "stretch" nodes for motivated or advanced students.
     if (prefs.readingPerNode) {
-      tasks.push('1 deep-dive reading: contentType="text", contentRef=a rich 7-paragraph HTML reading passage using <p> tags (900-1200 words) that goes beyond the textbook — includes primary source excerpts, real-world applications, and advanced analysis calibrated to grade and age. Paragraph 1: hook and context. Paragraphs 2-5: in-depth exploration with evidence and multiple perspectives. Paragraph 6: connect to broader disciplinary themes. Paragraph 7: synthesis and open questions for further thought. Prioritize thorough explanation over concision. Title like "Deep Dive: <topic>"');
+      tasks.push('1 deep-dive reading: contentType="text", contentRef=__GENERATE__:Write a rich 7-paragraph deep-dive reading that goes beyond the textbook with advanced analysis. Title like "Deep Dive: <topic>"');
     }
     if (prefs.videosPerLesson > 0) {
       tasks.push(`${Math.min(prefs.videosPerLesson + 1, 3)} video(s): contentType="video" — mix of a documentary-style video and a how-it-works or case-study video on this advanced topic, title like "Video: <topic>"`);
@@ -2329,10 +2342,10 @@ export async function generateAssignmentsForNode(input: {
     // Best practice (Understanding by Design Stage 2): capstones include review,
     // multiple assessment formats, and a performance task that requires transfer of learning.
     // These should feel substantial — a student might spend 2-3 days on a boss node.
-    tasks.push('1 comprehensive unit review: contentType="text", contentRef=a thorough 7-paragraph HTML review using <p> tags (1000-1400 words) that synthesizes ALL key concepts from the unit: paragraph 1 frames the big ideas, paragraphs 2-5 review each major concept cluster with detailed examples and explicit connections, paragraph 6 integrates cross-cutting themes and misconceptions, paragraph 7 connects to the next unit and poses an essential question for further learning. Depth should be substantial and grade-calibrated rather than concise. Title like "Unit Review: <topic>"');
+    tasks.push('1 comprehensive unit review: contentType="text", contentRef=__GENERATE__:Write a thorough 7-paragraph unit review synthesizing all key concepts with detailed examples and connections. Title like "Unit Review: <topic>"');
     // Boss nodes always get at least one essay — writing is essential for retention (Roediger & Karpicke)
     const essayCount = Math.max(1, prefs.essaysPerBoss);
-    tasks.push(`${essayCount} analytical essay prompt(s): contentType="essay_questions", contentRef=a substantive essay question (4-6 sentences) that requires the student to synthesize evidence from the readings, make an argument, or evaluate a claim — not just summarize. Title like "Essay: <topic>"`);
+    tasks.push(`${essayCount} analytical essay prompt(s): contentType="essay_questions", contentRef=a substantive and thought-provoking essay question (5-7 sentences) that demands synthesis, argumentation, and original analysis — the student must take a position, defend it with evidence, and grapple with complexity or a counterargument. The question should feel genuinely worth answering, not a simple comprehension check. Include these writing guidelines verbatim at the end of the contentRef: "${essayGuide}". Title like "Essay: <topic>"`);
     if (prefs.quizzesPerBoss > 0) {
       tasks.push(`${prefs.quizzesPerBoss} summative quiz(zes): contentType="quiz", contentRef=a JSON array of exactly 5 question objects [{"question":"...","options":["A","B","C","D"],"answer":"B"},...] — each quiz covers a different concept cluster from the unit, so together they provide comprehensive coverage. Title like "Unit Quiz: <topic>"`);
     }
@@ -2353,6 +2366,57 @@ export async function generateAssignmentsForNode(input: {
 
   const nodeId = node.tempId;
   const calibration = gradeCalibrationContext(input.gradeLevel, input.ageYears);
+
+  // ── Fetch external content sources in parallel ──────────────────────────────
+  // OER Commons, CK-12, and PBS LearningMedia are queried using the node title
+  // and subject as the search term. Results are injected into the LLM prompt as
+  // grounded source material so the model selects real URLs instead of
+  // fabricating YouTube search queries. All fetches degrade silently on failure.
+  const envRecord = env as unknown as Record<string, string | undefined>;
+  const oerKey = envRecord.OER_API_KEY ?? "";
+  const ck12Key = envRecord.CK12_API_KEY ?? "";
+  const pbsKey = envRecord.PBS_API_KEY ?? "";
+  const externalQuery = `${node.title} ${input.subject}`;
+
+  const [oerResults, ck12Results, pbsResults] = await Promise.all([
+    oerKey ? fetchOerResources(externalQuery, oerKey).catch(() => [] as OerResource[]) : Promise.resolve([] as OerResource[]),
+    ck12Key ? fetchCk12Concepts(externalQuery, ck12Key).catch(() => [] as Ck12Concept[]) : Promise.resolve([] as Ck12Concept[]),
+    pbsKey ? fetchPbsResources(externalQuery, pbsKey).catch(() => [] as PbsResource[]) : Promise.resolve([] as PbsResource[]),
+  ]);
+
+  // Build the external resources block that goes into the prompt.
+  // Only included when at least one source returned results.
+  const externalResourceLines: string[] = [];
+  if (oerResults.length > 0) {
+    externalResourceLines.push("OER Commons resources (use external_url as contentRef for url assignments):");
+    for (const r of oerResults) {
+      externalResourceLines.push(`  - "${r.title}" — ${r.external_url}${r.description ? ` — ${r.description.slice(0, 120)}` : ""}`);
+    }
+  }
+  if (ck12Results.length > 0) {
+    externalResourceLines.push("CK-12 concepts (use adaptivePracticeUrl or flexbookUrl as contentRef for url assignments):");
+    for (const c of ck12Results) {
+      const url = c.adaptivePracticeUrl ?? c.flexbookUrl ?? "";
+      if (url) externalResourceLines.push(`  - "${c.title}" — ${url}`);
+    }
+  }
+  if (pbsResults.length > 0) {
+    externalResourceLines.push("PBS LearningMedia resources (use embed_code as contentRef for video assignments when present):");
+    for (const p of pbsResults) {
+      if (p.embed_code) externalResourceLines.push(`  - "${p.title}" — EMBED:${p.embed_code.slice(0, 80)}`);
+    }
+  }
+  const externalBlock = externalResourceLines.length > 0
+    ? [
+        "",
+        "Available external content (PREFER these real sources over invented YouTube queries):",
+        ...externalResourceLines,
+        "When an external URL is available, set contentType=\"url\" and use the URL as contentRef.",
+        "When a PBS embed_code is available, set contentType=\"video\" and use only the EMBED: value (without the EMBED: prefix) as contentRef.",
+        "Only fall back to a YouTube search query string if no suitable external resource is listed.",
+      ].join("\n")
+    : "";
+
   const prompt = [
     `You are creating assignments for a ${input.subject} curriculum, grade ${input.gradeLevel}.`,
     `Grade-level calibration: ${calibration}`,
@@ -2360,6 +2424,7 @@ export async function generateAssignmentsForNode(input: {
     `Node: "${node.title}" (type: ${node.nodeType})`,
     node.description ? `Context: ${node.description.slice(0, 200)}` : "",
     `Reading quality policy: prioritize thorough, informative, grade-calibrated explanations. Do not shorten readings for concision. Use quizzes and written assignments to make students synthesize and apply what they read.`,
+    externalBlock,
     "",
     `Generate the following assignments for this node (nodeId must be exactly "${nodeId}"):`,
     tasks.map((t, i) => `${i + 1}. ${t}`).join("\n"),
@@ -2462,11 +2527,14 @@ async function resolveVideoAssignments(
         return {
           ...assignment,
           contentRef: JSON.stringify({
-            videoId: top.videoId,
-            title: top.title,
-            channel: top.channel,
-            thumbnail: top.thumbnail,
-            query: assignment.contentRef,
+            videos: [{
+              videoId: top.videoId,
+              title: top.title,
+              channel: top.channel,
+              description: top.description,
+              thumbnail: top.thumbnail,
+              query: assignment.contentRef,
+            }],
           }),
         };
       } catch {
@@ -2521,6 +2589,32 @@ export function gradeCalibrationContext(gradeLevel: string, ageYears?: number): 
     return "Emphasize critical thinking, textual analysis, and synthesis across multiple sources with detailed, information-rich prose. Use college-prep vocabulary and nuanced argumentation. Assume students can handle complex texts, counterarguments, and multi-step problem solving.";
   }
   return "Use advanced academic language and substantial disciplinary detail. Expect original analysis, synthesis of scholarly ideas, and independent inquiry. Content should reflect AP/dual-enrollment rigor with primary sources, methodological critique, and evidence-driven reasoning.";
+}
+
+/**
+ * Returns grade-appropriate essay writing guidelines including word/paragraph limits
+ * and critical thinking expectations. Injected directly into essay assignment prompts.
+ */
+export function essayWritingGuidelines(gradeLevel: string, ageYears?: number): string {
+  const grade = parseInt(gradeLevel, 10);
+  const effectiveGrade = Number.isFinite(grade) ? grade : (ageYears ? ageYears - 5 : 7);
+
+  if (effectiveGrade <= 2) {
+    return "Writing guidelines: 2–3 paragraphs (approximately 60–100 words). Use complete sentences. Include: (1) a topic sentence, (2) 1–2 supporting details from what you learned, (3) a closing sentence with your own thought or question. Focus on explaining clearly in your own words.";
+  }
+  if (effectiveGrade <= 4) {
+    return "Writing guidelines: 3–4 paragraphs (approximately 100–175 words). Structure: introduction, 1–2 body paragraphs with evidence or examples, conclusion. Include at least one specific fact or example from the lesson. Use your own words and explain why the topic matters to you or the world.";
+  }
+  if (effectiveGrade <= 6) {
+    return "Writing guidelines: 4–5 paragraphs (approximately 200–350 words). Structure: introduction with a clear position or observation, 2–3 body paragraphs each supporting a distinct point with evidence, conclusion that synthesizes your thinking. Use specific examples. Go beyond summary — explain causes, effects, or implications.";
+  }
+  if (effectiveGrade <= 8) {
+    return "Writing guidelines: 5–6 paragraphs (approximately 350–550 words). Include a clear thesis statement in your introduction, well-developed body paragraphs each with a topic sentence, supporting evidence, and analysis, plus a conclusion that does more than restate — it should answer 'so what?' Use domain vocabulary, cite at least two specific details from the material, and address a counterargument or complexity.";
+  }
+  if (effectiveGrade <= 10) {
+    return "Writing guidelines: 5–7 paragraphs (approximately 500–750 words). Construct an evidence-based argument with a nuanced thesis. Each body paragraph should use the Claim–Evidence–Analysis (CEA) structure. Engage with at least one counterargument or complicating factor. Use precise academic vocabulary, varied sentence structure, and a conclusion that extends the argument to broader implications. Cite specific evidence.";
+  }
+  return "Writing guidelines: 6–8 paragraphs or approximately 700–1000 words. Develop a sophisticated, original argument supported by textual or factual evidence. Use advanced academic conventions: a thesis that stakes a claim (not just describes), body paragraphs with layered analysis, engagement with opposing viewpoints, and a conclusion that reflects on the larger significance or asks a deeper question the essay opens up. Demonstrate independent critical thinking throughout.";
 }
 
 // ── Curriculum recommendation ──────────────────────────────────────────────────
@@ -2653,11 +2747,33 @@ export async function recommendCurriculumCourses(input: {
 }
 
 // ── Lesson reading generation ──────────────────────────────────────────────────
+//
+// Pure AI generation pipeline. The function signature is structured to allow
+// future API connector integrations (OER Commons, CK-12, PBS LearningMedia) as
+// the primary content source, with AI generation as the fallback.
+
+export type LessonReadingResult = {
+  html: string;
+};
+
+function extractHtmlParagraphs(responseText: string): string {
+  const pMatches = responseText.match(/<p[\s>][\s\S]*?<\/p>/gi);
+  if (pMatches && pMatches.length >= 2) return pMatches.join("\n");
+
+  const paragraphs = responseText
+    .split(/\n\n+/)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 20);
+  if (paragraphs.length >= 2) return paragraphs.map((p) => `<p>${p}</p>`).join("\n");
+
+  return `<p>${responseText.trim()}</p>`;
+}
 
 /**
  * Generate a grade-appropriate reading passage for a single lesson node.
- * Returns HTML string (uses <p> tags). Each lesson gets its own call to keep
- * context focused and avoid token overflow.
+ *
+ * Currently uses pure AI generation. Structured to accept API connector results
+ * (OER Commons, CK-12, PBS LearningMedia) as a future primary source.
  */
 export async function generateLessonReading(input: {
   nodeTitle: string;
@@ -2667,71 +2783,51 @@ export async function generateLessonReading(input: {
   ageYears: number;
   focusSteering?: string;
   nodeType?: string;
-}): Promise<string> {
-  const calibration = gradeCalibrationContext(input.gradeLevel, input.ageYears);
+}): Promise<LessonReadingResult> {
   const isElective = input.nodeType === "elective";
+  const calibration = gradeCalibrationContext(input.gradeLevel, input.ageYears);
   const wordTarget = isElective ? "900–1200" : "700–950";
   const paraCount = isElective ? 7 : 6;
 
   const steeringLine = input.focusSteering
-    ? `Weave in real-world examples, places, or contexts related to: "${input.focusSteering}".`
+    ? `Weave in real-world examples related to: "${input.focusSteering}".`
     : "";
 
   const structureGuide = isElective
-    ? `Structure: (1) Hook with a compelling question or surprising fact. (2-5) In-depth exploration with examples, evidence, and at least one competing perspective. (6) Clarify misconceptions and connect to broader themes. (7) Synthesis and open question for further thought.`
-    : `Structure: (1) Relatable hook or real-world connection. (2-4) Deep concept explanation with multiple grade-appropriate examples and explicit vocabulary support. (5) Clarify a common misconception or tricky point. (6) Key takeaways and a thinking question.`;
+    ? "Structure: (1) Hook. (2-5) In-depth exploration with evidence and a competing perspective. (6) Clarify misconceptions. (7) Synthesis and an open question."
+    : "Structure: (1) Relatable hook. (2-4) Deep concept explanation with grade-appropriate examples and vocabulary support. (5) Clarify a common misconception. (6) Key takeaways and a thinking question.";
 
   const prompt = [
-    `You are writing an educational reading passage for a ${input.subject} lesson.`,
-    `Topic: "${input.nodeTitle}"`,
-    input.nodeDescription ? `Context: ${input.nodeDescription}` : "",
-    ``,
+    `Act as an Instructional Designer building a lesson for a grade ${input.gradeLevel} student about "${input.nodeTitle}" (subject: ${input.subject}).`,
     `Grade-level calibration: ${calibration}`,
     steeringLine,
     ``,
-    `Write a ${wordTarget} word reading passage using exactly ${paraCount} HTML <p> tags.`,
+    `Write an original ${wordTarget}-word educational reading passage using exactly ${paraCount} HTML <p> tags.`,
     structureGuide,
     ``,
     `RULES:`,
-    `- Use ONLY <p> tags. No <h1>, <h2>, <strong>, <em>, lists, or other HTML.`,
+    `- Use ONLY <p> tags. No headings, no lists, no other HTML.`,
     `- Vocabulary and sentence complexity must match grade ${input.gradeLevel}.`,
     `- Include at least one specific, concrete example per paragraph.`,
-    `- Prioritize thorough teaching and clear reasoning over short summaries.`,
-    `- The reading should front-load knowledge; synthesis and transfer should be assessed in quizzes and written assignments.`,
-    `- Do NOT use generic filler text. Every sentence must teach something.`,
+    `- Every sentence must teach something — no generic filler.`,
     `- End the final paragraph with a thought-provoking question.`,
     ``,
-    `Return ONLY the HTML (the <p> tags). No JSON, no markdown, no explanation.`,
+    `Return ONLY the HTML <p> tags. No JSON, no markdown, no explanation.`,
   ].filter(Boolean).join("\n");
 
   const result = await env.AI.run(DEFAULT_LLM_MODEL, {
     messages: [
-      { role: "system", content: "You are an educational content writer. Output only HTML <p> tags. No other tags, no markdown, no prose outside of the content." },
+      {
+        role: "system",
+        content: "You are an educational content writer. Output only HTML <p> tags. No other markup, no markdown, no prose outside the lesson content.",
+      },
       { role: "user", content: prompt },
     ],
-    max_tokens: 2600,
+    max_tokens: 2800,
   });
 
-  const responseText = toModelText(result);
-
-  // Extract <p> tags from the response
-  const pMatches = responseText.match(/<p[\s>][\s\S]*?<\/p>/gi);
-  if (pMatches && pMatches.length >= 2) {
-    return pMatches.join("\n");
-  }
-
-  // Fallback: if model returned plain text paragraphs, wrap them
-  const paragraphs = responseText
-    .split(/\n\n+/)
-    .map((p) => p.trim())
-    .filter((p) => p.length > 20);
-
-  if (paragraphs.length >= 2) {
-    return paragraphs.map((p) => `<p>${p}</p>`).join("\n");
-  }
-
-  // Last resort fallback
-  return `<p>${responseText.trim()}</p>`;
+  const html = extractHtmlParagraphs(toModelText(result));
+  return { html };
 }
 
 // ── Reward suggestions ────────────────────────────────────────────────────────
@@ -2981,3 +3077,189 @@ export async function generateRewardSuggestions(input: {
   );
   return results.filter((s): s is RewardSuggestion => s !== undefined);
 }
+
+// ── Curriculum Ingestion & AI-Synthesis Layer ─────────────────────────────────
+//
+// Three external content APIs → LLM Instructional Designer → Zod-validated JSON
+// → TypeScript assembles the Drizzle-ready relational objects.
+//
+// API keys are read from Cloudflare Worker secrets:
+//   OER_API_KEY   — OER Commons JSON Search API
+//   CK12_API_KEY  — CK-12 Developer API
+//   PBS_API_KEY   — PBS LearningMedia v2 API
+
+// ── Shared external-API types ─────────────────────────────────────────────────
+
+export type OerResource = {
+  title: string;
+  description: string;
+  external_url: string;
+  standard_alignment: string[];
+};
+
+export type Ck12Concept = {
+  conceptId: string;
+  title: string;
+  flexbookUrl: string | null;
+  adaptivePracticeUrl: string | null;
+};
+
+export type PbsResource = {
+  title: string;
+  embed_code: string | null;
+  transcript: string | null;
+  description: string;
+};
+
+export type LtiDeepLinkStub = {
+  provider: string;
+  launchUrl: string;
+  title: string;
+};
+
+// ── OER Commons client ────────────────────────────────────────────────────────
+
+export async function fetchOerResources(
+  query: string,
+  apiKey: string,
+): Promise<OerResource[]> {
+  const url = new URL("https://www.oercommons.org/api/v1/materials");
+  url.searchParams.set("q", query);
+  url.searchParams.set("limit", "5");
+
+  const response = await fetch(url.toString(), {
+    headers: {
+      "X-Api-Key": apiKey,
+      "Accept": "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`OER Commons API error ${response.status}: ${body.slice(0, 200)}`);
+  }
+
+  const data = (await response.json()) as {
+    results?: Array<{
+      title?: string;
+      description?: string;
+      external_url?: string;
+      standard_alignment?: string[];
+    }>;
+  };
+
+  return (data.results ?? []).map((item) => ({
+    title: item.title ?? "",
+    description: item.description ?? "",
+    external_url: item.external_url ?? "",
+    standard_alignment: item.standard_alignment ?? [],
+  }));
+}
+
+// ── CK-12 client ──────────────────────────────────────────────────────────────
+
+export async function fetchCk12Concepts(
+  query: string,
+  apiKey: string,
+): Promise<Ck12Concept[]> {
+  const url = new URL("https://api.ck12.org/flx/get/modality/search");
+  url.searchParams.set("q", query);
+  url.searchParams.set("pageNum", "0");
+  url.searchParams.set("pageSize", "5");
+  url.searchParams.set("sortBy", "relevance");
+  url.searchParams.set("modality_types", "lesson,studyguide,exercise");
+
+  const response = await fetch(url.toString(), {
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Accept": "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`CK-12 API error ${response.status}: ${body.slice(0, 200)}`);
+  }
+
+  const data = (await response.json()) as {
+    response?: {
+      modalities?: Array<{
+        encodedID?: string;
+        title?: string;
+        perma?: string;
+        concept?: { encodedID?: string };
+        modalityType?: string;
+      }>;
+    };
+  };
+
+  const modalities = data.response?.modalities ?? [];
+
+  return modalities.map((m) => {
+    const conceptId = m.concept?.encodedID ?? m.encodedID ?? "";
+    const perma = m.perma ?? "";
+    return {
+      conceptId,
+      title: m.title ?? "",
+      flexbookUrl: perma ? `https://www.ck12.org${perma}` : null,
+      adaptivePracticeUrl: conceptId
+        ? `https://www.ck12.org/assessment/ui/practice?conceptId=${encodeURIComponent(conceptId)}`
+        : null,
+    };
+  });
+}
+
+// ── PBS LearningMedia client ──────────────────────────────────────────────────
+
+export async function fetchPbsResources(
+  query: string,
+  apiKey: string,
+): Promise<PbsResource[]> {
+  // PBS LearningMedia v2 — do NOT use the consumer PBS Kids API.
+  const url = new URL("https://www.pbslearningmedia.org/api/v2/asset/search/");
+  url.searchParams.set("q", query);
+  url.searchParams.set("page_size", "5");
+  url.searchParams.set("media_type", "video,document");
+
+  const response = await fetch(url.toString(), {
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Accept": "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`PBS LearningMedia API error ${response.status}: ${body.slice(0, 200)}`);
+  }
+
+  const data = (await response.json()) as {
+    results?: Array<{
+      title?: string;
+      description?: string;
+      embed_code?: string;
+      transcript?: string;
+    }>;
+  };
+
+  return (data.results ?? []).map((item) => ({
+    title: item.title ?? "",
+    description: item.description ?? "",
+    embed_code: item.embed_code ?? null,
+    transcript: item.transcript ?? null,
+  }));
+}
+
+// ── LTI 1.3 Deep Linking stub ─────────────────────────────────────────────────
+// Stores a launch URL for proprietary providers that block raw data reads.
+// A full LTI 1.3 implementation would sign JWT content-item messages here;
+// this stub captures the intent and launch URL for now.
+
+export function buildLtiDeepLinkStub(
+  provider: string,
+  launchUrl: string,
+  title: string,
+): LtiDeepLinkStub {
+  return { provider, launchUrl, title };
+}
+

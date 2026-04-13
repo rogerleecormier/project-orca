@@ -7194,7 +7194,7 @@ export const reweaveSkillTree = createServerFn({ method: "POST" })
         cluster: node.cluster,
         nodeType: node.nodeType,
       })),
-      { width: 1200, height: 900 },
+      { width: 1800, height: 1400 },
     );
 
     const now = new Date().toISOString();
@@ -11041,13 +11041,24 @@ export const wizardCommitCurriculum = createServerFn({ method: "POST" })
     // Nodes arriving from the wizard are already sanitized by wizardGenerateWeb.
     // Just remove any remaining self-refs or forward-refs without re-flattening.
     const commitOrder = new Map(data.nodes.map((n, i) => [n.tempId, i]));
+    const commitClusterByTempId = new Map(data.nodes.map((n) => [
+      n.tempId,
+      n.cluster === "specialization" || n.nodeType === "elective" ? "specialization" : "core",
+    ]));
     const normalizedCommitNodes = data.nodes.map((node) => {
       const myOrder = commitOrder.get(node.tempId) ?? 9999;
+      const myCluster = commitClusterByTempId.get(node.tempId) ?? "core";
       const cleanPrereqs = Array.from(new Set(
         node.prerequisites.filter(
           (p) => p !== node.tempId && commitOrder.has(p) && (commitOrder.get(p) ?? 9999) < myOrder,
         ),
       )).slice(0, 2);
+      // Required/core nodes must not depend solely on optional/specialization nodes.
+      // Prefer core prereqs; only allow specialization prereqs when there are no core ones.
+      if (myCluster === "core" && cleanPrereqs.length > 0) {
+        const coreOnly = cleanPrereqs.filter((p) => commitClusterByTempId.get(p) === "core");
+        return { ...node, prerequisites: coreOnly.length > 0 ? coreOnly : cleanPrereqs };
+      }
       return { ...node, prerequisites: cleanPrereqs };
     });
 
@@ -11166,16 +11177,23 @@ export const wizardCommitCurriculum = createServerFn({ method: "POST" })
       await Promise.all(edgeRows.map((e) => db.insert(skillTreeEdges).values(e)));
     }
 
-    // 6. Generated assignments — create real assignment rows and link to nodes
+    // 6. Generated assignments — insert all rows directly.
+    //    Transcript fetching and quiz generation happen client-side in Wave 4
+    //    (curriculumEnrichVideo) after commit, so this step is fast pure DB writes.
+    let totalCommittedAssignments = 0;
+    // Track video assignments so Wave 4 can enrich them without a DB query
+    const committedVideoAssignments: Array<{
+      assignmentId: string;
+      nodeId: string;   // real DB node id
+      title: string;
+    }> = [];
+
     if (data.generatedAssignments.length > 0) {
-      // Group by nodeId
       const byNode = new Map<string, typeof data.generatedAssignments>();
       for (const a of data.generatedAssignments) {
-        const realNodeId = tempToReal.get(a.nodeId);
-        if (!realNodeId) continue;
-        const key = a.nodeId;
-        if (!byNode.has(key)) byNode.set(key, []);
-        byNode.get(key)!.push(a);
+        if (!tempToReal.has(a.nodeId)) continue;
+        if (!byNode.has(a.nodeId)) byNode.set(a.nodeId, []);
+        byNode.get(a.nodeId)!.push(a);
       }
 
       for (const [tempNodeId, nodeAssignments] of byNode.entries()) {
@@ -11183,6 +11201,90 @@ export const wizardCommitCurriculum = createServerFn({ method: "POST" })
         if (!realNodeId) continue;
         for (let i = 0; i < nodeAssignments.length; i++) {
           const a = nodeAssignments[i];
+
+          let contentRefToStore = a.contentRef || null;
+
+          // Normalise video: flat object OR plain search-query string → {videos:[...]}
+          if (a.contentType === "video" && contentRefToStore) {
+            const trimmed = contentRefToStore.trim();
+            if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+              // Plain search query string — wrap as a search-query-only entry so Wave 4
+              // enrichment can still run; the videoId will be filled in by enrichment.
+              contentRefToStore = JSON.stringify({
+                videos: [{ videoId: "", title: a.title, query: contentRefToStore }],
+              });
+            } else {
+              try {
+                const raw = JSON.parse(contentRefToStore) as Record<string, unknown>;
+                if (typeof raw.videoId === "string" && !Array.isArray(raw.videos)) {
+                  contentRefToStore = JSON.stringify({
+                    videos: [{
+                      videoId: raw.videoId,
+                      title: raw.title ?? a.title,
+                      channel: raw.channel,
+                      description: raw.description,
+                      thumbnail: raw.thumbnail,
+                    }],
+                  });
+                }
+              } catch { /* already in correct format */ }
+            }
+          }
+
+          // Normalise quiz: bare array OR objects with "answer" key → {title, questions:[...answerIndex...]}
+          if (a.contentType === "quiz" && contentRefToStore) {
+            try {
+              const raw = JSON.parse(contentRefToStore) as unknown;
+              // Determine if this is a bare array or an object without a questions wrapper
+              const questionArray: unknown[] | null = Array.isArray(raw)
+                ? raw
+                : (raw && typeof raw === "object" && Array.isArray((raw as Record<string, unknown>).questions))
+                  ? (raw as Record<string, unknown>).questions as unknown[]
+                  : null;
+
+              if (questionArray) {
+                const normalizedQuestions = questionArray
+                  .filter((q): q is Record<string, unknown> => q !== null && typeof q === "object")
+                  .map((q) => {
+                    const options: string[] = Array.isArray(q.options)
+                      ? (q.options as unknown[]).map((o) => String(o))
+                      : ["A", "B", "C", "D"];
+                    // Resolve answerIndex from "answer" letter/text or existing answerIndex number
+                    let answerIndex = 0;
+                    if (typeof q.answerIndex === "number") {
+                      answerIndex = Math.min(Math.max(0, Math.round(q.answerIndex)), options.length - 1);
+                    } else if (typeof q.answer === "string") {
+                      const letter = q.answer.trim().toUpperCase();
+                      if (/^[A-D]$/.test(letter)) {
+                        answerIndex = letter.charCodeAt(0) - 65;
+                      } else {
+                        const idx = options.findIndex(
+                          (o) => o.toLowerCase() === q.answer!.toString().toLowerCase()
+                        );
+                        if (idx >= 0) answerIndex = idx;
+                      }
+                    }
+                    return {
+                      question: String(q.question ?? ""),
+                      options,
+                      answerIndex,
+                      explanation: String(q.explanation ?? q.rationale ?? ""),
+                    };
+                  })
+                  .filter((q) => q.question && q.options.length === 4);
+
+                const existingTitle = raw && typeof raw === "object" && !Array.isArray(raw)
+                  ? String((raw as Record<string, unknown>).title ?? "")
+                  : "";
+
+                contentRefToStore = JSON.stringify({
+                  title: existingTitle || a.title,
+                  questions: normalizedQuestions,
+                });
+              }
+            } catch { /* keep as-is if parse fails */ }
+          }
+
           const assignmentId = crypto.randomUUID();
           await db.insert(assignments).values({
             id: assignmentId,
@@ -11190,8 +11292,8 @@ export const wizardCommitCurriculum = createServerFn({ method: "POST" })
             classId,
             title: a.title,
             description: a.description || null,
-            contentType: a.contentType,
-            contentRef: a.contentRef || null,
+            contentType: a.contentType as "text" | "video" | "quiz" | "essay_questions" | "report" | "movie",
+            contentRef: contentRefToStore,
             createdByUserId: session.user.id,
             createdAt: now,
             updatedAt: now,
@@ -11203,6 +11305,11 @@ export const wizardCommitCurriculum = createServerFn({ method: "POST" })
             orderIndex: i,
             createdAt: now,
           });
+          totalCommittedAssignments++;
+
+          if (a.contentType === "video") {
+            committedVideoAssignments.push({ assignmentId, nodeId: realNodeId, title: a.title });
+          }
         }
       }
     }
@@ -11212,7 +11319,8 @@ export const wizardCommitCurriculum = createServerFn({ method: "POST" })
       treeId,
       nodeCount: normalizedCommitNodes.length,
       edgeCount: edgeRows.length,
-      assignmentCount: data.generatedAssignments.length,
+      assignmentCount: totalCommittedAssignments,
+      videoAssignments: committedVideoAssignments,
     };
   });
 
@@ -11220,30 +11328,91 @@ export const wizardCommitCurriculum = createServerFn({ method: "POST" })
 
 const LLM_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 
-/** Generate a short HTML reading passage using the Workers AI LLM. */
+/**
+ * Generate a comprehensive multi-paragraph HTML reading passage.
+ *
+ * nodeType and xpReward control depth:
+ *   milestone  → 5 paragraphs, chapter introduction style
+ *   lesson     → 6 paragraphs, core concept deep-dive
+ *   elective   → 7 paragraphs, advanced analysis
+ *   boss       → 7 paragraphs, comprehensive unit synthesis
+ */
 async function generateReadingPassageHtml(input: {
   topic: string;
   subject: string;
   gradeLevel: string;
-  xpReward: number;
+  nodeType?: string;
   description?: string;
+  focusSteering?: string;
+  ageYears?: number;
 }): Promise<string> {
-  const wordTarget = input.xpReward >= 500 ? 220 : input.xpReward >= 200 ? 150 : 100;
+  const nodeType = input.nodeType ?? "lesson";
+  const isBoss = nodeType === "boss";
+  const isMilestone = nodeType === "milestone";
+  const isElective = nodeType === "elective";
+
+  const paragraphSpec = isBoss
+    ? `7 paragraphs (1000–1400 words total):
+- Paragraph 1: Frame the big ideas of the unit — what the student has learned and why it matters.
+- Paragraphs 2–5: Review each major concept cluster with detailed examples, explicit connections between ideas, and clarification of common misconceptions.
+- Paragraph 6: Integrate cross-cutting themes and show how the concepts connect to other subjects or real-world situations.
+- Paragraph 7: Synthesize the full unit, pose an essential question for further thought, and preview the next unit.`
+    : isElective
+    ? `7 paragraphs (900–1200 words total):
+- Paragraph 1: Open with a compelling hook and broader context that goes beyond the core curriculum.
+- Paragraphs 2–5: Explore the topic in depth with multiple perspectives, real-world evidence, primary-source examples where relevant, and advanced analysis appropriate for the grade level.
+- Paragraph 6: Connect to broader disciplinary themes and cross-curricular ideas.
+- Paragraph 7: Synthesize the deep dive and pose open questions for further exploration.`
+    : isMilestone
+    ? `5 paragraphs (500–700 words total):
+- Paragraph 1: Hook the student with a compelling question or striking real-world connection to the chapter topic.
+- Paragraph 2: Build essential background knowledge needed to understand this chapter.
+- Paragraph 3: Preview the key concepts and learning goals students will master.
+- Paragraph 4: Explain why this topic matters in authentic, real-world contexts for this age group.
+- Paragraph 5: Connect to what the student already knows and what is coming next in the course.`
+    : `6 paragraphs (700–950 words total):
+- Paragraph 1: Introduce the concept with a relatable hook or concrete real-world example.
+- Paragraphs 2–4: Build deep conceptual understanding with multiple concrete examples, explicit vocabulary development, and step-by-step explanation appropriate for the grade level. Each paragraph should develop a distinct facet of the concept.
+- Paragraph 5: Address common misconceptions and clarify them directly. Be explicit about what students often get wrong and why.
+- Paragraph 6: Summarize the key takeaways and set up the follow-up assignments by explaining what the student should now be able to do or explain.`;
+
+  const ageNote = input.ageYears
+    ? `The student is approximately ${input.ageYears} years old.`
+    : "";
+
+  const focusNote = input.focusSteering
+    ? `Curriculum focus/theme: ${input.focusSteering}. Where natural, connect examples and context to this theme.`
+    : "";
+
   const prompt = [
-    `Write a ${wordTarget}-word educational reading for a grade-${input.gradeLevel} student learning "${input.topic}" in ${input.subject}.`,
-    input.description ? `Context: ${input.description}` : "",
-    "Use HTML tags <h2>, <p>, <ul>, <li> only. No markdown, no code fences.",
-    "Return only the HTML fragment.",
+    `You are writing an educational reading passage for a grade ${input.gradeLevel} student studying "${input.topic}" in ${input.subject}.`,
+    ageNote,
+    focusNote,
+    input.description ? `Node context: ${input.description}` : "",
+    "",
+    `Write ${paragraphSpec}`,
+    "",
+    "Requirements:",
+    "- Use ONLY HTML tags: <h2> for the title, <p> for paragraphs, <ul>/<li> for lists if needed.",
+    "- Do NOT use markdown, code fences, or any tags other than those listed.",
+    "- Write at the correct reading level for grade " + input.gradeLevel + " — not dumbed down, but age-appropriate vocabulary with new terms explained in context.",
+    "- Be factually accurate and topically specific. Do not write generic filler.",
+    "- Prioritize depth and explanatory detail. Do not shorten for concision.",
+    "- Start with <h2>Title Here</h2> then the paragraphs.",
+    "- Return ONLY the HTML fragment. No preamble, no prose outside the HTML.",
   ]
     .filter(Boolean)
     .join("\n");
 
   const result = await env.AI.run(LLM_MODEL, {
     messages: [
-      { role: "system", content: "You are an educational content writer. Output only HTML." },
+      {
+        role: "system",
+        content: "You are an expert educational content writer. Output only clean HTML — no markdown, no code fences, no commentary.",
+      },
       { role: "user", content: prompt },
     ],
-    max_tokens: 700,
+    max_tokens: 3000,
   });
 
   const raw =
@@ -11254,7 +11423,7 @@ async function generateReadingPassageHtml(input: {
         : "";
 
   const text = raw.trim();
-  return text || `<h2>${input.topic}</h2><p>Read about ${input.topic} in ${input.subject} and take notes in your own words.</p>`;
+  return text || `<h2>${input.topic}</h2><p>This reading covers ${input.topic} in ${input.subject}. Your teacher will provide additional materials for this lesson.</p>`;
 }
 
 /** Build a JSON essay-questions or HTML report prompt (no AI needed). */
@@ -11385,7 +11554,7 @@ export const populateWebNodeContent = createServerFn({ method: "POST" })
         topic: node.title,
         subject,
         gradeLevel,
-        xpReward: node.xpReward,
+        nodeType: node.nodeType,
         description: node.description ?? undefined,
       });
     } catch {
@@ -11612,9 +11781,9 @@ const curriculumGenerateLessonReadingInput = z.object({
 
 export const curriculumGenerateLessonReading = createServerFn({ method: "POST" })
   .inputValidator((data) => curriculumGenerateLessonReadingInput.parse(data))
-  .handler(async ({ data }) => {
+  .handler(async ({ data }): Promise<{ html: string }> => {
     await requireActiveRole(["admin", "parent"]);
-    const html = await generateLessonReading({
+    const result = await generateLessonReading({
       nodeTitle: data.nodeTitle,
       nodeDescription: data.nodeDescription,
       subject: data.subject,
@@ -11623,7 +11792,37 @@ export const curriculumGenerateLessonReading = createServerFn({ method: "POST" }
       focusSteering: data.focusSteering || undefined,
       nodeType: data.nodeType,
     });
-    return { html };
+    return { html: result.html };
+  });
+
+const curriculumGenerateQuizFromContentInput = z.object({
+  topic: z.string().min(1),
+  gradeLevel: z.string().min(1),
+  sourceText: z.string().default(""),
+  questionCount: z.number().int().min(3).max(10).default(5),
+  priorQuestions: z.array(z.string()).default([]),
+});
+
+export const curriculumGenerateQuizFromContent = createServerFn({ method: "POST" })
+  .inputValidator((data) => curriculumGenerateQuizFromContentInput.parse(data))
+  .handler(async ({ data }) => {
+    await requireActiveRole(["admin", "parent"]);
+
+    // Build source text: reading content first, then a clean "avoid these" block
+    // so the model doesn't confuse prior questions with content to be tested.
+    let sourceText = data.sourceText || undefined;
+    if (data.priorQuestions.length > 0 && sourceText) {
+      sourceText = sourceText.slice(0, 3500) + "\n\n---\nDo NOT ask any of the following questions again (already asked in earlier quizzes for this chapter):\n"
+        + data.priorQuestions.map((q, i) => `${i + 1}. ${q}`).join("\n");
+    }
+
+    const quiz = await generateQuizDraft({
+      topic: data.topic,
+      gradeLevel: data.gradeLevel,
+      questionCount: data.questionCount,
+      sourceText,
+    });
+    return { contentRef: JSON.stringify({ title: quiz.title, questions: quiz.questions }) };
   });
 
 const curriculumLayoutInput = z.object({
@@ -11640,15 +11839,32 @@ export const curriculumLayoutNodes = createServerFn({ method: "POST" })
   .inputValidator((data) => curriculumLayoutInput.parse(data))
   .handler(async ({ data }) => {
     await requireActiveRole(["admin", "parent"]);
+
+    const nodeById = new Map(data.nodes.map((n) => [n.tempId, n]));
+
+    // Sanitize: required/core nodes must not have only optional/specialization prerequisites.
+    // If all of a required node's prerequisites are specialization nodes, drop those prereqs
+    // so the layout treats it as a root rather than dangling off an optional branch.
+    const sanitized = data.nodes.map((n) => {
+      const isCore = n.cluster === "core" || (n.nodeType !== "elective" && n.cluster !== "specialization");
+      if (!isCore || n.prerequisites.length === 0) return n;
+      const corePrereqs = n.prerequisites.filter((pid) => {
+        const p = nodeById.get(pid);
+        return p && (p.cluster === "core" || (p.nodeType !== "elective" && p.cluster !== "specialization"));
+      });
+      // Keep core prereqs; only fall back to all prereqs if there are no core ones
+      return { ...n, prerequisites: corePrereqs.length > 0 ? corePrereqs : n.prerequisites };
+    });
+
     const result = layoutForceDirected(
-      data.nodes.map((n) => ({
+      sanitized.map((n) => ({
         id: n.tempId,
         prerequisites: n.prerequisites,
         depth: n.depth,
         cluster: n.cluster,
         nodeType: n.nodeType,
       })),
-      { width: 1200, height: 900 },
+      { width: 1800, height: 1400 },
     );
     const positions: Record<string, { x: number; y: number }> = {};
     const edges: Array<{ source: string; target: string }> = [];
@@ -11660,6 +11876,148 @@ export const curriculumLayoutNodes = createServerFn({ method: "POST" })
       }
     }
     return { positions, edges };
+  });
+
+// ── Curriculum video enrichment ───────────────────────────────────────────────
+// Called client-side after commit (Wave 4) for each committed video assignment.
+// Fetches the transcript, patches the stored contentRef, then generates and
+// inserts a linked quiz — all as a single atomic operation per video.
+
+const curriculumEnrichVideoInput = z.object({
+  assignmentId: z.string().min(1),
+  classId: z.string().min(1),
+  nodeId: z.string().min(1),
+  gradeLevel: z.string().min(1),
+});
+
+export const curriculumEnrichVideo = createServerFn({ method: "POST" })
+  .inputValidator((data) => curriculumEnrichVideoInput.parse(data))
+  .handler(async ({ data }) => {
+    const session = await requireActiveRole(["admin", "parent"]);
+    const db = getDb();
+    const organizationId = await resolveActiveOrganizationId(
+      session.user.id,
+      session.session.activeOrganizationId,
+    );
+
+    // Load the committed assignment
+    const row = await db.query.assignments.findFirst({
+      where: and(
+        eq(assignments.id, data.assignmentId),
+        eq(assignments.organizationId, organizationId),
+      ),
+    });
+    if (!row || row.contentType !== "video") return { enriched: false, reason: "not_found" };
+
+    let payload: VideoAssignmentPayload | null = null;
+    try {
+      payload = row.contentRef ? JSON.parse(row.contentRef) as VideoAssignmentPayload : null;
+    } catch { /* ignore */ }
+
+    let primaryVideo = payload?.videos?.[0];
+    if (!primaryVideo) return { enriched: false, reason: "no_video_id" };
+
+    // If videoId is empty but a search query is present, resolve it via YouTube API now
+    if (!primaryVideo.videoId && (primaryVideo as Record<string, unknown>).query) {
+      const ytKey = (env as unknown as Record<string, string | undefined>).YOUTUBE_API_KEY;
+      if (ytKey) {
+        try {
+          const query = `${String((primaryVideo as Record<string, unknown>).query)} educational`;
+          const results = await searchYoutubeForVideos(query, ytKey);
+          const top = results[0];
+          if (top) {
+            primaryVideo = {
+              ...primaryVideo,
+              videoId: top.videoId,
+              title: top.title,
+              channel: top.channel,
+              description: top.description,
+              thumbnail: top.thumbnail,
+            };
+            // Persist the resolved videoId immediately so the video displays even if transcript fails
+            await db.update(assignments)
+              .set({
+                contentRef: JSON.stringify({ videos: [primaryVideo] }),
+                updatedAt: new Date().toISOString(),
+              })
+              .where(eq(assignments.id, data.assignmentId));
+          }
+        } catch { /* YouTube search failed — fall through */ }
+      }
+    }
+
+    if (!primaryVideo.videoId) return { enriched: false, reason: "no_video_id" };
+
+    // Fetch transcript
+    const transcriptResult = await fetchYoutubeTranscriptWithMeta(primaryVideo.videoId);
+    const transcript = transcriptResult.transcript;
+
+    // Patch the video assignment contentRef with transcript data
+    const enrichedPayload: VideoAssignmentPayload = {
+      videos: [{
+        ...primaryVideo,
+        transcript,
+        transcriptFetchedAt: new Date().toISOString(),
+        transcriptMeta: transcriptResult.meta,
+      }],
+    };
+    const now = new Date().toISOString();
+    await db.update(assignments)
+      .set({ contentRef: JSON.stringify(enrichedPayload), updatedAt: now })
+      .where(eq(assignments.id, data.assignmentId));
+
+    // Generate a linked quiz — use transcript when available, fall back to title+description
+    try {
+      const quiz = await generateQuizDraft({
+        topic: primaryVideo.title?.trim() || row.title,
+        gradeLevel: data.gradeLevel,
+        questionCount: 5,
+        transcript: transcript ?? undefined,
+        videoDescription: primaryVideo.description ?? row.description ?? undefined,
+      });
+
+      // Check a linked quiz doesn't already exist for this assignment
+      const existing = await db.query.assignments.findFirst({
+        where: and(
+          eq(assignments.linkedAssignmentId, data.assignmentId),
+          eq(assignments.organizationId, organizationId),
+        ),
+      });
+      if (existing) return { enriched: true, quizCreated: false, reason: "quiz_exists" };
+
+      const quizId = crypto.randomUUID();
+      await db.insert(assignments).values({
+        id: quizId,
+        organizationId,
+        classId: data.classId,
+        title: `Quiz: ${primaryVideo.title?.trim() || row.title}`,
+        description: transcript ? "Auto-generated quiz from video transcript." : "Auto-generated quiz based on video topic.",
+        contentType: "quiz",
+        contentRef: JSON.stringify(quiz.questions),
+        linkedAssignmentId: data.assignmentId,
+        createdByUserId: session.user.id,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      // Link quiz to the same node, after the video assignment
+      const existingLinks = await db.query.skillTreeNodeAssignments.findMany({
+        where: eq(skillTreeNodeAssignments.nodeId, data.nodeId),
+        orderBy: [desc(skillTreeNodeAssignments.orderIndex)],
+      });
+      const maxOrder = existingLinks[0]?.orderIndex ?? 0;
+      await db.insert(skillTreeNodeAssignments).values({
+        id: crypto.randomUUID(),
+        nodeId: data.nodeId,
+        assignmentId: quizId,
+        orderIndex: maxOrder + 1,
+        createdAt: now,
+      });
+
+      return { enriched: true, quizCreated: true };
+    } catch {
+      return { enriched: true, quizCreated: false, reason: "quiz_failed" };
+    }
   });
 
 const curriculumCommitCourseInput = z.object({
@@ -11793,3 +12151,4 @@ export const getLessonsData = createServerFn({ method: "GET" }).handler(async ()
 
   return { trees };
 });
+

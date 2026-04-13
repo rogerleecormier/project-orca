@@ -25,8 +25,25 @@ bucket_name = "proorca-assets"
 binding = "AI"
 
 # ---------- Secrets ----------
-# Set via: wrangler secret put SUPADATA_API_KEY
-# Optional — enables transcript-based quiz generation for video lessons.
-# Without it, quizzes fall back to video title/description context.
+# Set via: wrangler secret put <SECRET_NAME>
+# Do NOT commit real keys — always use `wrangler secret put`.
+#
+# SUPADATA_API_KEY   — optional; enables transcript-based quiz generation for video lessons.
+#                      Without it, quizzes fall back to video title/description context.
+#
+# OER_API_KEY        — OER Commons JSON Search API key.
+#                      https://www.oercommons.org/api/v1/
+#
+# CK12_API_KEY       — CK-12 Developer API bearer token.
+#                      https://api.ck12.org/
+#
+# PBS_API_KEY        — PBS LearningMedia v2 API bearer token.
+#                      https://www.pbslearningmedia.org/api/v2/
+#                      NOTE: use the LearningMedia API, NOT the consumer PBS Kids API.
+#
 # [vars]
-# SUPADATA_API_KEY = ""  # Do not commit real keys — use wrangler secret put
+# SUPADATA_API_KEY = ""
+# JINA_API_KEY     = ""
+# OER_API_KEY      = ""
+# CK12_API_KEY     = ""
+# PBS_API_KEY      = ""

@@ -307,7 +307,27 @@ function tangentAtPolylineFraction(points: Point[], fraction: number): Point {
 function buildPolylinePath(points: Point[]): string {
   if (points.length === 0) return "";
   if (points.length === 1) return `M ${points[0]!.x} ${points[0]!.y}`;
-  if (points.length === 2) return `M ${points[0]!.x} ${points[0]!.y} L ${points[1]!.x} ${points[1]!.y}`;
+
+  // For 2-point paths (straight source→target), inject a subtle arc mid-control-point
+  // so the edge is always a smooth curve rather than a flat line.
+  if (points.length === 2) {
+    const a = points[0]!;
+    const b = points[1]!;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const dist = Math.hypot(dx, dy);
+    // Arc amplitude: 12% of segment length, at least 18px, capped at 60px.
+    // Perpendicular offset alternates sign based on direction so parallel edges arc opposite ways.
+    const amp = Math.min(60, Math.max(18, dist * 0.12));
+    const perp = normalize(perpendicular({ x: dx, y: dy }));
+    // Use a deterministic side based on direction (edges going right arc upward, left arc downward)
+    const side = dx >= 0 ? 1 : -1;
+    const ctrl = {
+      x: (a.x + b.x) / 2 + perp.x * amp * side,
+      y: (a.y + b.y) / 2 + perp.y * amp * side,
+    };
+    return `M ${a.x.toFixed(1)} ${a.y.toFixed(1)} Q ${ctrl.x.toFixed(1)} ${ctrl.y.toFixed(1)} ${b.x.toFixed(1)} ${b.y.toFixed(1)}`;
+  }
 
   // Convert the point list into a smooth cubic Bézier path.
   // For each interior segment we compute control points from the
@@ -321,7 +341,7 @@ function buildPolylinePath(points: Point[]): string {
     return d;
   }
 
-  // Catmull-Rom → cubic Bézier conversion (tension 0.5)
+  // Catmull-Rom → cubic Bézier conversion
   // For each segment i → i+1 the control points are derived from neighbours.
   const cp = (tension: number, a: Point, b: Point, c: Point, d2: Point) => ({
     cp1: { x: b.x + (c.x - a.x) * tension, y: b.y + (c.y - a.y) * tension },
