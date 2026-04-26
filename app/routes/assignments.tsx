@@ -1495,6 +1495,19 @@ function CurriculumBuilderPage() {
   // Class → school year lookup
   const classSchoolYear = new Map(data.classes.map((c) => [c.id, c.schoolYear]));
 
+  // Assignment → grade level: prefer class gradeLevel, fall back to first submission's profile
+  const classGradeLevel = new Map(data.classes.map((c) => [c.id, c.gradeLevel ?? ""]));
+  const assignmentGradeLevel = (assignmentId: string): string | undefined => {
+    const assignment = data.assignments.find((a) => a.id === assignmentId);
+    if (assignment?.classId) {
+      const g = classGradeLevel.get(assignment.classId);
+      if (g) return g;
+    }
+    const sub = data.submissions.find((s) => s.assignmentId === assignmentId);
+    if (!sub) return undefined;
+    return profileById.get(sub.profileId)?.gradeLevel || undefined;
+  };
+
   const visibleAssignments = data.assignments.filter((a) => {
     if (optimisticallyDeletedAssignmentIds.has(a.id)) return false;
     if (filterClassId !== "all" && a.classId !== filterClassId) return false;
@@ -2785,11 +2798,13 @@ function CurriculumBuilderPage() {
           lessonOptions={skillTreeLessonOptions}
           initialNodeId={assignmentNodeIdByAssignmentId.get(viewingAssignment.id) ?? null}
           canEdit={true}
+          gradeLevel={assignmentGradeLevel(viewingAssignment.id)}
           onClose={() => setViewingAssignment(null)}
           onSaved={async () => {
             setViewingAssignment(null);
             await router.invalidate();
           }}
+          onQuizCreated={async () => { await router.invalidate(); }}
           onRequestDelete={(a) => {
             setViewingAssignment(null);
             setDeleteError(null);

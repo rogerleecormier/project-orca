@@ -3084,6 +3084,7 @@ const createClassInput = z.object({
   title: z.string().min(1),
   description: z.string().optional(),
   schoolYear: schoolYearSchema,
+  gradeLevel: z.string().optional(),
   studentProfileIds: z.array(z.string().min(1)).min(1),
 });
 
@@ -3121,6 +3122,7 @@ export const createClassRecord = createServerFn({ method: "POST" })
       title: data.title,
       description: data.description,
       schoolYear: data.schoolYear ?? null,
+      gradeLevel: data.gradeLevel?.trim() || null,
       createdByUserId: session.user.id,
     });
 
@@ -3143,6 +3145,7 @@ const updateClassInput = z.object({
   title: z.string().min(1),
   description: z.string().optional(),
   schoolYear: schoolYearSchema,
+  gradeLevel: z.string().optional(),
   studentProfileIds: z.array(z.string().min(1)).min(1),
 });
 
@@ -3191,6 +3194,7 @@ export const updateClassRecord = createServerFn({ method: "POST" })
           title: data.title.trim(),
           description: data.description?.trim() || null,
           schoolYear: data.schoolYear ?? null,
+          gradeLevel: data.gradeLevel?.trim() || null,
           updatedAt: new Date().toISOString(),
         })
         .where(and(eq(classes.id, data.classId), eq(classes.organizationId, organizationId)));

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { RubricRow } from "../lib/ai";
 import { Link, createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -73,6 +74,7 @@ type VideoPayload = {
 
 type EssayQuestionsPayload = {
   questions?: string[];
+  rubric?: RubricRow[];
 };
 
 const TYPE_LABELS: Record<string, string> = {
@@ -700,6 +702,83 @@ function QuizAssignmentView({
   );
 }
 
+// ── Student rubric modal ───────────────────────────────────────────────────────
+
+const STUDENT_LEVEL_COLORS: Record<string, { bg: string; text: string; border: string }> = {
+  Excellent:  { bg: "bg-emerald-50",  text: "text-emerald-800",  border: "border-emerald-200" },
+  Proficient: { bg: "bg-cyan-50",     text: "text-cyan-800",     border: "border-cyan-200"    },
+  Developing: { bg: "bg-amber-50",    text: "text-amber-800",    border: "border-amber-200"   },
+  Beginning:  { bg: "bg-rose-50",     text: "text-rose-800",     border: "border-rose-200"    },
+};
+
+function StudentRubricModal({ rubric, onClose }: { rubric: RubricRow[]; onClose: () => void }) {
+  const levels = rubric[0]?.levels.map(l => l.label) ?? ["Excellent", "Proficient", "Developing", "Beginning"];
+  const scores = rubric[0]?.levels.map(l => l.score) ?? [4, 3, 2, 1];
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 backdrop-blur-sm p-4"
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="relative flex flex-col w-full max-w-5xl max-h-[90vh] rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden">
+        <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-6 py-4">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900">Grading Rubric</h2>
+            <p className="text-xs text-slate-500 mt-0.5">Use this to guide your writing — your essay will be scored on each of these criteria.</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700">✕</button>
+        </div>
+        <div className="shrink-0 flex items-center gap-2 px-6 pt-4 pb-2 flex-wrap">
+          {levels.map((label, i) => {
+            const c = STUDENT_LEVEL_COLORS[label] ?? { bg: "bg-slate-50", text: "text-slate-700", border: "border-slate-200" };
+            return (
+              <span key={label} className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold ${c.bg} ${c.text} ${c.border}`}>
+                <span className="font-bold">{scores[i]}</span>
+                {label}
+              </span>
+            );
+          })}
+          <span className="ml-auto text-[10px] text-slate-400 italic">★ = key criterion</span>
+        </div>
+        <div className="flex-1 overflow-auto px-4 pb-6">
+          <div className="min-w-[640px]">
+            <div className="grid gap-2 mb-2 sticky top-0 bg-white pt-2 pb-1 z-10" style={{ gridTemplateColumns: `220px repeat(${levels.length}, 1fr)` }}>
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 px-2">Criterion</div>
+              {levels.map((label, i) => {
+                const c = STUDENT_LEVEL_COLORS[label] ?? { bg: "bg-slate-50", text: "text-slate-500", border: "border-slate-200" };
+                return (
+                  <div key={label} className={`rounded-xl border px-3 py-2 text-center ${c.bg} ${c.border}`}>
+                    <p className={`text-xs font-bold ${c.text}`}>{label}</p>
+                    <p className={`text-[10px] font-semibold ${c.text} opacity-70`}>{scores[i]} pts</p>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="space-y-2">
+              {rubric.map((row) => (
+                <div key={row.criterion} className="grid gap-2 items-stretch" style={{ gridTemplateColumns: `220px repeat(${levels.length}, 1fr)` }}>
+                  <div className="flex flex-col justify-center rounded-xl border border-slate-100 bg-slate-50 px-3 py-3">
+                    <p className="text-sm font-semibold text-slate-800 leading-snug">{row.criterion}</p>
+                    {row.weight >= 3 && <span className="mt-1 text-[9px] font-bold uppercase tracking-wider text-violet-500">Key criterion</span>}
+                  </div>
+                  {row.levels.map((lvl) => {
+                    const c = STUDENT_LEVEL_COLORS[lvl.label] ?? { bg: "bg-slate-50", text: "text-slate-700", border: "border-slate-200" };
+                    return (
+                      <div key={lvl.label} className={`rounded-xl border px-3 py-3 ${c.bg} ${c.border}`}>
+                        <p className={`text-xs leading-relaxed ${c.text}`}>{lvl.descriptor}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Essay Questions view ───────────────────────────────────────────────────────
 
 function EssayQuestionsView({
@@ -721,9 +800,11 @@ function EssayQuestionsView({
 }) {
   const payload = parseJson<EssayQuestionsPayload>(assignment.contentRef);
   const questions = payload?.questions ?? [];
+  const rubric = payload?.rubric ?? [];
 
   const [answers, setAnswers] = useState<string[]>(questions.map(() => ""));
   const [submitted, setSubmitted] = useState(false);
+  const [showRubric, setShowRubric] = useState(false);
 
   const alreadySubmitted = isSubmissionComplete(submission);
   const isReturned = submission?.status === "returned";
@@ -779,6 +860,31 @@ function EssayQuestionsView({
             ← Back to video lesson: {linkedVideoAssignment.title}
           </button>
         ) : null}
+
+        {/* Rubric reference button */}
+        {rubric.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowRubric(true)}
+            className="flex w-full items-center gap-2.5 rounded-xl border border-dashed border-violet-200 bg-violet-50/50 px-4 py-3 text-left hover:bg-violet-50 transition-colors group"
+          >
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-violet-100 text-violet-600 group-hover:bg-violet-200 transition-colors">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="2" y="1" width="12" height="14" rx="2" stroke="currentColor" strokeWidth="1.5"/>
+                <line x1="5" y1="5" x2="11" y2="5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                <line x1="5" y1="8" x2="11" y2="8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                <line x1="5" y1="11" x2="8.5" y2="11" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+              </svg>
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-violet-700">View Grading Rubric</p>
+              <p className="text-[10px] text-violet-500">{rubric.length} criteria &middot; 4-point scale — see what's expected</p>
+            </div>
+            <svg className="ml-auto text-violet-400 group-hover:text-violet-600 transition-colors" width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <path d="M6 4l4 4-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
+        )}
 
         <div className="space-y-5">
           {questions.map((q, i) => (
@@ -869,6 +975,9 @@ function EssayQuestionsView({
           </button>
         ) : null}
       </div>
+      {showRubric && rubric.length > 0 && (
+        <StudentRubricModal rubric={rubric} onClose={() => setShowRubric(false)} />
+      )}
     </div>
   );
 }

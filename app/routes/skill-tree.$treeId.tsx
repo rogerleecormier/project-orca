@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, createFileRoute, redirect } from "@tanstack/react-router";
+import { Link, createFileRoute, redirect, useRouter } from "@tanstack/react-router";
 import {
   autoLayoutSkillTree,
   aiExpandSkillTree,
@@ -331,6 +331,7 @@ function PopulateProgressPanel({
 
 function SkillTreePage() {
   const { treeData, isStudent, isParent, profileId } = Route.useLoaderData();
+  const router = useRouter();
 
   // ── Core state ──────────────────────────────────────────────────────────────
   const [nodes, setNodes] = useState<TreeNode[]>(treeData.nodes);
@@ -1241,6 +1242,7 @@ function SkillTreePage() {
           editMode={editMode}
           isStudent={isStudent}
           parentPinLength={null}
+          gradeLevel={treeData.tree.gradeLevel ?? undefined}
           initialTab={sidePanelInitialTab}
           onClose={() => { setSelectedNodeId(null); setSidePanelInitialTab(undefined); }}
           onAssignmentLinked={(id) => void handleAssignmentLinked(id)}
@@ -1249,6 +1251,7 @@ function SkillTreePage() {
           onDeleteNode={(nodeId, pin) => void handleDeleteNode(nodeId, pin)}
           onAiGenerateAssignments={(nodeId) => void handleAiGenerateAssignments(nodeId)}
           onMarkComplete={handleMarkComplete}
+          onQuizCreated={() => { void router.invalidate(); }}
         />
 
         {/* AI expand panel */}

@@ -111,6 +111,7 @@ function ClassEnginePage() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [schoolYear, setSchoolYear] = useState(currentSchoolYear());
+  const [gradeLevel, setGradeLevel] = useState("");
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>(
     data.students[0]?.id ? [data.students[0].id] : [],
   );
@@ -122,6 +123,7 @@ function ClassEnginePage() {
   const [editTitle, setEditTitle] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editSchoolYear, setEditSchoolYear] = useState("");
+  const [editGradeLevel, setEditGradeLevel] = useState("");
   const [editSelectedStudentIds, setEditSelectedStudentIds] = useState<string[]>([]);
   const [updateSaving, setUpdateSaving] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
@@ -162,6 +164,7 @@ function ClassEnginePage() {
     setEditTitle(row.title);
     setEditDescription(row.description ?? "");
     setEditSchoolYear(normalizeSchoolYear(row.schoolYear));
+    setEditGradeLevel(row.gradeLevel ?? "");
     setEditSelectedStudentIds(row.enrolledStudents.map((s) => s.id));
     setUpdateError(null);
   };
@@ -171,6 +174,7 @@ function ClassEnginePage() {
     setEditTitle("");
     setEditDescription("");
     setEditSchoolYear("");
+    setEditGradeLevel("");
     setEditSelectedStudentIds([]);
     setUpdateError(null);
   };
@@ -191,6 +195,7 @@ function ClassEnginePage() {
           title: title.trim(),
           description: description.trim() || undefined,
           schoolYear: schoolYear.trim() || undefined,
+          gradeLevel: gradeLevel.trim() || undefined,
           studentProfileIds: selectedStudentIds,
         },
       });
@@ -198,6 +203,7 @@ function ClassEnginePage() {
       setTitle("");
       setDescription("");
       setSchoolYear(currentSchoolYear());
+      setGradeLevel("");
       setSelectedStudentIds(data.students[0]?.id ? [data.students[0].id] : []);
       setShowCreateModal(false);
       await router.invalidate();
@@ -224,6 +230,7 @@ function ClassEnginePage() {
           title: editTitle.trim(),
           description: editDescription.trim() || undefined,
           schoolYear: editSchoolYear.trim() || undefined,
+          gradeLevel: editGradeLevel.trim() || undefined,
           studentProfileIds: editSelectedStudentIds,
         },
       });
@@ -307,21 +314,33 @@ function ClassEnginePage() {
                       />
                     </label>
 
-                    <label className="block space-y-2">
-                      <span className="text-sm font-medium text-slate-700">School Year</span>
-                      <select
-                        value={editSchoolYear}
-                        onChange={(e) => setEditSchoolYear(e.target.value)}
-                        className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
-                      >
-                        <option value="">No year</option>
-                        {yearOptions.map((yearOption) => (
-                          <option key={yearOption} value={yearOption}>
-                            {yearOption}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="block space-y-2">
+                        <span className="text-sm font-medium text-slate-700">School Year</span>
+                        <select
+                          value={editSchoolYear}
+                          onChange={(e) => setEditSchoolYear(e.target.value)}
+                          className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
+                        >
+                          <option value="">No year</option>
+                          {yearOptions.map((yearOption) => (
+                            <option key={yearOption} value={yearOption}>
+                              {yearOption}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="block space-y-2">
+                        <span className="text-sm font-medium text-slate-700">Grade Level</span>
+                        <input
+                          type="text"
+                          value={editGradeLevel}
+                          onChange={(e) => setEditGradeLevel(e.target.value)}
+                          placeholder="e.g. 8, K, 11"
+                          className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                        />
+                      </label>
+                    </div>
 
                     <label className="block space-y-2">
                       <span className="text-sm font-medium text-slate-700">Assigned Students</span>
@@ -372,6 +391,11 @@ function ClassEnginePage() {
                           {row.schoolYear ? (
                             <span className="inline-block rounded-full bg-cyan-50 px-2 py-0.5 text-xs font-medium text-cyan-700">
                               {row.schoolYear}
+                            </span>
+                          ) : null}
+                          {row.gradeLevel ? (
+                            <span className="inline-block rounded-full bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-700">
+                              Grade {row.gradeLevel}
                             </span>
                           ) : null}
                           {row.markingPeriodId ? (
@@ -486,7 +510,7 @@ function ClassEnginePage() {
                   />
                 </label>
 
-                <label className="space-y-2 md:col-span-2">
+                <label className="space-y-2">
                   <span className="text-sm font-medium text-slate-700">School Year</span>
                   <select
                     value={schoolYear}
@@ -500,9 +524,18 @@ function ClassEnginePage() {
                       </option>
                     ))}
                   </select>
-                  <p className="text-xs text-slate-500">
-                    Select the active school year (current, past 10, and next 10 years).
-                  </p>
+                </label>
+
+                <label className="space-y-2">
+                  <span className="text-sm font-medium text-slate-700">Grade Level</span>
+                  <input
+                    type="text"
+                    value={gradeLevel}
+                    onChange={(e) => setGradeLevel(e.target.value)}
+                    placeholder="e.g. 8, K, 11"
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                  />
+                  <p className="text-xs text-slate-500">Used to generate age-appropriate rubrics and content.</p>
                 </label>
 
                 <label className="space-y-2 md:col-span-2">

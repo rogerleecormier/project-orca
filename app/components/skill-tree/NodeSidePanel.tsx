@@ -60,7 +60,9 @@ type Props = {
   editMode: boolean;
   isStudent: boolean;
   parentPinLength: number | null;
+  gradeLevel?: string;
   onClose: () => void;
+  onQuizCreated?: () => void;
   onAssignmentLinked: (assignmentId: string) => void;
   onAssignmentUnlinked: (assignmentId: string) => void;
   onNodeUpdated: (updated: PanelNode) => void;
@@ -223,8 +225,10 @@ export function NodeSidePanel({
   editMode,
   isStudent,
   parentPinLength,
+  gradeLevel,
   initialTab,
   onClose,
+  onQuizCreated,
   onAssignmentLinked,
   onAssignmentUnlinked,
   onNodeUpdated,
@@ -870,10 +874,12 @@ export function NodeSidePanel({
         assignment={viewingAssignment as ModalAssignment}
         allAssignments={allClassAssignments as ModalAssignment[]}
         canEdit={!isStudent}
+        gradeLevel={gradeLevel}
         onClose={() => setViewingAssignment(null)}
         onSaved={(updated) => {
           setViewingAssignment(updated as PanelAssignment);
         }}
+        onQuizCreated={onQuizCreated}
       />
     ) : null}
     </>

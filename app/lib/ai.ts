@@ -2477,12 +2477,38 @@ export async function generateAssignmentsForNode(input: {
         // Accept nodeId even if model got it slightly wrong — we know what node this is for
         if (typeof r.contentType !== "string" || !validTypes.has(r.contentType)) continue;
         if (typeof r.title !== "string" || !r.title) continue;
+        const rawContentRef = typeof r.contentRef === "string" ? r.contentRef : "";
+        const contentType = r.contentType as GeneratedAssignment["contentType"];
+
+        // For essay_questions and report, embed a grade-calibrated rubric into the contentRef JSON.
+        // essay_questions: { questions: string[], rubric: RubricRow[] }
+        // report:          { html: string, rubric: RubricRow[] }  (html = the prompt text from AI)
+        let finalContentRef = rawContentRef;
+        if (contentType === "essay_questions") {
+          // Try to parse existing JSON (re-generation path)
+          let existingQuestions: string[] | null = null;
+          try {
+            const parsed2 = JSON.parse(rawContentRef) as { questions?: string[] };
+            if (Array.isArray(parsed2?.questions)) existingQuestions = parsed2.questions;
+          } catch { /* plain text — handled below */ }
+          const questions = existingQuestions ?? [rawContentRef.trim()];
+          finalContentRef = JSON.stringify({
+            questions,
+            rubric: essayRubric(input.gradeLevel, input.ageYears),
+          });
+        } else if (contentType === "report") {
+          finalContentRef = JSON.stringify({
+            html: rawContentRef,
+            rubric: essayRubric(input.gradeLevel, input.ageYears),
+          });
+        }
+
         parsed.push({
           nodeId,  // always use the known nodeId regardless of what model output
-          contentType: r.contentType as GeneratedAssignment["contentType"],
+          contentType,
           title: String(r.title).trim(),
           description: typeof r.description === "string" ? r.description.trim() : "",
-          contentRef: typeof r.contentRef === "string" ? r.contentRef : "",
+          contentRef: finalContentRef,
         });
       }
       if (parsed.length >= 1) {
@@ -2519,20 +2545,33 @@ async function resolveVideoAssignments(
       if (trimmed.startsWith("{") || trimmed.startsWith("[")) return assignment;
 
       try {
-        const query = `${assignment.contentRef} ${subject} grade ${gradeLevel} educational`;
+        // Use the AI-generated search query as-is (it was written specifically for this lesson),
+        // but add grade context so YouTube's relevance ranking favors educational content.
+        const query = `${assignment.contentRef} grade ${gradeLevel}`;
         const videos = await searchYoutubeForVideos(query, apiKey);
-        const top = videos[0];
-        if (!top) return assignment;
+        if (!videos.length) return assignment;
+
+        // Score each result against the assignment title (the actual lesson topic).
+        // Simple term-overlap score: count how many words from the title appear in
+        // the video title/description. Tie-break on position (earlier = better).
+        const titleWords = assignment.title.toLowerCase().split(/\W+/).filter(w => w.length > 2);
+        const scored = videos.map((v, idx) => {
+          const haystack = `${v.title} ${v.description ?? ""}`.toLowerCase();
+          const matches = titleWords.filter(w => haystack.includes(w)).length;
+          return { v, score: matches * 100 - idx }; // idx penalty keeps earlier results preferred on ties
+        });
+        scored.sort((a, b) => b.score - a.score);
+        const best = scored[0].v;
 
         return {
           ...assignment,
           contentRef: JSON.stringify({
             videos: [{
-              videoId: top.videoId,
-              title: top.title,
-              channel: top.channel,
-              description: top.description,
-              thumbnail: top.thumbnail,
+              videoId: best.videoId,
+              title: best.title,
+              channel: best.channel,
+              description: best.description,
+              thumbnail: best.thumbnail,
               query: assignment.contentRef,
             }],
           }),
@@ -2615,6 +2654,365 @@ export function essayWritingGuidelines(gradeLevel: string, ageYears?: number): s
     return "Writing guidelines: 5–7 paragraphs (approximately 500–750 words). Construct an evidence-based argument with a nuanced thesis. Each body paragraph should use the Claim–Evidence–Analysis (CEA) structure. Engage with at least one counterargument or complicating factor. Use precise academic vocabulary, varied sentence structure, and a conclusion that extends the argument to broader implications. Cite specific evidence.";
   }
   return "Writing guidelines: 6–8 paragraphs or approximately 700–1000 words. Develop a sophisticated, original argument supported by textual or factual evidence. Use advanced academic conventions: a thesis that stakes a claim (not just describes), body paragraphs with layered analysis, engagement with opposing viewpoints, and a conclusion that reflects on the larger significance or asks a deeper question the essay opens up. Demonstrate independent critical thinking throughout.";
+}
+
+// ── Essay rubric ──────────────────────────────────────────────────────────────
+
+export type RubricLevel = {
+  label: string;   // e.g. "Excellent", "Proficient", "Developing", "Beginning"
+  score: number;   // e.g. 4, 3, 2, 1
+  descriptor: string; // what this score looks like for this criterion
+};
+
+export type RubricRow = {
+  criterion: string;   // e.g. "Thesis & Argument"
+  weight: number;      // relative weight 1–3; used to display importance visually
+  levels: RubricLevel[];
+};
+
+/**
+ * Returns a grade-calibrated essay rubric as structured data.
+ * Criteria and descriptors follow Common Core ELA writing standards and
+ * Bloom's Taxonomy upper-level thinking benchmarks.
+ * Each row has 4 performance levels (4 = excellent, 1 = beginning).
+ */
+export function essayRubric(gradeLevel: string, ageYears?: number): RubricRow[] {
+  const grade = parseInt(gradeLevel, 10);
+  const g = Number.isFinite(grade) ? grade : (ageYears ? ageYears - 5 : 7);
+
+  // ── Grades K–2 ──
+  if (g <= 2) {
+    return [
+      {
+        criterion: "Topic & Ideas",
+        weight: 3,
+        levels: [
+          { label: "Excellent", score: 4, descriptor: "Writes clearly about the topic with two or more interesting details." },
+          { label: "Proficient", score: 3, descriptor: "Stays on topic and includes at least one detail." },
+          { label: "Developing", score: 2, descriptor: "Mostly stays on topic but details are vague or missing." },
+          { label: "Beginning", score: 1, descriptor: "Hard to tell what the topic is; no supporting details." },
+        ],
+      },
+      {
+        criterion: "Organization",
+        weight: 2,
+        levels: [
+          { label: "Excellent", score: 4, descriptor: "Has a clear beginning, middle, and end. Ideas flow in order." },
+          { label: "Proficient", score: 3, descriptor: "Has a beginning and ending; middle is mostly ordered." },
+          { label: "Developing", score: 2, descriptor: "Some ordering present but hard to follow." },
+          { label: "Beginning", score: 1, descriptor: "No clear order; ideas are scattered." },
+        ],
+      },
+      {
+        criterion: "Sentences & Words",
+        weight: 2,
+        levels: [
+          { label: "Excellent", score: 4, descriptor: "Uses complete sentences and interesting word choices." },
+          { label: "Proficient", score: 3, descriptor: "Most sentences are complete; word choice is adequate." },
+          { label: "Developing", score: 2, descriptor: "Some incomplete sentences; repetitive words." },
+          { label: "Beginning", score: 1, descriptor: "Many incomplete sentences; very limited vocabulary." },
+        ],
+      },
+      {
+        criterion: "Conventions",
+        weight: 1,
+        levels: [
+          { label: "Excellent", score: 4, descriptor: "Correct capitalization, punctuation, and spelling on most words." },
+          { label: "Proficient", score: 3, descriptor: "A few errors that do not confuse the reader." },
+          { label: "Developing", score: 2, descriptor: "Errors sometimes make meaning unclear." },
+          { label: "Beginning", score: 1, descriptor: "Many errors make the writing very difficult to read." },
+        ],
+      },
+    ];
+  }
+
+  // ── Grades 3–4 ──
+  if (g <= 4) {
+    return [
+      {
+        criterion: "Focus & Main Idea",
+        weight: 3,
+        levels: [
+          { label: "Excellent", score: 4, descriptor: "Clear main idea stated upfront; all details support it directly." },
+          { label: "Proficient", score: 3, descriptor: "Main idea is present; most details are relevant." },
+          { label: "Developing", score: 2, descriptor: "Main idea is implied but not stated clearly." },
+          { label: "Beginning", score: 1, descriptor: "No clear main idea; details are off-topic." },
+        ],
+      },
+      {
+        criterion: "Supporting Details",
+        weight: 3,
+        levels: [
+          { label: "Excellent", score: 4, descriptor: "Uses specific facts or examples from the lesson to support every point." },
+          { label: "Proficient", score: 3, descriptor: "Uses at least one specific fact or example." },
+          { label: "Developing", score: 2, descriptor: "Details are general or only loosely connected to the topic." },
+          { label: "Beginning", score: 1, descriptor: "No supporting details provided." },
+        ],
+      },
+      {
+        criterion: "Organization",
+        weight: 2,
+        levels: [
+          { label: "Excellent", score: 4, descriptor: "Clear introduction, body, and conclusion. Ideas flow logically." },
+          { label: "Proficient", score: 3, descriptor: "Intro, body, and conclusion present but transitions are weak." },
+          { label: "Developing", score: 2, descriptor: "Some structure present; paragraph breaks are inconsistent." },
+          { label: "Beginning", score: 1, descriptor: "No recognizable structure." },
+        ],
+      },
+      {
+        criterion: "Voice & Word Choice",
+        weight: 2,
+        levels: [
+          { label: "Excellent", score: 4, descriptor: "Uses topic vocabulary and own words; writing sounds engaged and thoughtful." },
+          { label: "Proficient", score: 3, descriptor: "Some topic vocabulary; mostly own words." },
+          { label: "Developing", score: 2, descriptor: "Limited vocabulary; some copying from source." },
+          { label: "Beginning", score: 1, descriptor: "Very limited word choice; mostly copied phrases." },
+        ],
+      },
+      {
+        criterion: "Conventions",
+        weight: 1,
+        levels: [
+          { label: "Excellent", score: 4, descriptor: "Correct grammar, punctuation, and spelling throughout." },
+          { label: "Proficient", score: 3, descriptor: "Minor errors that do not impede meaning." },
+          { label: "Developing", score: 2, descriptor: "Errors occasionally interrupt reading." },
+          { label: "Beginning", score: 1, descriptor: "Frequent errors make writing difficult to understand." },
+        ],
+      },
+    ];
+  }
+
+  // ── Grades 5–6 ──
+  if (g <= 6) {
+    return [
+      {
+        criterion: "Thesis / Position",
+        weight: 3,
+        levels: [
+          { label: "Excellent", score: 4, descriptor: "Clear, specific thesis states a position or observation — not just the topic." },
+          { label: "Proficient", score: 3, descriptor: "Thesis is present and identifiable but could be sharper." },
+          { label: "Developing", score: 2, descriptor: "Thesis is vague or only restates the prompt." },
+          { label: "Beginning", score: 1, descriptor: "No thesis; writing merely describes or lists." },
+        ],
+      },
+      {
+        criterion: "Evidence & Analysis",
+        weight: 3,
+        levels: [
+          { label: "Excellent", score: 4, descriptor: "Each body paragraph includes a specific example and explains how it supports the thesis." },
+          { label: "Proficient", score: 3, descriptor: "Most paragraphs include evidence; analysis is present but brief." },
+          { label: "Developing", score: 2, descriptor: "Evidence is vague or listed without explanation." },
+          { label: "Beginning", score: 1, descriptor: "No evidence; writing only makes unsupported claims." },
+        ],
+      },
+      {
+        criterion: "Organization & Flow",
+        weight: 2,
+        levels: [
+          { label: "Excellent", score: 4, descriptor: "Logical paragraph structure with clear transitions connecting ideas." },
+          { label: "Proficient", score: 3, descriptor: "Structure is clear; transitions are present but formulaic." },
+          { label: "Developing", score: 2, descriptor: "Paragraphs exist but ideas jump without transitions." },
+          { label: "Beginning", score: 1, descriptor: "No clear organization; ideas are scattered." },
+        ],
+      },
+      {
+        criterion: "Critical Thinking",
+        weight: 3,
+        levels: [
+          { label: "Excellent", score: 4, descriptor: "Goes beyond summary — explores causes, effects, or implications. Shows independent thinking." },
+          { label: "Proficient", score: 3, descriptor: "Some analysis present; occasionally moves beyond facts." },
+          { label: "Developing", score: 2, descriptor: "Mostly summarizes; little interpretation offered." },
+          { label: "Beginning", score: 1, descriptor: "Retells only; no analysis or personal reasoning." },
+        ],
+      },
+      {
+        criterion: "Language & Conventions",
+        weight: 1,
+        levels: [
+          { label: "Excellent", score: 4, descriptor: "Varied sentence structure, precise vocabulary, and correct grammar throughout." },
+          { label: "Proficient", score: 3, descriptor: "Clear language with minor errors; adequate vocabulary." },
+          { label: "Developing", score: 2, descriptor: "Some awkward phrasing; errors occasionally interrupt meaning." },
+          { label: "Beginning", score: 1, descriptor: "Frequent errors; limited vocabulary hinders communication." },
+        ],
+      },
+    ];
+  }
+
+  // ── Grades 7–8 ──
+  if (g <= 8) {
+    return [
+      {
+        criterion: "Thesis & Argument",
+        weight: 3,
+        levels: [
+          { label: "Excellent", score: 4, descriptor: "Thesis makes a specific, defensible claim that shapes the entire essay." },
+          { label: "Proficient", score: 3, descriptor: "Thesis is clear and arguable but may be broad or predictable." },
+          { label: "Developing", score: 2, descriptor: "Thesis is present but weak — it describes rather than argues." },
+          { label: "Beginning", score: 1, descriptor: "No discernible thesis or only a restatement of the prompt." },
+        ],
+      },
+      {
+        criterion: "Evidence & Citation",
+        weight: 3,
+        levels: [
+          { label: "Excellent", score: 4, descriptor: "At least two specific, well-chosen details cited; evidence is integrated smoothly." },
+          { label: "Proficient", score: 3, descriptor: "At least one cited detail per body paragraph; transitions to evidence present." },
+          { label: "Developing", score: 2, descriptor: "Evidence is vague or dropped in without connection to the argument." },
+          { label: "Beginning", score: 1, descriptor: "No specific evidence; claims are wholly unsupported." },
+        ],
+      },
+      {
+        criterion: "Analysis & 'So What?'",
+        weight: 3,
+        levels: [
+          { label: "Excellent", score: 4, descriptor: "Explains not just what evidence shows but why it matters; conclusion answers 'so what?'" },
+          { label: "Proficient", score: 3, descriptor: "Analysis present in most paragraphs; conclusion restates with some reflection." },
+          { label: "Developing", score: 2, descriptor: "Analysis is surface-level; conclusion mostly restates the intro." },
+          { label: "Beginning", score: 1, descriptor: "No analysis; essay is a list of facts with no interpretation." },
+        ],
+      },
+      {
+        criterion: "Counterargument",
+        weight: 2,
+        levels: [
+          { label: "Excellent", score: 4, descriptor: "Acknowledges and responds to a counterargument or complicating idea thoughtfully." },
+          { label: "Proficient", score: 3, descriptor: "Counterargument mentioned but response is brief." },
+          { label: "Developing", score: 2, descriptor: "Counterargument hinted at but not addressed." },
+          { label: "Beginning", score: 1, descriptor: "No recognition of complexity or opposing view." },
+        ],
+      },
+      {
+        criterion: "Style & Conventions",
+        weight: 1,
+        levels: [
+          { label: "Excellent", score: 4, descriptor: "Uses domain vocabulary, varied sentence structure, and correct grammar throughout." },
+          { label: "Proficient", score: 3, descriptor: "Adequate vocabulary and mostly correct grammar with minor errors." },
+          { label: "Developing", score: 2, descriptor: "Limited vocabulary; errors sometimes interrupt meaning." },
+          { label: "Beginning", score: 1, descriptor: "Frequent errors significantly hinder readability." },
+        ],
+      },
+    ];
+  }
+
+  // ── Grades 9–10 ──
+  if (g <= 10) {
+    return [
+      {
+        criterion: "Nuanced Thesis",
+        weight: 3,
+        levels: [
+          { label: "Excellent", score: 4, descriptor: "Thesis stakes a specific, debatable claim that acknowledges complexity or tension in the topic." },
+          { label: "Proficient", score: 3, descriptor: "Clear arguable thesis but lacks nuance or qualification." },
+          { label: "Developing", score: 2, descriptor: "Thesis present but descriptive rather than argumentative." },
+          { label: "Beginning", score: 1, descriptor: "No thesis or merely a restatement of the prompt." },
+        ],
+      },
+      {
+        criterion: "Claim–Evidence–Analysis (CEA)",
+        weight: 3,
+        levels: [
+          { label: "Excellent", score: 4, descriptor: "Every body paragraph follows CEA: claim states the point, evidence is specific and cited, analysis explains significance." },
+          { label: "Proficient", score: 3, descriptor: "CEA present in most paragraphs; analysis occasionally surface-level." },
+          { label: "Developing", score: 2, descriptor: "Evidence present but analysis is missing or only summarizes the evidence." },
+          { label: "Beginning", score: 1, descriptor: "Paragraphs lack structure; evidence dropped without context or analysis." },
+        ],
+      },
+      {
+        criterion: "Counterargument & Complexity",
+        weight: 2,
+        levels: [
+          { label: "Excellent", score: 4, descriptor: "Engages seriously with a counterargument or complication; refutes or concedes it to strengthen the overall argument." },
+          { label: "Proficient", score: 3, descriptor: "Counterargument acknowledged and addressed, though briefly." },
+          { label: "Developing", score: 2, descriptor: "Counterargument mentioned but not substantively addressed." },
+          { label: "Beginning", score: 1, descriptor: "No engagement with complexity or alternative views." },
+        ],
+      },
+      {
+        criterion: "Broader Implications",
+        weight: 2,
+        levels: [
+          { label: "Excellent", score: 4, descriptor: "Conclusion extends the argument to a broader significance — historical, ethical, or real-world application." },
+          { label: "Proficient", score: 3, descriptor: "Conclusion goes slightly beyond restatement but implications are underdeveloped." },
+          { label: "Developing", score: 2, descriptor: "Conclusion restates thesis and main points without extension." },
+          { label: "Beginning", score: 1, descriptor: "No conclusion or abrupt ending." },
+        ],
+      },
+      {
+        criterion: "Academic Style",
+        weight: 1,
+        levels: [
+          { label: "Excellent", score: 4, descriptor: "Precise academic vocabulary, varied syntax, formal register, correct grammar and citations." },
+          { label: "Proficient", score: 3, descriptor: "Mostly formal language; minor grammatical errors; adequate vocabulary." },
+          { label: "Developing", score: 2, descriptor: "Informal phrasing present; vocabulary is general; some mechanical errors." },
+          { label: "Beginning", score: 1, descriptor: "Informal or conversational throughout; frequent mechanical errors." },
+        ],
+      },
+    ];
+  }
+
+  // ── Grades 11–12 ──
+  return [
+    {
+      criterion: "Sophisticated Thesis",
+      weight: 3,
+      levels: [
+        { label: "Excellent", score: 4, descriptor: "Thesis advances an original, sophisticated argument that complicates or challenges a conventional reading of the topic." },
+        { label: "Proficient", score: 3, descriptor: "Clear arguable thesis with some sophistication; may lack full originality." },
+        { label: "Developing", score: 2, descriptor: "Thesis present but generic or predictable." },
+        { label: "Beginning", score: 1, descriptor: "No thesis or merely a topic announcement." },
+      ],
+    },
+    {
+      criterion: "Evidence & Textual Support",
+      weight: 3,
+      levels: [
+        { label: "Excellent", score: 4, descriptor: "Carefully selected, well-integrated evidence; quotations and citations enhance rather than replace the argument." },
+        { label: "Proficient", score: 3, descriptor: "Evidence is relevant and cited; integration is mostly smooth." },
+        { label: "Developing", score: 2, descriptor: "Evidence present but over-quoted, poorly cited, or loosely connected." },
+        { label: "Beginning", score: 1, descriptor: "Little to no evidence; claims fully unsupported." },
+      ],
+    },
+    {
+      criterion: "Layered Analysis",
+      weight: 3,
+      levels: [
+        { label: "Excellent", score: 4, descriptor: "Analysis operates on multiple levels — surface meaning, implication, and broader significance — consistently throughout." },
+        { label: "Proficient", score: 3, descriptor: "Analysis goes beyond summary in most paragraphs but occasionally stays surface-level." },
+        { label: "Developing", score: 2, descriptor: "Analysis is present but tends to paraphrase evidence rather than interpret it." },
+        { label: "Beginning", score: 1, descriptor: "No meaningful analysis; essay is primarily summary or description." },
+      ],
+    },
+    {
+      criterion: "Engagement with Opposing Views",
+      weight: 2,
+      levels: [
+        { label: "Excellent", score: 4, descriptor: "Engages substantively with counterarguments or competing interpretations; uses them to deepen the argument." },
+        { label: "Proficient", score: 3, descriptor: "Counterargument addressed clearly but response lacks full development." },
+        { label: "Developing", score: 2, descriptor: "Counterargument mentioned but dismissed without reasoning." },
+        { label: "Beginning", score: 1, descriptor: "No acknowledgment of alternative perspectives." },
+      ],
+    },
+    {
+      criterion: "Larger Significance",
+      weight: 2,
+      levels: [
+        { label: "Excellent", score: 4, descriptor: "Conclusion opens up a deeper question or larger implication the essay raises; demonstrates intellectual independence." },
+        { label: "Proficient", score: 3, descriptor: "Conclusion reflects on significance but does not fully transcend the argument." },
+        { label: "Developing", score: 2, descriptor: "Conclusion restates thesis with minimal reflection." },
+        { label: "Beginning", score: 1, descriptor: "No meaningful conclusion." },
+      ],
+    },
+    {
+      criterion: "Style & Mechanics",
+      weight: 1,
+      levels: [
+        { label: "Excellent", score: 4, descriptor: "Advanced academic vocabulary, rhetorical variety, precise grammar, and consistent citation format throughout." },
+        { label: "Proficient", score: 3, descriptor: "Formal and mostly correct; minor errors do not impede meaning." },
+        { label: "Developing", score: 2, descriptor: "Some informal phrasing or grammatical issues that occasionally interrupt the reading." },
+        { label: "Beginning", score: 1, descriptor: "Frequent mechanical errors significantly undermine credibility." },
+      ],
+    },
+  ];
 }
 
 // ── Curriculum recommendation ──────────────────────────────────────────────────

@@ -312,6 +312,7 @@ export const classes = sqliteTable(
     title: text("title").notNull(),
     description: text("description"),
     schoolYear: text("school_year"),
+    gradeLevel: text("grade_level"),
     createdByUserId: text("created_by_user_id")
       .notNull()
       .references(() => users.id, { onDelete: "restrict" }),

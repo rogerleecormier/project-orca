@@ -11,7 +11,9 @@ import { RichContent } from "./rich-content";
 import { RichTextEditor } from "./rich-text-editor";
 import { QuizBuilder, type QuizQuestion } from "./quiz-builder";
 import { VideoSearch, type VideoData } from "./video-search";
-import { updateAssignmentRecord, uploadAssignmentFile } from "../server/functions";
+import { updateAssignmentRecord, uploadAssignmentFile, generateQuizFromVideo, createAssignmentRecord } from "../server/functions";
+import { essayRubric } from "../lib/ai";
+import type { RubricRow } from "../lib/ai";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -49,9 +51,13 @@ type Props = {
   initialNodeId?: string | null;
   /** If false, Edit buttons are hidden and the modal is always read-only */
   canEdit?: boolean;
+  /** Student's grade level — used to generate/embed rubric on save for essay & report types */
+  gradeLevel?: string;
   onClose: () => void;
   /** Called after a successful save — receives the updated assignment */
   onSaved?: (updated: ModalAssignment) => void;
+  /** Called when a new linked quiz is created from a video — parent should refresh assignment list */
+  onQuizCreated?: () => void;
   /** Called when Delete is clicked (parent handles confirmation + deletion) */
   onRequestDelete?: (assignment: ModalAssignment) => void;
 };
@@ -107,15 +113,19 @@ function parseJson<T>(s: string | null | undefined): T | null {
 }
 
 /**
- * AI generates essay contentRef as plain text (the prompt string).
- * The modal expects { questions: string[] }. This normalizes both formats.
+ * AI generates essay contentRef as either:
+ *   - { questions: string[], rubric?: RubricRow[] }  (new format)
+ *   - plain text prompt string                       (legacy / fallback)
+ * This normalizes both into a consistent shape.
  */
-function parseEssayRef(ref: string | null | undefined): { questions: string[] } {
-  if (!ref) return { questions: [] };
-  const parsed = parseJson<{ questions?: string[] }>(ref);
-  if (parsed?.questions && Array.isArray(parsed.questions)) return { questions: parsed.questions };
-  // Plain-text prompt from AI — treat the whole string as a single question
-  return { questions: [ref.trim()] };
+function parseEssayRef(ref: string | null | undefined): { questions: string[]; rubric: RubricRow[] } {
+  if (!ref) return { questions: [], rubric: [] };
+  const parsed = parseJson<{ questions?: string[]; rubric?: RubricRow[] }>(ref);
+  if (parsed?.questions && Array.isArray(parsed.questions)) {
+    return { questions: parsed.questions, rubric: parsed.rubric ?? [] };
+  }
+  // Plain-text prompt from AI — treat the whole string as a single question, no rubric
+  return { questions: [ref.trim()], rubric: [] };
 }
 
 function buildDueAt(date: string, time: string, includeTime: boolean): string | null {
@@ -152,40 +162,32 @@ async function uploadImage(file: File) {
 
 // ── View: content renderer ────────────────────────────────────────────────────
 
-function AssignmentContentView({ assignment, allAssignments }: { assignment: ModalAssignment; allAssignments: ModalAssignment[] }) {
+function AssignmentContentView({ assignment, allAssignments, canEdit, gradeLevel, onQuizCreated }: {
+  assignment: ModalAssignment;
+  allAssignments: ModalAssignment[];
+  canEdit: boolean;
+  gradeLevel?: string;
+  onQuizCreated?: () => void;
+}) {
   const ref = assignment.contentRef;
   const type = assignment.contentType;
 
-  if (type === "text" || type === "report") {
+  if (type === "text") {
     if (!ref) return <p className="text-xs text-slate-400">No content yet.</p>;
     return <RichContent html={ref} className="text-sm" />;
   }
 
+  if (type === "report") {
+    if (!ref) return <p className="text-xs text-slate-400">No content yet.</p>;
+    // Support both legacy plain HTML and new { html, rubric } JSON format
+    const parsed = parseJson<{ html?: string; rubric?: RubricRow[] }>(ref);
+    const html = parsed?.html ?? ref;
+    const rubric = parsed?.rubric ?? [];
+    return <ReportView html={html} rubric={rubric} />;
+  }
+
   if (type === "video") {
-    const payload = parseJson<{ videos?: Array<{ title: string; channel?: string; videoId: string }> }>(ref);
-    const videos = payload?.videos ?? [];
-    if (!videos.length) return <p className="text-xs text-slate-400">No video linked.</p>;
-    return (
-      <div className="space-y-4">
-        {videos.map((v, i) => (
-          <div key={i} className="rounded-xl overflow-hidden border border-slate-200 bg-slate-50">
-            <div className="relative w-full" style={{ paddingBottom: "56.25%" }}>
-              <iframe
-                src={`https://www.youtube.com/embed/${v.videoId}`}
-                title={v.title}
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                allowFullScreen
-                className="absolute inset-0 w-full h-full"
-              />
-            </div>
-            <div className="px-4 py-3">
-              <p className="text-sm font-medium text-slate-800">{v.title}</p>
-              {v.channel ? <p className="text-xs text-slate-500 mt-0.5">{v.channel}</p> : null}
-            </div>
-          </div>
-        ))}
-      </div>
-    );
+    return <VideoAssignmentView assignment={assignment} canEdit={canEdit} gradeLevel={gradeLevel} onQuizCreated={onQuizCreated} />;
   }
 
   if (type === "quiz") {
@@ -215,29 +217,10 @@ function AssignmentContentView({ assignment, allAssignments }: { assignment: Mod
   }
 
   if (type === "essay_questions") {
-    const questions = parseEssayRef(ref).questions;
+    const { questions, rubric } = parseEssayRef(ref);
     if (!questions.length) return <p className="text-xs text-slate-400">No prompts yet.</p>;
     return (
-      <div className="space-y-3">
-        {questions.map((q, i) => {
-          // Split writing guidelines (appended by AI) from the essay prompt itself
-          const guidelineIdx = q.indexOf("Writing guidelines:");
-          const prompt = guidelineIdx > 0 ? q.slice(0, guidelineIdx).trim() : q.trim();
-          const guidelines = guidelineIdx > 0 ? q.slice(guidelineIdx).trim() : null;
-          return (
-            <div key={i} className="rounded-xl border border-violet-100 bg-violet-50 px-4 py-3 space-y-2">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-violet-400">Prompt {questions.length > 1 ? i + 1 : ""}</p>
-              <p className="text-sm text-slate-700 leading-relaxed">{prompt}</p>
-              {guidelines && (
-                <div className="border-t border-violet-100 pt-2">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-violet-400 mb-1">Writing Guidelines</p>
-                  <p className="text-xs text-slate-500 leading-relaxed">{guidelines.replace(/^Writing guidelines:\s*/i, "")}</p>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+      <EssayQuestionsView questions={questions} rubric={rubric} />
     );
   }
 
@@ -280,6 +263,343 @@ function AssignmentContentView({ assignment, allAssignments }: { assignment: Mod
   return ref ? <p className="text-sm text-slate-700 break-words">{ref}</p> : <p className="text-xs text-slate-400">No content.</p>;
 }
 
+// ── Video assignment view ─────────────────────────────────────────────────────
+
+type VideoPayloadVideo = {
+  videoId: string;
+  title: string;
+  channel?: string;
+  transcript?: string | null;
+};
+
+function VideoAssignmentView({
+  assignment,
+  canEdit,
+  gradeLevel,
+  onQuizCreated,
+}: {
+  assignment: ModalAssignment;
+  canEdit: boolean;
+  gradeLevel?: string;
+  onQuizCreated?: () => void;
+}) {
+  const payload = parseJson<{ videos?: VideoPayloadVideo[] }>(assignment.contentRef);
+  const videos = payload?.videos ?? [];
+
+  const [quizGenerating, setQuizGenerating] = useState<string | null>(null); // videoId being generated
+  const [quizError, setQuizError] = useState<string | null>(null);
+  const [quizSuccess, setQuizSuccess] = useState<string | null>(null);
+
+  if (!videos.length) return <p className="text-xs text-slate-400">No video linked.</p>;
+
+  const handleGenerateQuiz = async (v: VideoPayloadVideo) => {
+    if (!assignment.classId) {
+      setQuizError("This assignment is not linked to a class — cannot create a quiz.");
+      return;
+    }
+    setQuizGenerating(v.videoId);
+    setQuizError(null);
+    setQuizSuccess(null);
+    try {
+      const result = await generateQuizFromVideo({
+        data: {
+          videoId: v.videoId,
+          videoTitle: v.title,
+          videoDescription: undefined,
+          gradeLevel,
+          questionCount: 5,
+        },
+      });
+      // Save the generated quiz as a new linked assignment in the same class
+      await createAssignmentRecord({
+        data: {
+          classId: assignment.classId,
+          title: `${v.title} — Quiz`,
+          description: `Quiz generated from the video lesson: ${assignment.title}`,
+          contentType: "quiz",
+          contentRef: JSON.stringify({
+            title: `${v.title} — Quiz`,
+            questions: result.quiz.questions.map((q) => ({
+              question: q.question,
+              options: q.options,
+              answerIndex: q.answerIndex,
+              explanation: q.explanation,
+            })),
+          }),
+          linkedAssignmentId: assignment.id,
+        },
+      });
+      setQuizSuccess(
+        result.usedTranscript
+          ? "Quiz created from video transcript and linked to this assignment."
+          : "Quiz created (no transcript available — questions based on video title). Review before assigning.",
+      );
+      onQuizCreated?.();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Quiz generation failed.";
+      setQuizError(
+        msg.includes("QUIZ_GENERATION_FAILED_NO_TRANSCRIPT")
+          ? "Could not generate quiz — transcript unavailable for this video."
+          : "Quiz generation failed. Try again.",
+      );
+    } finally {
+      setQuizGenerating(null);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      {videos.map((v) => (
+        <div key={v.videoId} className="rounded-xl overflow-hidden border border-slate-200 bg-slate-50">
+          <div className="relative w-full" style={{ paddingBottom: "56.25%" }}>
+            <iframe
+              src={`https://www.youtube.com/embed/${v.videoId}`}
+              title={v.title}
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allowFullScreen
+              className="absolute inset-0 w-full h-full"
+            />
+          </div>
+          <div className="px-4 py-3 space-y-2">
+            <p className="text-sm font-medium text-slate-800">{v.title}</p>
+            {v.channel ? <p className="text-xs text-slate-500">{v.channel}</p> : null}
+
+            {/* Quiz generation — only shown to editors */}
+            {canEdit && (
+              <div className="pt-1">
+                {quizSuccess ? (
+                  <p className="text-xs text-emerald-700 font-medium">{quizSuccess}</p>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={quizGenerating === v.videoId}
+                    onClick={() => void handleGenerateQuiz(v)}
+                    className="flex items-center gap-1.5 rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-1.5 text-xs font-medium text-cyan-700 hover:bg-cyan-100 disabled:opacity-60 transition-colors"
+                  >
+                    {quizGenerating === v.videoId ? (
+                      <>
+                        <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                        </svg>
+                        Generating quiz…
+                      </>
+                    ) : (
+                      <>
+                        <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+                          <rect x="2" y="1" width="12" height="14" rx="2" stroke="currentColor" strokeWidth="1.5"/>
+                          <line x1="5" y1="5" x2="11" y2="5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                          <line x1="5" y1="8" x2="11" y2="8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                        </svg>
+                        Generate Quiz from Video
+                      </>
+                    )}
+                  </button>
+                )}
+                {quizError ? <p className="mt-1 text-xs text-rose-600">{quizError}</p> : null}
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Report view ───────────────────────────────────────────────────────────────
+
+function ReportView({ html, rubric }: { html: string; rubric: RubricRow[] }) {
+  const [showRubric, setShowRubric] = useState(false);
+  return (
+    <>
+      <div className="space-y-3">
+        <RichContent html={html} className="text-sm" />
+        {rubric.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowRubric(true)}
+            className="flex w-full items-center gap-2.5 rounded-xl border border-dashed border-indigo-200 bg-indigo-50/50 px-4 py-3 text-left hover:bg-indigo-50 transition-colors group"
+          >
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-indigo-600 group-hover:bg-indigo-200 transition-colors">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="2" y="1" width="12" height="14" rx="2" stroke="currentColor" strokeWidth="1.5"/>
+                <line x1="5" y1="5" x2="11" y2="5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                <line x1="5" y1="8" x2="11" y2="8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                <line x1="5" y1="11" x2="8.5" y2="11" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+              </svg>
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-indigo-700">View Grading Rubric</p>
+              <p className="text-[10px] text-indigo-500">{rubric.length} criteria &middot; 4-point scale</p>
+            </div>
+            <svg className="ml-auto text-indigo-400 group-hover:text-indigo-600 transition-colors" width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <path d="M6 4l4 4-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
+        )}
+      </div>
+      {showRubric && <RubricModal rubric={rubric} onClose={() => setShowRubric(false)} />}
+    </>
+  );
+}
+
+// ── Rubric modal ──────────────────────────────────────────────────────────────
+
+const LEVEL_COLORS: Record<string, { bg: string; text: string; border: string }> = {
+  Excellent:  { bg: "bg-emerald-50",  text: "text-emerald-800",  border: "border-emerald-200" },
+  Proficient: { bg: "bg-cyan-50",     text: "text-cyan-800",     border: "border-cyan-200"    },
+  Developing: { bg: "bg-amber-50",    text: "text-amber-800",    border: "border-amber-200"   },
+  Beginning:  { bg: "bg-rose-50",     text: "text-rose-800",     border: "border-rose-200"    },
+};
+
+function RubricModal({ rubric, onClose }: { rubric: RubricRow[]; onClose: () => void }) {
+  const levels = rubric[0]?.levels.map(l => l.label) ?? ["Excellent", "Proficient", "Developing", "Beginning"];
+  const scores = rubric[0]?.levels.map(l => l.score) ?? [4, 3, 2, 1];
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/70 backdrop-blur-sm p-4"
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="relative flex flex-col w-full max-w-5xl max-h-[90vh] rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden">
+        {/* Header */}
+        <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-6 py-4">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900">Essay Rubric</h2>
+            <p className="text-xs text-slate-500 mt-0.5">Use this rubric to guide your writing and understand how it will be evaluated.</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Score legend */}
+        <div className="shrink-0 flex items-center gap-2 px-6 pt-4 pb-2 flex-wrap">
+          {levels.map((label, i) => {
+            const c = LEVEL_COLORS[label] ?? { bg: "bg-slate-50", text: "text-slate-700", border: "border-slate-200" };
+            return (
+              <span key={label} className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold ${c.bg} ${c.text} ${c.border}`}>
+                <span className="font-bold">{scores[i]}</span>
+                {label}
+              </span>
+            );
+          })}
+          <span className="ml-auto text-[10px] text-slate-400 italic">★ = weighted criterion</span>
+        </div>
+
+        {/* Rubric table */}
+        <div className="flex-1 overflow-auto px-4 pb-6">
+          <div className="min-w-[640px]">
+            {/* Column headers */}
+            <div className="grid gap-2 mb-2 sticky top-0 bg-white pt-2 pb-1 z-10" style={{ gridTemplateColumns: `220px repeat(${levels.length}, 1fr)` }}>
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400 px-2">Criterion</div>
+              {levels.map((label, i) => {
+                const c = LEVEL_COLORS[label] ?? { bg: "bg-slate-50", text: "text-slate-500", border: "border-slate-200" };
+                return (
+                  <div key={label} className={`rounded-xl border px-3 py-2 text-center ${c.bg} ${c.border}`}>
+                    <p className={`text-xs font-bold ${c.text}`}>{label}</p>
+                    <p className={`text-[10px] font-semibold ${c.text} opacity-70`}>{scores[i]} pts</p>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Rows */}
+            <div className="space-y-2">
+              {rubric.map((row) => (
+                <div key={row.criterion} className="grid gap-2 items-stretch" style={{ gridTemplateColumns: `220px repeat(${levels.length}, 1fr)` }}>
+                  {/* Criterion label */}
+                  <div className="flex flex-col justify-center rounded-xl border border-slate-100 bg-slate-50 px-3 py-3">
+                    <p className="text-sm font-semibold text-slate-800 leading-snug">{row.criterion}</p>
+                    {row.weight >= 3 && (
+                      <span className="mt-1 text-[9px] font-bold uppercase tracking-wider text-violet-500">Key criterion</span>
+                    )}
+                  </div>
+                  {/* Performance level cells */}
+                  {row.levels.map((lvl) => {
+                    const c = LEVEL_COLORS[lvl.label] ?? { bg: "bg-slate-50", text: "text-slate-700", border: "border-slate-200" };
+                    return (
+                      <div key={lvl.label} className={`rounded-xl border px-3 py-3 ${c.bg} ${c.border}`}>
+                        <p className={`text-xs leading-relaxed ${c.text}`}>{lvl.descriptor}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Essay questions view ───────────────────────────────────────────────────────
+
+function EssayQuestionsView({ questions, rubric }: { questions: string[]; rubric: RubricRow[] }) {
+  const [showRubric, setShowRubric] = useState(false);
+
+  return (
+    <>
+      <div className="space-y-3">
+        {questions.map((q, i) => {
+          // Split writing guidelines (appended by AI) from the essay prompt itself
+          const guidelineIdx = q.indexOf("Writing guidelines:");
+          const prompt = guidelineIdx > 0 ? q.slice(0, guidelineIdx).trim() : q.trim();
+          const guidelines = guidelineIdx > 0 ? q.slice(guidelineIdx).trim() : null;
+          return (
+            <div key={i} className="rounded-xl border border-violet-100 bg-violet-50 px-4 py-3 space-y-2">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-violet-400">
+                {questions.length > 1 ? `Prompt ${i + 1}` : "Prompt"}
+              </p>
+              <p className="text-sm text-slate-700 leading-relaxed">{prompt}</p>
+              {guidelines && (
+                <div className="border-t border-violet-100 pt-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-violet-400 mb-1">Writing Guidelines</p>
+                  <p className="text-xs text-slate-500 leading-relaxed">{guidelines.replace(/^Writing guidelines:\s*/i, "")}</p>
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {/* Rubric link — only shown when rubric data is present */}
+        {rubric.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowRubric(true)}
+            className="flex w-full items-center gap-2.5 rounded-xl border border-dashed border-violet-200 bg-violet-50/50 px-4 py-3 text-left hover:bg-violet-50 transition-colors group"
+          >
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-violet-100 text-violet-600 group-hover:bg-violet-200 transition-colors">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="2" y="1" width="12" height="14" rx="2" stroke="currentColor" strokeWidth="1.5"/>
+                <line x1="5" y1="5" x2="11" y2="5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                <line x1="5" y1="8" x2="11" y2="8" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+                <line x1="5" y1="11" x2="8.5" y2="11" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round"/>
+              </svg>
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-violet-700">View Grading Rubric</p>
+              <p className="text-[10px] text-violet-500">{rubric.length} criteria &middot; 4-point scale</p>
+            </div>
+            <svg className="ml-auto text-violet-400 group-hover:text-violet-600 transition-colors" width="14" height="14" viewBox="0 0 16 16" fill="none">
+              <path d="M6 4l4 4-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
+        )}
+      </div>
+
+      {showRubric && rubric.length > 0 && (
+        <RubricModal rubric={rubric} onClose={() => setShowRubric(false)} />
+      )}
+    </>
+  );
+}
+
 // ── Main Modal ────────────────────────────────────────────────────────────────
 
 export function AssignmentModal({
@@ -289,8 +609,10 @@ export function AssignmentModal({
   lessonOptions = [],
   initialNodeId = null,
   canEdit = true,
+  gradeLevel,
   onClose,
   onSaved,
+  onQuizCreated,
   onRequestDelete,
 }: Props) {
   const [mode, setMode] = useState<Mode>("view");
@@ -301,7 +623,14 @@ export function AssignmentModal({
   // ── Edit/quick-edit shared fields ────────────────────────────────────────────
   const [title, setTitle] = useState(assignment.title);
   const [description, setDescription] = useState(assignment.description ?? "");
-  const [contentRef, setContentRef] = useState(assignment.contentRef ?? "");
+  // For report type, contentRef may be { html, rubric } JSON or legacy plain HTML
+  const [contentRef, setContentRef] = useState(() => {
+    if (assignment.contentType === "report") {
+      const p = parseJson<{ html?: string }>(assignment.contentRef);
+      return p?.html ?? (assignment.contentRef ?? "");
+    }
+    return assignment.contentRef ?? "";
+  });
   const [linkedAssignmentId, setLinkedAssignmentId] = useState(assignment.linkedAssignmentId ?? "");
   const [classId, setClassId] = useState(assignment.classId ?? classOptions[0]?.id ?? "");
   const [linkedNodeId, setLinkedNodeId] = useState(initialNodeId ?? "");
@@ -349,7 +678,14 @@ export function AssignmentModal({
   function buildContentRef(): string | undefined {
     const type = assignment.contentType;
     if (type === "quiz") return JSON.stringify({ title: quizTitle.trim() || title.trim(), questions: quizQuestions });
-    if (type === "essay_questions") return JSON.stringify({ questions: essayQuestions.filter(q => q.trim()) });
+    if (type === "essay_questions") {
+      const rubric = gradeLevel ? essayRubric(gradeLevel) : (parseEssayRef(assignment.contentRef).rubric);
+      return JSON.stringify({ questions: essayQuestions.filter(q => q.trim()), rubric });
+    }
+    if (type === "report") {
+      const rubric = gradeLevel ? essayRubric(gradeLevel) : [];
+      return JSON.stringify({ html: contentRef || "", rubric });
+    }
     if (type === "movie") {
       const platforms = movieCustomPlatform.trim() ? [...moviePlatforms, movieCustomPlatform.trim()] : moviePlatforms;
       return JSON.stringify({ title: movieTitle.trim() || title.trim(), synopsis: movieSynopsis.trim(), whereToWatch: platforms });
@@ -592,7 +928,7 @@ export function AssignmentModal({
 
           {/* View mode: render content */}
           {mode === "view" ? (
-            <AssignmentContentView assignment={assignment} allAssignments={allAssignments} />
+            <AssignmentContentView assignment={assignment} allAssignments={allAssignments} canEdit={canEdit} gradeLevel={gradeLevel} onQuizCreated={onQuizCreated} />
           ) : null}
         </div>
 
